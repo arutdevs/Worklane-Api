@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Worklane.Application/Worklane.Application.csproj" />
+    <Project Path="src/Worklane.Domain/Worklane.Domain.csproj" />
+    <Project Path="src/Worklane.Infrastructure/Worklane.Infrastructure.csproj" />
+    <Project Path="src/Worklane.WebApi/Worklane.WebApi.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Worklane.IntegrationTests/Worklane.IntegrationTests.csproj" />
+  </Folder>
+</Solution>

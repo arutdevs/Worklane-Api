@@ -1,0 +1,15 @@
+# Frontend has its own separate git repository (Worklane-Web)
+web/
+
+# .NET build artifacts
+bin/
+obj/
+*.user
+
+# IDE
+.vs/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
