@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Filters;
+using Worklane.Application.Board.Interfaces;
 using Worklane.Application.Common.Interfaces;
 using Worklane.Application.Projects.Interfaces;
 using Worklane.Application.Workspaces.Interfaces;
@@ -57,11 +58,26 @@ public class RequireWorkspaceRoleAttribute : Attribute, IAsyncActionFilter
         }
         else
         {
-            var projectService = context.HttpContext.RequestServices.GetRequiredService<IProjectService>();
-            var resolved = await projectService.GetWorkspaceIdForProjectAsync(routeId, context.HttpContext.RequestAborted);
+            Guid? resolved = _resourceType switch
+            {
+                WorkspaceResourceType.Project =>
+                    await context.HttpContext.RequestServices
+                        .GetRequiredService<IProjectService>()
+                        .GetWorkspaceIdForProjectAsync(routeId, context.HttpContext.RequestAborted),
+                WorkspaceResourceType.Column =>
+                    await context.HttpContext.RequestServices
+                        .GetRequiredService<IBoardService>()
+                        .GetWorkspaceIdForColumnAsync(routeId, context.HttpContext.RequestAborted),
+                WorkspaceResourceType.Task =>
+                    await context.HttpContext.RequestServices
+                        .GetRequiredService<IBoardService>()
+                        .GetWorkspaceIdForTaskAsync(routeId, context.HttpContext.RequestAborted),
+                _ => null
+            };
+
             if (resolved is null)
             {
-                context.Result = Problem(context, StatusCodes.Status404NotFound, "Not Found", "Project was not found.");
+                context.Result = Problem(context, StatusCodes.Status404NotFound, "Not Found", "Resource was not found.");
                 return;
             }
             workspaceId = resolved.Value;

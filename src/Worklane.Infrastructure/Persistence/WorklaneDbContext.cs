@@ -23,6 +23,9 @@ public class WorklaneDbContext : IdentityDbContext<AppUser, IdentityRole<Guid>, 
     public DbSet<ProjectMember> ProjectMembers => Set<ProjectMember>();
     public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<Invitation> Invitations => Set<Invitation>();
+    public DbSet<BoardColumn> BoardColumns => Set<BoardColumn>();
+    public DbSet<TaskItem> TaskItems => Set<TaskItem>();
+    public DbSet<ProjectTaskCounter> ProjectTaskCounters => Set<ProjectTaskCounter>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -46,5 +49,10 @@ public class WorklaneDbContext : IdentityDbContext<AppUser, IdentityRole<Guid>, 
 
         builder.Entity<Invitation>().HasQueryFilter(i =>
             !_currentTenantService.WorkspaceId.HasValue || i.WorkspaceId == _currentTenantService.WorkspaceId);
+
+        // TaskItem: exclude archived; tenant-isolate via Project.WorkspaceId
+        builder.Entity<TaskItem>().HasQueryFilter(t =>
+            !t.IsArchived &&
+            (!_currentTenantService.WorkspaceId.HasValue || t.Project.WorkspaceId == _currentTenantService.WorkspaceId));
     }
 }

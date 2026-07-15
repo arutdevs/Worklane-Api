@@ -7,5 +7,11 @@ public enum WorkspaceResourceType
     Workspace,
 
     /// <summary>The route parameter is a ProjectId; its WorkspaceId is looked up (e.g. /api/projects/{id}).</summary>
-    Project
+    Project,
+
+    /// <summary>The route parameter is a ColumnId; its WorkspaceId is looked up via the column's project.</summary>
+    Column,
+
+    /// <summary>The route parameter is a TaskId; its WorkspaceId is looked up via the task's project.</summary>
+    Task
 }

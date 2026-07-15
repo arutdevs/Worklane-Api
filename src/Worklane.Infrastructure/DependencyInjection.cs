@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Worklane.Application.Auth.Interfaces;
+using Worklane.Application.Board.Interfaces;
 using Worklane.Application.Common.Interfaces;
 using Worklane.Application.Common.Options;
 using Worklane.Application.Projects.Interfaces;
@@ -39,6 +40,7 @@ public static class DependencyInjection
         services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<IWorkspaceService, WorkspaceService>();
         services.AddScoped<IProjectService, ProjectService>();
+        services.AddScoped<IBoardService, BoardService>();
 
         return services;
     }

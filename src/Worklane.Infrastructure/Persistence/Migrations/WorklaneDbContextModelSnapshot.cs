@@ -152,6 +152,35 @@ namespace Worklane.Infrastructure.Persistence.Migrations
                     b.ToTable("AspNetUserTokens", (string)null);
                 });
 
+            modelBuilder.Entity("Worklane.Domain.Entities.BoardColumn", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<bool>("IsDone")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<int>("Order")
+                        .HasColumnType("integer");
+
+                    b.Property<Guid>("ProjectId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProjectId", "Order");
+
+                    b.ToTable("BoardColumns");
+                });
+
             modelBuilder.Entity("Worklane.Domain.Entities.Invitation", b =>
                 {
                     b.Property<Guid>("Id")
@@ -256,6 +285,21 @@ namespace Worklane.Infrastructure.Persistence.Migrations
                     b.ToTable("ProjectMembers");
                 });
 
+            modelBuilder.Entity("Worklane.Domain.Entities.ProjectTaskCounter", b =>
+                {
+                    b.Property<Guid>("ProjectId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("LastNumber")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0);
+
+                    b.HasKey("ProjectId");
+
+                    b.ToTable("ProjectTaskCounters");
+                });
+
             modelBuilder.Entity("Worklane.Domain.Entities.RefreshToken", b =>
                 {
                     b.Property<Guid>("Id")
@@ -290,6 +334,69 @@ namespace Worklane.Infrastructure.Persistence.Migrations
                     b.HasIndex("UserId");
 
                     b.ToTable("RefreshTokens");
+                });
+
+            modelBuilder.Entity("Worklane.Domain.Entities.TaskItem", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("AssigneeId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("ColumnId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("CreatedById")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(10000)
+                        .HasColumnType("character varying(10000)");
+
+                    b.Property<DateTimeOffset?>("DueDate")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<bool>("IsArchived")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
+
+                    b.Property<int>("Number")
+                        .HasColumnType("integer");
+
+                    b.Property<double>("Order")
+                        .HasColumnType("double precision");
+
+                    b.Property<string>("Priority")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("text")
+                        .HasDefaultValue("Medium");
+
+                    b.Property<Guid>("ProjectId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ColumnId", "Order");
+
+                    b.HasIndex("ProjectId", "Number")
+                        .IsUnique();
+
+                    b.ToTable("TaskItems");
                 });
 
             modelBuilder.Entity("Worklane.Domain.Entities.Workspace", b =>
@@ -475,6 +582,17 @@ namespace Worklane.Infrastructure.Persistence.Migrations
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("Worklane.Domain.Entities.BoardColumn", b =>
+                {
+                    b.HasOne("Worklane.Domain.Entities.Project", "Project")
+                        .WithMany()
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Project");
+                });
+
             modelBuilder.Entity("Worklane.Domain.Entities.Invitation", b =>
                 {
                     b.HasOne("Worklane.Domain.Entities.Workspace", "Workspace")
@@ -508,6 +626,36 @@ namespace Worklane.Infrastructure.Persistence.Migrations
                     b.Navigation("Project");
                 });
 
+            modelBuilder.Entity("Worklane.Domain.Entities.ProjectTaskCounter", b =>
+                {
+                    b.HasOne("Worklane.Domain.Entities.Project", "Project")
+                        .WithOne()
+                        .HasForeignKey("Worklane.Domain.Entities.ProjectTaskCounter", "ProjectId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Project");
+                });
+
+            modelBuilder.Entity("Worklane.Domain.Entities.TaskItem", b =>
+                {
+                    b.HasOne("Worklane.Domain.Entities.BoardColumn", "Column")
+                        .WithMany("Tasks")
+                        .HasForeignKey("ColumnId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Worklane.Domain.Entities.Project", "Project")
+                        .WithMany()
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Column");
+
+                    b.Navigation("Project");
+                });
+
             modelBuilder.Entity("Worklane.Domain.Entities.WorkspaceMember", b =>
                 {
                     b.HasOne("Worklane.Domain.Entities.Workspace", "Workspace")
@@ -517,6 +665,11 @@ namespace Worklane.Infrastructure.Persistence.Migrations
                         .IsRequired();
 
                     b.Navigation("Workspace");
+                });
+
+            modelBuilder.Entity("Worklane.Domain.Entities.BoardColumn", b =>
+                {
+                    b.Navigation("Tasks");
                 });
 
             modelBuilder.Entity("Worklane.Domain.Entities.Project", b =>
