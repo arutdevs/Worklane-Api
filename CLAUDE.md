@@ -98,7 +98,17 @@ dotnet test
 ```
 
 Tests boot a real Postgres per fixture through Testcontainers, so Docker must be running.
-Frontend: `cd web && npx ng build` (there is no meaningful frontend test suite yet).
+
+Frontend:
+
+```bash
+cd web && npx ng test --watch=false
+```
+
+Run it through the Angular CLI, not `npx vitest` — the CLI supplies the vitest setup, and
+calling vitest directly fails with `describe is not defined`. Shared DTO builders live in
+`web/src/testing/board-fixtures.ts`; extend those rather than hand-rolling a task object in
+each spec.
 
 ---
 
