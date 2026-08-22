@@ -7,6 +7,7 @@ using Worklane.Application.Board.Interfaces;
 using Worklane.Application.Common.Interfaces;
 using Worklane.Application.Common.Options;
 using Worklane.Application.Projects.Interfaces;
+using Worklane.Application.Reports.Interfaces;
 using Worklane.Application.Workspaces.Interfaces;
 using Worklane.Infrastructure.Identity;
 using Worklane.Infrastructure.Multitenancy;
@@ -41,6 +42,7 @@ public static class DependencyInjection
         services.AddScoped<IWorkspaceService, WorkspaceService>();
         services.AddScoped<IProjectService, ProjectService>();
         services.AddScoped<IBoardService, BoardService>();
+        services.AddScoped<IReportService, ReportService>();
 
         return services;
     }

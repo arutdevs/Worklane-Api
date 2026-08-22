@@ -26,6 +26,7 @@ public class WorklaneDbContext : IdentityDbContext<AppUser, IdentityRole<Guid>, 
     public DbSet<BoardColumn> BoardColumns => Set<BoardColumn>();
     public DbSet<TaskItem> TaskItems => Set<TaskItem>();
     public DbSet<ProjectTaskCounter> ProjectTaskCounters => Set<ProjectTaskCounter>();
+    public DbSet<TaskActivity> TaskActivities => Set<TaskActivity>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {

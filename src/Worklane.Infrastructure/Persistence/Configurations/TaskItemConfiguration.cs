@@ -23,6 +23,9 @@ public class TaskItemConfiguration : IEntityTypeConfiguration<TaskItem>
             // explicit Low is always written.
             .HasSentinel((TaskPriority)(-1));
         builder.Property(t => t.Order).IsRequired();
+        builder.Property(t => t.EstimateDays);
+        builder.Property(t => t.StartedAt);
+        builder.Property(t => t.CompletedAt);
         builder.Property(t => t.IsArchived).IsRequired().HasDefaultValue(false);
         builder.Property(t => t.CreatedAt).IsRequired();
         builder.Property(t => t.UpdatedAt).IsRequired();

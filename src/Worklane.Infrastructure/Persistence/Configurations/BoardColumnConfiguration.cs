@@ -13,6 +13,7 @@ public class BoardColumnConfiguration : IEntityTypeConfiguration<BoardColumn>
         builder.Property(c => c.Name).IsRequired().HasMaxLength(100);
         builder.Property(c => c.Order).IsRequired();
         builder.Property(c => c.IsDone).IsRequired().HasDefaultValue(false);
+        builder.Property(c => c.IsInProgress).IsRequired().HasDefaultValue(false);
 
         builder.HasOne(c => c.Project)
             .WithMany()

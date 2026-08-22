@@ -8,6 +8,7 @@ public record BoardColumnDto(
     string Name,
     int Order,
     bool IsDone,
+    bool IsInProgress,
     IReadOnlyList<TaskItemDto> Tasks
 );
 
@@ -28,12 +29,30 @@ public record TaskItemDto(
     Guid CreatedById,
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt,
-    bool IsArchived
+    bool IsArchived,
+
+    // ── Work metrics ──────────────────────────────────────────────────────────
+    // Derived server-side so every client shows the same numbers.
+
+    /// <summary>Planned effort in man-days, null when unestimated.</summary>
+    double? EstimateDays,
+    DateTimeOffset? StartedAt,
+    DateTimeOffset? CompletedAt,
+
+    /// <summary>
+    /// Working days elapsed since the task started — still climbing while it is in
+    /// progress, frozen once it reaches a done column. Null until it starts.
+    /// </summary>
+    double? ActualDays,
+    bool IsOverEstimate,
+    double DaysOverEstimate,
+    bool IsOverdue,
+    int DaysOverdue
 );
 
 public record CreateColumnRequest(string Name);
 
-public record UpdateColumnRequest(string? Name, int? Order);
+public record UpdateColumnRequest(string? Name, int? Order, bool? IsDone, bool? IsInProgress);
 
 public record CreateTaskRequest(
     string Title,
@@ -41,7 +60,8 @@ public record CreateTaskRequest(
     Guid? AssigneeId,
     TaskPriority Priority,
     DateTimeOffset? DueDate,
-    Guid? ColumnId
+    Guid? ColumnId,
+    double? EstimateDays
 );
 
 public record UpdateTaskRequest(
@@ -50,7 +70,8 @@ public record UpdateTaskRequest(
     Guid? AssigneeId,
     TaskPriority? Priority,
     DateTimeOffset? DueDate,
-    Guid? ColumnId
+    Guid? ColumnId,
+    double? EstimateDays
 );
 
 public record MoveTaskRequest(Guid ToColumnId, int ToIndex);

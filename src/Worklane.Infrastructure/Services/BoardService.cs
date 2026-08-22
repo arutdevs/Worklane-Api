@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using Worklane.Application.Board.Dtos;
 using Worklane.Application.Board.Interfaces;
 using Worklane.Application.Common.Exceptions;
+using Worklane.Domain.Common;
 using Worklane.Domain.Entities;
 using Worklane.Domain.Enums;
 using Worklane.Infrastructure.Identity;
@@ -44,7 +45,7 @@ public class BoardService : IBoardService
                 .Select(t => ToDto(t, project.Key, assigneeMap))
                 .ToList();
 
-            return new BoardColumnDto(col.Id, col.ProjectId, col.Name, col.Order, col.IsDone, colTasks);
+            return new BoardColumnDto(col.Id, col.ProjectId, col.Name, col.Order, col.IsDone, col.IsInProgress, colTasks);
         }).ToList();
     }
 
@@ -60,13 +61,14 @@ public class BoardService : IBoardService
             ProjectId = projectId,
             Name = request.Name,
             Order = maxOrder + 1000,
-            IsDone = false
+            IsDone = false,
+            IsInProgress = false
         };
 
         _db.BoardColumns.Add(column);
         await _db.SaveChangesAsync(ct);
 
-        return new BoardColumnDto(column.Id, column.ProjectId, column.Name, column.Order, column.IsDone, []);
+        return ToDto(column);
     }
 
     public async Task<BoardColumnDto> UpdateColumnAsync(Guid columnId, UpdateColumnRequest request, CancellationToken ct = default)
@@ -76,9 +78,11 @@ public class BoardService : IBoardService
 
         if (request.Name is not null) column.Name = request.Name;
         if (request.Order.HasValue) column.Order = request.Order.Value;
+        if (request.IsDone.HasValue) column.IsDone = request.IsDone.Value;
+        if (request.IsInProgress.HasValue) column.IsInProgress = request.IsInProgress.Value;
 
         await _db.SaveChangesAsync(ct);
-        return new BoardColumnDto(column.Id, column.ProjectId, column.Name, column.Order, column.IsDone, []);
+        return ToDto(column);
     }
 
     public async Task DeleteColumnAsync(Guid columnId, Guid? targetColumnId, CancellationToken ct = default)
@@ -119,24 +123,19 @@ public class BoardService : IBoardService
         var project = await _db.Projects.FirstOrDefaultAsync(p => p.Id == projectId, ct)
             ?? throw new NotFoundException(nameof(Project), projectId);
 
-        // Resolve target column (default = first column by order)
-        Guid columnId;
-        if (request.ColumnId.HasValue)
-        {
-            columnId = request.ColumnId.Value;
-        }
-        else
-        {
-            var firstColId = await _db.BoardColumns
+        // Resolve target column (default = first column by order). The whole column is
+        // needed, not just its id — its IsInProgress/IsDone flags decide whether the task
+        // starts the clock the moment it is created.
+        var column = request.ColumnId.HasValue
+            ? await _db.BoardColumns.FirstOrDefaultAsync(c => c.Id == request.ColumnId.Value, ct)
+                ?? throw new NotFoundException(nameof(BoardColumn), request.ColumnId.Value)
+            : await _db.BoardColumns
                 .Where(c => c.ProjectId == projectId)
                 .OrderBy(c => c.Order)
-                .Select(c => c.Id)
-                .FirstOrDefaultAsync(ct);
+                .FirstOrDefaultAsync(ct)
+                ?? throw new ConflictException("Project has no columns. Create a column first.");
 
-            if (firstColId == Guid.Empty)
-                throw new ConflictException("Project has no columns. Create a column first.");
-            columnId = firstColId;
-        }
+        var columnId = column.Id;
 
         // Atomic per-project counter via PostgreSQL upsert.
         // The INSERT ... RETURNING is non-composable, so it must be materialised without
@@ -169,6 +168,9 @@ public class BoardService : IBoardService
             Priority = request.Priority,
             DueDate = request.DueDate,
             Order = maxOrder + 65536.0,
+            EstimateDays = request.EstimateDays,
+            StartedAt = column.IsInProgress ? now : null,
+            CompletedAt = column.IsDone ? now : null,
             CreatedById = userId,
             CreatedAt = now,
             UpdatedAt = now,
@@ -176,6 +178,15 @@ public class BoardService : IBoardService
         };
 
         _db.TaskItems.Add(task);
+        _db.TaskActivities.Add(new TaskActivity
+        {
+            Id = Guid.NewGuid(),
+            TaskId = task.Id,
+            FromColumnId = null,
+            ToColumnId = columnId,
+            MovedByUserId = userId,
+            MovedAt = now
+        });
         await _db.SaveChangesAsync(ct);
 
         return ToDto(task, project.Key, await BuildAssigneeMapAsync([task], ct));
@@ -203,6 +214,7 @@ public class BoardService : IBoardService
         if (request.Priority.HasValue) task.Priority = request.Priority.Value;
         if (request.DueDate is not null) task.DueDate = request.DueDate;
         if (request.ColumnId.HasValue) task.ColumnId = request.ColumnId.Value;
+        if (request.EstimateDays.HasValue) task.EstimateDays = request.EstimateDays.Value;
 
         task.UpdatedAt = DateTimeOffset.UtcNow;
         await _db.SaveChangesAsync(ct);
@@ -210,15 +222,17 @@ public class BoardService : IBoardService
         return await GetTaskAsync(taskId, ct);
     }
 
-    public async Task<TaskItemDto> MoveTaskAsync(Guid taskId, MoveTaskRequest request, CancellationToken ct = default)
+    public async Task<TaskItemDto> MoveTaskAsync(Guid taskId, MoveTaskRequest request, Guid userId, CancellationToken ct = default)
     {
         var task = await _db.TaskItems
             .FirstOrDefaultAsync(t => t.Id == taskId, ct)
             ?? throw new NotFoundException(nameof(TaskItem), taskId);
 
-        var columnExists = await _db.BoardColumns.AnyAsync(c => c.Id == request.ToColumnId, ct);
-        if (!columnExists)
-            throw new NotFoundException(nameof(BoardColumn), request.ToColumnId);
+        var toColumn = await _db.BoardColumns.FirstOrDefaultAsync(c => c.Id == request.ToColumnId, ct)
+            ?? throw new NotFoundException(nameof(BoardColumn), request.ToColumnId);
+
+        var fromColumnId = task.ColumnId;
+        var changedColumn = fromColumnId != toColumn.Id;
 
         // Siblings = all non-archived tasks in target column except the task being moved
         var siblings = await _db.TaskItems
@@ -233,9 +247,34 @@ public class BoardService : IBoardService
         bool needsRebalance = index > 0 && index < siblings.Count
             && (siblings[index].Order - siblings[index - 1].Order) < MinGap * 2;
 
+        var now = DateTimeOffset.UtcNow;
+
         task.ColumnId = request.ToColumnId;
         task.Order = newOrder;
-        task.UpdatedAt = DateTimeOffset.UtcNow;
+        task.UpdatedAt = now;
+
+        if (changedColumn)
+        {
+            // The clock starts the first time the task reaches a working column and is
+            // not restarted afterwards — otherwise bouncing a card in and out of review
+            // would keep resetting the elapsed time to zero.
+            if (toColumn.IsInProgress && task.StartedAt is null)
+                task.StartedAt = now;
+
+            // CompletedAt always reflects the current state: set on arriving in a done
+            // column, cleared when the task is pulled back out of one.
+            task.CompletedAt = toColumn.IsDone ? now : null;
+
+            _db.TaskActivities.Add(new TaskActivity
+            {
+                Id = Guid.NewGuid(),
+                TaskId = task.Id,
+                FromColumnId = fromColumnId,
+                ToColumnId = toColumn.Id,
+                MovedByUserId = userId,
+                MovedAt = now
+            });
+        }
 
         if (needsRebalance)
         {
@@ -332,6 +371,9 @@ public class BoardService : IBoardService
                 ct);
     }
 
+    private static BoardColumnDto ToDto(BoardColumn c) =>
+        new(c.Id, c.ProjectId, c.Name, c.Order, c.IsDone, c.IsInProgress, []);
+
     private static TaskItemDto ToDto(
         TaskItem t,
         string projectKey,
@@ -341,12 +383,50 @@ public class BoardService : IBoardService
             ? a
             : (null, null);
 
+        var (actualDays, isOverEstimate, daysOverEstimate) = CalculateEffort(t);
+        var (isOverdue, daysOverdue) = CalculateOverdue(t);
+
         return new TaskItemDto(
             t.Id, t.ProjectId, t.ColumnId,
             t.Number, $"{projectKey}-{t.Number}",
             t.Title, t.Description,
             t.AssigneeId, name, avatar,
             t.Priority, t.DueDate, t.Order,
-            t.CreatedById, t.CreatedAt, t.UpdatedAt, t.IsArchived);
+            t.CreatedById, t.CreatedAt, t.UpdatedAt, t.IsArchived,
+            t.EstimateDays, t.StartedAt, t.CompletedAt,
+            actualDays, isOverEstimate, daysOverEstimate,
+            isOverdue, daysOverdue);
+    }
+
+    /// <summary>
+    /// Working days spent so far and how far past the estimate that is. A task still in
+    /// progress keeps accruing; one that reached a done column is frozen at that moment.
+    /// </summary>
+    internal static (double? ActualDays, bool IsOverEstimate, double DaysOverEstimate) CalculateEffort(TaskItem t)
+    {
+        if (t.StartedAt is null) return (null, false, 0);
+
+        double actual = t.CompletedAt is { } done
+            ? WorkingDays.Between(t.StartedAt.Value, done)
+            : WorkingDays.Since(t.StartedAt.Value);
+
+        if (t.EstimateDays is not { } estimate || actual <= estimate)
+            return (actual, false, 0);
+
+        return (actual, true, Math.Round(actual - estimate, 2));
+    }
+
+    /// <summary>
+    /// Whether the task missed its due date, and by how many working days. A finished task
+    /// is judged on when it was finished, an unfinished one on today.
+    /// </summary>
+    internal static (bool IsOverdue, int DaysOverdue) CalculateOverdue(TaskItem t)
+    {
+        if (t.DueDate is not { } due) return (false, 0);
+
+        var reference = t.CompletedAt ?? DateTimeOffset.UtcNow;
+        if (reference <= due) return (false, 0);
+
+        return (true, WorkingDays.WholeDaysBetween(due, reference));
     }
 }

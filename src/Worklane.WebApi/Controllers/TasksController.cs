@@ -86,7 +86,7 @@ public class TasksController : ControllerBase
         CancellationToken ct)
     {
         await validator.ValidateAndThrowAsync(request, ct);
-        var result = await _board.MoveTaskAsync(taskId, request, ct);
+        var result = await _board.MoveTaskAsync(taskId, request, _currentUser.UserId, ct);
         return Ok(result);
     }
 

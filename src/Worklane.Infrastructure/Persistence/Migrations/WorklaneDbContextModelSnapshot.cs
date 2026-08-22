@@ -163,6 +163,11 @@ namespace Worklane.Infrastructure.Persistence.Migrations
                         .HasColumnType("boolean")
                         .HasDefaultValue(false);
 
+                    b.Property<bool>("IsInProgress")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(false);
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(100)
@@ -336,6 +341,34 @@ namespace Worklane.Infrastructure.Persistence.Migrations
                     b.ToTable("RefreshTokens");
                 });
 
+            modelBuilder.Entity("Worklane.Domain.Entities.TaskActivity", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid?>("FromColumnId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("MovedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("MovedByUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("TaskId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("ToColumnId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TaskId", "MovedAt");
+
+                    b.ToTable("TaskActivities");
+                });
+
             modelBuilder.Entity("Worklane.Domain.Entities.TaskItem", b =>
                 {
                     b.Property<Guid>("Id")
@@ -347,6 +380,9 @@ namespace Worklane.Infrastructure.Persistence.Migrations
 
                     b.Property<Guid>("ColumnId")
                         .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
@@ -360,6 +396,9 @@ namespace Worklane.Infrastructure.Persistence.Migrations
 
                     b.Property<DateTimeOffset?>("DueDate")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<double?>("EstimateDays")
+                        .HasColumnType("double precision");
 
                     b.Property<bool>("IsArchived")
                         .ValueGeneratedOnAdd()
@@ -380,6 +419,9 @@ namespace Worklane.Infrastructure.Persistence.Migrations
 
                     b.Property<Guid>("ProjectId")
                         .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("StartedAt")
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("Title")
                         .IsRequired()
@@ -635,6 +677,17 @@ namespace Worklane.Infrastructure.Persistence.Migrations
                         .IsRequired();
 
                     b.Navigation("Project");
+                });
+
+            modelBuilder.Entity("Worklane.Domain.Entities.TaskActivity", b =>
+                {
+                    b.HasOne("Worklane.Domain.Entities.TaskItem", "Task")
+                        .WithMany()
+                        .HasForeignKey("TaskId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Task");
                 });
 
             modelBuilder.Entity("Worklane.Domain.Entities.TaskItem", b =>

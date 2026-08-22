@@ -9,11 +9,11 @@ namespace Worklane.Infrastructure.Services;
 
 public class ProjectService : IProjectService
 {
-    private static readonly (string Name, int Order, bool IsDone)[] DefaultColumns =
+    private static readonly (string Name, int Order, bool IsDone, bool IsInProgress)[] DefaultColumns =
     [
-        ("To Do", 1000, false),
-        ("In Progress", 2000, false),
-        ("Done", 3000, true),
+        ("To Do", 1000, false, false),
+        ("In Progress", 2000, false, true),
+        ("Done", 3000, true, false),
     ];
 
     private readonly WorklaneDbContext _db;
@@ -57,7 +57,7 @@ public class ProjectService : IProjectService
         _db.Projects.Add(project);
 
         // Seed default columns for every new project
-        foreach (var (name, order, isDone) in DefaultColumns)
+        foreach (var (name, order, isDone, isInProgress) in DefaultColumns)
         {
             _db.BoardColumns.Add(new BoardColumn
             {
@@ -65,7 +65,8 @@ public class ProjectService : IProjectService
                 ProjectId = project.Id,
                 Name = name,
                 Order = order,
-                IsDone = isDone
+                IsDone = isDone,
+                IsInProgress = isInProgress
             });
         }
 

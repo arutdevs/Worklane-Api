@@ -23,6 +23,18 @@ public class TaskItem
     /// </summary>
     public double Order { get; set; }
 
+    /// <summary>Planned effort in man-days. Null when the task has not been estimated.</summary>
+    public double? EstimateDays { get; set; }
+
+    /// <summary>First time the task entered a column flagged <see cref="BoardColumn.IsInProgress"/>.</summary>
+    public DateTimeOffset? StartedAt { get; set; }
+
+    /// <summary>
+    /// Most recent time the task entered a column flagged <see cref="BoardColumn.IsDone"/>.
+    /// Cleared when the task is dragged back out of a done column.
+    /// </summary>
+    public DateTimeOffset? CompletedAt { get; set; }
+
     public Guid CreatedById { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
