@@ -11,7 +11,7 @@ Worklane = ระบบจัดการงานแบบ multi-tenant (Jira �
 
 | Repo | Path | Branch | Commit ล่าสุด |
 |---|---|---|---|
-| Backend | `C:\dev\worklane` | `develop` | `eff24c7` (2026-07-15) |
+| Backend | `C:\dev\worklane` | `develop` | `de6aee0` (2026-08-22) |
 | Frontend | `C:\dev\worklane\web` | — | `7dcac66` (2026-07-15) |
 
 > ⚠️ `web/` ถูก ignore ไว้ใน repo หลัก (`.gitignore` บรรทัดที่ 2) เพราะเป็น repo แยกชื่อ `Worklane-Web`
@@ -29,7 +29,7 @@ Worklane = ระบบจัดการงานแบบ multi-tenant (Jira �
 | 2026-07-15 | **Phase 2 (Backend)** — BoardColumn / TaskItem / ProjectTaskCounter, BoardService, ColumnsController, TasksController, migration `AddBoardEntities` → commit `eff24c7` |
 | 2026-07-15 | **Phase 2 (Frontend)** — เขียนหน้า Board + drag-drop + redesign ธีมทั้งแอป → **ยังไม่ได้ commit** |
 | 2026-07-15 → 2026-08-22 | หยุดพัฒนา ~5 สัปดาห์ |
-| 2026-08-22 | กลับมารันโปรเจค, audit สถานะ, **เจอและแก้บั๊ก 3 จุด**, สร้างบอร์ด `WL` ติดตามงานตัวเอง (ดูหัวข้อ 5) |
+| 2026-08-22 | กลับมารันโปรเจค, audit สถานะ, **เจอและแก้บั๊ก 3 จุด** → commit `de065da`, สร้างบอร์ด `WL` ติดตามงานตัวเอง, เพิ่ม log นี้ → commit `de6aee0` |
 
 ---
 
@@ -88,6 +88,8 @@ Worklane = ระบบจัดการงานแบบ multi-tenant (Jira �
 - Comment / attachment / activity log ในการ์ด
 - แก้ชื่อ–ลบคอลัมน์จาก UI, WIP limit
 - ส่งอีเมลเชิญจริง (ตอนนี้ log ลิงก์ออก console)
+- **CI** — `.github/` ว่างเปล่า ไม่มี workflow เลย ทุกอย่างพึ่งการรันมือล้วน ๆ
+  (ถ้ามี CI ตั้งแต่แรก บั๊ก 500 ตอนสร้างการ์ดคงไม่หลุดมาได้ 5 สัปดาห์)
 
 ---
 
@@ -135,8 +137,11 @@ EF เลยส่ง priority จริงทุกครั้ง + เพิ�
 
 ### 📋 บอร์ดติดตามงานตัวเอง
 
-สร้างโปรเจค **`WL — Worklane`** ในระบบ แล้วใส่การ์ด **25 ใบ** ที่สะท้อนสถานะจริงของโค้ดชุดนี้
-(4 คอลัมน์: Backlog 7 · To Do 3 · In Progress 1 · Done 14)
+สร้างโปรเจค **`WL — Worklane`** ในระบบ แล้วใส่การ์ด **29 ใบ** ที่สะท้อนสถานะจริงของโค้ดชุดนี้
+(4 คอลัมน์: Backlog 8 · To Do 3 · In Progress 1 · Done 17)
+
+ใช้บอร์ดนี้เป็นแหล่งอ้างอิงหลักว่างานไปถึงไหน — การ์ดแต่ละใบมีรายละเอียดข้างในว่าทำอะไรไป
+ติดตรงไหน และทำไมถึงต้องทำ
 
 → http://localhost:4200/w/demo-users-workspace/p/WL/board
 
