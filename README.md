@@ -1,7 +1,10 @@
 # Worklane
 
-A multi-tenant project management SaaS (simplified Jira). This is **Phase 1: foundation** —
-authentication, workspaces, members/invitations, and projects. Boards and tasks come in later phases.
+A multi-tenant project management SaaS (simplified Jira): workspaces and members, projects,
+a Kanban board with drag-and-drop, and a dashboard that measures effort per person in man-days.
+
+- `CLAUDE.md` — how to work in this repo, and the traps worth knowing first
+- `PROGRESS.md` — what is built, what is missing, and what happened when
 
 ## Tech stack
 
@@ -10,7 +13,7 @@ authentication, workspaces, members/invitations, and projects. Boards and tasks 
 - **Auth:** ASP.NET Core Identity + JWT access tokens (15 min) + rotating refresh tokens (7 days, hashed in DB)
 - **Frontend:** Angular 22 (standalone components) + Bootstrap 5 + ng-bootstrap
 - **i18n:** ngx-translate, English (`en`, default) and Thai (`th`)
-- **Realtime:** SignalR hub wired up (`/hubs/notifications`), no events yet — Phase 2+
+- **Realtime:** SignalR hub wired up (`/hubs/notifications`), **no events yet** — nothing broadcasts
 - **Containers:** Docker Compose — `api`, `web`, `postgres`
 
 ## Run everything
@@ -36,11 +39,19 @@ EF Core migrations are applied automatically on API startup in the `Development`
 
 1. Open http://localhost:4200 → redirected to `/login`.
 2. Register a new account (or use the demo login above) → lands in your personal workspace.
-3. Go to **Projects** → create a project (name + key, e.g. `WL`).
-4. Go to **Workspace settings** → invite a member by email + role.
+3. Go to **Projects** → create a project (name + key, e.g. `WL`). It starts with
+   **To Do / In Progress / Done** columns.
+4. Open the board → add cards, drag them between columns, give them an estimate in days.
+   Entering **In Progress** starts the clock; reaching **Done** stops it.
+5. Open **Dashboard** → estimated against actual man-days, per person.
+
+   > Actual time is *elapsed weekdays*, not effort. Holding several cards at once bills the
+   > full duration to each, and there is no holiday calendar. Read it as a trend.
+6. Go to **Workspace settings** → invite a member by email + role.
    - If the invited email already has an account, they're added directly.
-   - Otherwise a pending invitation is created and the invite link is **logged to the API console**
-     (no email sending in Phase 1) — accept it via `POST /api/invitations/accept { token }`.
+   - Otherwise a pending invitation is created and the invite link is **logged to the API console**.
+     ⚠️ There is no `/invitations/accept` page in the app yet, so that link goes nowhere —
+     the invitation can only be accepted through `POST /api/invitations/accept { token }`.
 
 ## Multi-tenancy
 
@@ -58,9 +69,12 @@ Every workspace-scoped endpoint is guarded by a `[RequireWorkspaceRole(...)]` ac
 **Backend:**
 
 ```bash
-# Postgres must be reachable at the connection string in appsettings.Development.json
+# Postgres must be reachable at the connection string in appsettings.json
 dotnet run --project src/Worklane.WebApi
 ```
+
+> On a machine where port 5432 is already taken, the container is published elsewhere and
+> the connection string has to be overridden — see `CLAUDE.md` for the exact command.
 
 **Frontend:**
 
@@ -96,11 +110,11 @@ worklane/
 │   └── Worklane.WebApi          # Controllers, JWT auth, authorization filter, SignalR hub, Program.cs
 ├── tests/
 │   └── Worklane.IntegrationTests
-├── web/                         # Angular app
+├── web/                         # Angular app — separate git repository, ignored here
 │   └── src/app/
 │       ├── core/                # services, guards, interceptors, models
-│       ├── shell/                # navbar, sidenav, shell layout
-│       └── features/             # auth, workspaces, projects
+│       ├── shell/               # navbar, sidenav, shell layout
+│       └── features/            # auth, workspaces, projects, board, dashboard
 └── docker-compose.yml
 ```
 
