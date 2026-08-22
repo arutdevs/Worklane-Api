@@ -11,8 +11,8 @@ Worklane = ระบบจัดการงานแบบ multi-tenant (Jira �
 
 | Repo | Path | Branch | Commit ล่าสุด |
 |---|---|---|---|
-| Backend | `C:\dev\worklane` | `develop` | `de6aee0` (2026-08-22) |
-| Frontend | `C:\dev\worklane\web` | — | `7dcac66` (2026-07-15) |
+| Backend | `C:\dev\worklane` | `develop` | `482b346` (2026-08-22) |
+| Frontend | `C:\dev\worklane\web` | `develop` | `d97b4f4` (2026-08-22) |
 
 > ⚠️ `web/` ถูก ignore ไว้ใน repo หลัก (`.gitignore` บรรทัดที่ 2) เพราะเป็น repo แยกชื่อ `Worklane-Web`
 > — เวลาสั่ง `git status` ที่ root **จะไม่เห็นงานฝั่ง frontend เลย** ต้อง `cd web` ก่อน
@@ -29,7 +29,9 @@ Worklane = ระบบจัดการงานแบบ multi-tenant (Jira �
 | 2026-07-15 | **Phase 2 (Backend)** — BoardColumn / TaskItem / ProjectTaskCounter, BoardService, ColumnsController, TasksController, migration `AddBoardEntities` → commit `eff24c7` |
 | 2026-07-15 | **Phase 2 (Frontend)** — เขียนหน้า Board + drag-drop + redesign ธีมทั้งแอป → **ยังไม่ได้ commit** |
 | 2026-07-15 → 2026-08-22 | หยุดพัฒนา ~5 สัปดาห์ |
-| 2026-08-22 | กลับมารันโปรเจค, audit สถานะ, **เจอและแก้บั๊ก 3 จุด** → commit `de065da`, สร้างบอร์ด `WL` ติดตามงานตัวเอง, เพิ่ม log นี้ → commit `de6aee0` |
+| 2026-08-22 | กลับมารันโปรเจค, audit สถานะ, **เจอและแก้บั๊ก 3 จุด** → `de065da`, สร้างบอร์ด `WL` ติดตามงานตัวเอง |
+| 2026-08-22 | **commit งาน frontend ที่ค้าง 5 สัปดาห์** (31 ไฟล์) → `734512f` |
+| 2026-08-22 | **Phase 3 — วัดผลเป็นแมนเดย์** → `482b346` (backend) + `d97b4f4` (frontend) |
 
 ---
 
@@ -37,9 +39,9 @@ Worklane = ระบบจัดการงานแบบ multi-tenant (Jira �
 
 ### Backend — เสร็จและมีเทสต์คุม
 
-**Domain (9 entities):** `Workspace` `WorkspaceMember` `Invitation` `Project` `ProjectMember` `BoardColumn` `TaskItem` `ProjectTaskCounter` `RefreshToken`
+**Domain (10 entities):** `Workspace` `WorkspaceMember` `Invitation` `Project` `ProjectMember` `BoardColumn` `TaskItem` `TaskActivity` `ProjectTaskCounter` `RefreshToken`
 
-**API endpoints ทั้งหมด 25 เส้น:**
+**API endpoints ทั้งหมด 26 เส้น:**
 
 | กลุ่ม | Endpoints |
 |---|---|
@@ -49,15 +51,18 @@ Worklane = ระบบจัดการงานแบบ multi-tenant (Jira �
 | Projects | `GET/POST /api/workspaces/{id}/projects` · `PATCH/DELETE /api/projects/{id}` |
 | Columns | `GET/POST /api/projects/{projectId}/columns` · `PATCH/DELETE /api/columns/{columnId}` |
 | Tasks | `GET/POST /api/projects/{projectId}/tasks` · `GET/PATCH/DELETE /api/tasks/{taskId}` · `POST /api/tasks/{taskId}/move` |
+| Reports | `GET /api/workspaces/{id}/reports/members` |
 
 **จุดที่ออกแบบไว้ดี:**
 - **Multi-tenancy 2 ชั้น** — `[RequireWorkspaceRole]` อ่าน `WorkspaceId` จาก *route* เท่านั้น (ไม่เชื่อ body) + EF global query filter กันข้อมูลข้าม tenant ซ้ำอีกชั้น
 - **Fractional ordering** — การ์ดใช้ `Order` เป็น `double` แล้วหาค่ากึ่งกลางตอนลาก ไม่ต้อง UPDATE ทั้งคอลัมน์
 - **Task number แบบ atomic** — `INSERT ... ON CONFLICT DO UPDATE RETURNING` กันเลขซ้ำตอนสร้างพร้อมกัน (`DEMO-1`, `DEMO-2`, ...)
+- **จับเวลาโดยไม่ต้องกรอก** — ลากการ์ดเข้าคอลัมน์ที่ตั้ง `IsInProgress` แล้วระบบ stamp เวลาให้เอง
+  `TaskActivity` เก็บประวัติทุกการย้าย เผื่อการ์ดถูกลากออกจาก Done แล้วกลับเข้าใหม่
 
-**เทสต์:** `dotnet test` → ✅ **22/22 ผ่าน** (auth flow, workspace authorization, task move/reorder, priority)
+**เทสต์:** `dotnet test` → ✅ **45/45 ผ่าน** (auth, authorization, move/reorder, priority, การจับเวลา, WorkingDays, report)
 
-### Frontend — โค้ดครบ แต่ยังไม่ commit
+### Frontend
 
 | ส่วน | สถานะ |
 |---|---|
@@ -69,7 +74,9 @@ Worklane = ระบบจัดการงานแบบ multi-tenant (Jira �
 | **Task detail** (offcanvas ด้านขวา) | ✅ |
 | **Create task dialog** + quick add ในคอลัมน์ | ✅ |
 | Optimistic update + rollback ตอนลากวางพลาด | ✅ |
-| i18n ไทย/อังกฤษ | ✅ (board 13 key, task 18 key) |
+| **Estimate บนการ์ด** + chip เวลาที่ใช้ + ขอบแดงเมื่อเกิน | ✅ |
+| **หน้า Dashboard** สรุปรายคน + กราฟเทียบประมาณ/จริง | ✅ |
+| i18n ไทย/อังกฤษ | ✅ |
 
 ---
 
@@ -77,13 +84,14 @@ Worklane = ระบบจัดการงานแบบ multi-tenant (Jira �
 
 ### 🔴 ติดขัดจนใช้งานไม่ได้
 
-- **ไม่มีปุ่ม "เพิ่มคอลัมน์" ใน UI** — `BoardService.createColumn()` / `updateColumn()` / `deleteColumn()` เขียนพร้อมแล้ว แต่ `board.html` มีแค่ empty state `board.noColumns` ไม่มีปุ่มเรียก → **โปรเจคใหม่ที่ยังไม่มีคอลัมน์จะตัน สร้างอะไรต่อไม่ได้เลย**
+- **ไม่มีปุ่ม "เพิ่มคอลัมน์" ใน UI** — `BoardService` มี createColumn / updateColumn / deleteColumn พร้อมแล้ว แต่ `board.html` มีแค่ empty state ไม่มีปุ่มเรียก → **โปรเจคใหม่ที่ยังไม่มีคอลัมน์จะตัน**
+  (สำคัญขึ้นอีก เพราะตอนนี้ `IsInProgress` ตั้งผ่าน API ได้แล้ว แต่ยังไม่มีหน้าจอให้กด)
+- **หน้ารับคำเชิญไม่มีอยู่จริง** — ระบบสร้างลิงก์ `/invitations/accept?token=...` แต่ `app.routes.ts` ไม่มี route นี้ ลิงก์เลยเด้งกลับหน้าแรก และ dialog ก็ไม่แสดง `inviteLink` ที่ API ส่งมา → **เชิญเพื่อนร่วมทีมจริงยังไม่ได้**
 - **`DevSeeder` ไม่ยอม seed บอร์ด** — `DevSeeder.cs:18` เช็ค `if (demo user มีอยู่แล้ว) return;` ตั้งแต่บรรทัดแรก ทำให้โค้ด seed คอลัมน์/การ์ด (บรรทัด 69–128) ไม่เคยรันในเครื่องที่เคยรัน Phase 1 มาก่อน
 
 ### 🟡 ยังไม่ได้เริ่ม (ตรงกับเป้าหมายที่ตั้งไว้)
 
 - **บอกสถานะคนอื่นแบบ realtime** — `NotificationsHub` เป็นคลาสเปล่า ไม่มี event เลย และฝั่ง Angular **ไม่มีโค้ด SignalR สักบรรทัด** (มี `@microsoft/signalr` ใน package.json เฉย ๆ)
-- **หน้าสรุปผลรายคน / Dashboard** — ยังไม่มี route, ไม่มี endpoint, sidenav มีแค่ Projects กับ Workspace settings
 - **"งานของฉัน" (My tasks)** — ยังไม่มี
 - Comment / attachment / activity log ในการ์ด
 - แก้ชื่อ–ลบคอลัมน์จาก UI, WIP limit
@@ -137,8 +145,8 @@ EF เลยส่ง priority จริงทุกครั้ง + เพิ�
 
 ### 📋 บอร์ดติดตามงานตัวเอง
 
-สร้างโปรเจค **`WL — Worklane`** ในระบบ แล้วใส่การ์ด **29 ใบ** ที่สะท้อนสถานะจริงของโค้ดชุดนี้
-(4 คอลัมน์: Backlog 8 · To Do 3 · In Progress 1 · Done 17)
+สร้างโปรเจค **`WL — Worklane`** ในระบบ แล้วใส่การ์ด **35 ใบ** ที่สะท้อนสถานะจริงของโค้ดชุดนี้
+(Backlog 9 · To Do 2 · In Progress 0 · Done 24) ทุกใบมีประมาณการเป็นแมนเดย์
 
 ใช้บอร์ดนี้เป็นแหล่งอ้างอิงหลักว่างานไปถึงไหน — การ์ดแต่ละใบมีรายละเอียดข้างในว่าทำอะไรไป
 ติดตรงไหน และทำไมถึงต้องทำ
@@ -149,8 +157,29 @@ EF เลยส่ง priority จริงทุกครั้ง + เพิ�
 
 - เครื่องมี **PostgreSQL 18 native จองพอร์ต 5432 อยู่แล้ว** → รัน container ที่พอร์ต **5433** แทน
   โดย mount volume เดิม `worklane_pgdata` (ข้อมูลเก่าอยู่ครบ ไม่ได้ลบ)
-- API รันด้วย env `ConnectionStrings__Default` ชี้ไป 5433 → migration `AddBoardEntities` ถูก apply อัตโนมัติ
+- API รันด้วย env `ConnectionStrings__Default` ชี้ไป 5433 → migration ถูก apply อัตโนมัติ
 - โปรเจค `DEMO` เดิมปล่อยไว้ตามเดิม (การ์ดทดสอบที่สร้างตอนไล่บั๊ก archive ทิ้งแล้ว)
+
+### 📊 Phase 3 — วัดผลเป็นแมนเดย์
+
+ใส่ประมาณการเป็นแมนเดย์ตอนสร้างการ์ด ระบบจับเวลาจริงให้เองตอนลาก แล้วสรุปออกมาเป็นรายคน
+
+**สิ่งที่วัดได้:** ปริมาณงาน (รอทำ / กำลังทำ / เสร็จ) · แมนเดย์ประมาณ vs จริง · ส่วนต่าง ·
+จำนวนใบที่เกินประมาณ · เลยกำหนดกี่ใบกี่วัน · อัตราส่งตรงเวลา · cycle time เฉลี่ย
+
+**ข้อจำกัดที่พิมพ์ไว้ใต้ตาราง Dashboard เลย:**
+- นับ elapsed ไม่ใช่ effort — ถือ 3 ใบพร้อมกันจะนับเวลาเต็มทั้ง 3 ใบ
+- ตัดแค่เสาร์-อาทิตย์ ไม่มีปฏิทินวันหยุดนักขัตฤกษ์
+
+**ข้อมูลบนบอร์ดตอนนี้:** ทุกใบมีประมาณการ (รวม 47 วัน) แต่ตัวเลข "ใช้จริง" มีแค่ใบเดียว
+คือ `WL-15` ที่ทั้งวันเริ่มและวันจบเป็นข้อเท็จจริงจาก git — งาน frontend มีอยู่ตั้งแต่ 15 ก.ค.
+แต่เพิ่ง commit 22 ส.ค. → **ประมาณ 0.5 วัน ใช้จริง 27.5 วัน เกินไป 27 วัน**
+
+ไม่ได้เดาเวลาย้อนหลังให้ใบอื่น เพราะไม่มีหลักฐานว่าแต่ละใบใช้เวลาเท่าไหร่จริง ๆ
+การวัดผลจริงเริ่มนับตั้งแต่ตอนนี้เป็นต้นไป
+
+**⚠️ เจอระหว่างทดสอบ:** 22 ส.ค. 2026 เป็น**วันเสาร์** งาน Phase 3 ทั้งหมดเลยได้เครดิต 0 วันทำการ
+เป็นผลจากดีไซน์ที่เลือกไว้ ไม่ใช่บั๊ก — แต่ต้องตัดสินใจว่าจะเอาแบบนี้ไหม (การ์ด `WL-35`)
 
 ---
 
