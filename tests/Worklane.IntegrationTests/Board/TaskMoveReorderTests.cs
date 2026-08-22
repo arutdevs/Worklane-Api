@@ -37,21 +37,21 @@ public class TaskMoveReorderTests : IClassFixture<WorklaneWebApplicationFactory>
             displayName = "Tester"
         });
         reg.EnsureSuccessStatusCode();
-        var auth = await reg.Content.ReadFromJsonAsync<AuthTokensResponse>();
+        var auth = await reg.Content.ReadFromJsonAsync<AuthTokensResponse>(TestAuthHelper.JsonOptions);
         client.DefaultRequestHeaders.Authorization = new("Bearer", auth!.AccessToken);
 
         // Create workspace
         var ws = await (await client.PostAsJsonAsync("/api/workspaces", new { name = "Test WS" }))
-            .Content.ReadFromJsonAsync<WorkspaceDto>();
+            .Content.ReadFromJsonAsync<WorkspaceDto>(TestAuthHelper.JsonOptions);
 
         // Create project
         var project = await (await client.PostAsJsonAsync($"/api/workspaces/{ws!.Id}/projects",
             new { name = "Test Project", key = "TST" }))
-            .Content.ReadFromJsonAsync<ProjectDto>();
+            .Content.ReadFromJsonAsync<ProjectDto>(TestAuthHelper.JsonOptions);
 
         // Load seeded columns
         var columns = await (await client.GetAsync($"/api/projects/{project!.Id}/columns"))
-            .Content.ReadFromJsonAsync<List<BoardColumnDto>>();
+            .Content.ReadFromJsonAsync<List<BoardColumnDto>>(TestAuthHelper.JsonOptions);
 
         return (client, ws.Id, project.Id, columns!);
     }
@@ -65,7 +65,7 @@ public class TaskMoveReorderTests : IClassFixture<WorklaneWebApplicationFactory>
             columnId
         });
         res.EnsureSuccessStatusCode();
-        return (await res.Content.ReadFromJsonAsync<TaskItemDto>())!;
+        return (await res.Content.ReadFromJsonAsync<TaskItemDto>(TestAuthHelper.JsonOptions))!;
     }
 
     // ── Tests ─────────────────────────────────────────────────────────────────
@@ -81,7 +81,7 @@ public class TaskMoveReorderTests : IClassFixture<WorklaneWebApplicationFactory>
 
         var res = await client.PostAsJsonAsync($"/api/tasks/{task.Id}/move", new { toColumnId = inProgressId, toIndex = 0 });
         res.StatusCode.Should().Be(HttpStatusCode.OK);
-        var moved = await res.Content.ReadFromJsonAsync<TaskItemDto>();
+        var moved = await res.Content.ReadFromJsonAsync<TaskItemDto>(TestAuthHelper.JsonOptions);
 
         moved!.ColumnId.Should().Be(inProgressId);
         moved.Order.Should().BeApproximately(65536.0, 0.001);
@@ -98,7 +98,7 @@ public class TaskMoveReorderTests : IClassFixture<WorklaneWebApplicationFactory>
 
         // Move t2 to index 0 (before t1)
         var res = await client.PostAsJsonAsync($"/api/tasks/{t2.Id}/move", new { toColumnId = colId, toIndex = 0 });
-        var moved = await res.Content.ReadFromJsonAsync<TaskItemDto>();
+        var moved = await res.Content.ReadFromJsonAsync<TaskItemDto>(TestAuthHelper.JsonOptions);
 
         moved!.Order.Should().BeLessThan(t1.Order);
     }
@@ -115,7 +115,7 @@ public class TaskMoveReorderTests : IClassFixture<WorklaneWebApplicationFactory>
 
         // Move t3 to end of first column
         var res = await client.PostAsJsonAsync($"/api/tasks/{t3.Id}/move", new { toColumnId = colId, toIndex = 2 });
-        var moved = await res.Content.ReadFromJsonAsync<TaskItemDto>();
+        var moved = await res.Content.ReadFromJsonAsync<TaskItemDto>(TestAuthHelper.JsonOptions);
 
         moved!.ColumnId.Should().Be(colId);
         moved.Order.Should().BeGreaterThan(t2.Order);
@@ -133,7 +133,7 @@ public class TaskMoveReorderTests : IClassFixture<WorklaneWebApplicationFactory>
 
         // Move t3 between t1 (index 0) and t2 (index 1) → toIndex = 1
         var res = await client.PostAsJsonAsync($"/api/tasks/{t3.Id}/move", new { toColumnId = colId, toIndex = 1 });
-        var moved = await res.Content.ReadFromJsonAsync<TaskItemDto>();
+        var moved = await res.Content.ReadFromJsonAsync<TaskItemDto>(TestAuthHelper.JsonOptions);
 
         moved!.Order.Should().BeGreaterThan(t1.Order);
         moved.Order.Should().BeLessThan(t2.Order);
@@ -164,7 +164,7 @@ public class TaskMoveReorderTests : IClassFixture<WorklaneWebApplicationFactory>
         await CreateTaskAsync(client, projectId, "A Task", colId);
 
         var res = await client.GetAsync($"/api/projects/{projectId}/columns");
-        var board = await res.Content.ReadFromJsonAsync<List<BoardColumnDto>>();
+        var board = await res.Content.ReadFromJsonAsync<List<BoardColumnDto>>(TestAuthHelper.JsonOptions);
 
         var firstCol = board!.First(c => c.Id == colId);
         firstCol.Tasks.Should().HaveCount(2);
@@ -182,7 +182,33 @@ public class TaskMoveReorderTests : IClassFixture<WorklaneWebApplicationFactory>
         del.StatusCode.Should().Be(HttpStatusCode.NoContent);
 
         var board = await (await client.GetAsync($"/api/projects/{projectId}/columns"))
-            .Content.ReadFromJsonAsync<List<BoardColumnDto>>();
+            .Content.ReadFromJsonAsync<List<BoardColumnDto>>(TestAuthHelper.JsonOptions);
         board!.First(c => c.Id == colId).Tasks.Should().BeEmpty();
+    }
+
+    [Theory]
+    [InlineData("Low")]
+    [InlineData("Medium")]
+    [InlineData("High")]
+    [InlineData("Urgent")]
+    public async Task CreateTask_PersistsEveryPriority(string priority)
+    {
+        var (client, _, projectId, columns) = await SetupBoardAsync($"priority-{priority}@test.com");
+
+        var res = await client.PostAsJsonAsync($"/api/projects/{projectId}/tasks", new
+        {
+            title = $"{priority} task",
+            priority,
+            columnId = columns[0].Id
+        });
+        res.EnsureSuccessStatusCode();
+
+        var created = await res.Content.ReadFromJsonAsync<TaskItemDto>(TestAuthHelper.JsonOptions);
+        created!.Priority.ToString().Should().Be(priority);
+
+        // Re-read from the database, not just the in-memory entity the write returned.
+        var reloaded = await (await client.GetAsync($"/api/tasks/{created.Id}"))
+            .Content.ReadFromJsonAsync<TaskItemDto>(TestAuthHelper.JsonOptions);
+        reloaded!.Priority.ToString().Should().Be(priority);
     }
 }

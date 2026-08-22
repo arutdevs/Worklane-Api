@@ -138,15 +138,19 @@ public class BoardService : IBoardService
             columnId = firstColId;
         }
 
-        // Atomic per-project counter via PostgreSQL upsert
-        var number = await _db.Database.SqlQuery<int>(
+        // Atomic per-project counter via PostgreSQL upsert.
+        // The INSERT ... RETURNING is non-composable, so it must be materialised without
+        // any LINQ operator on top of it (FirstAsync would compose a LIMIT over it and
+        // throw). SqlQuery<T> shapes a scalar from a column named "Value".
+        var numbers = await _db.Database.SqlQuery<int>(
             $"""
             INSERT INTO "ProjectTaskCounters" ("ProjectId", "LastNumber")
             VALUES ({projectId}, 1)
             ON CONFLICT ("ProjectId") DO UPDATE
             SET "LastNumber" = "ProjectTaskCounters"."LastNumber" + 1
-            RETURNING "LastNumber"
-            """).FirstAsync(ct);
+            RETURNING "LastNumber" AS "Value"
+            """).ToListAsync(ct);
+        var number = numbers[0];
 
         var maxOrder = await _db.TaskItems
             .Where(t => t.ColumnId == columnId)

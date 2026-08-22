@@ -16,7 +16,12 @@ public class TaskItemConfiguration : IEntityTypeConfiguration<TaskItem>
         builder.Property(t => t.Priority)
             .IsRequired()
             .HasConversion<string>()
-            .HasDefaultValue(TaskPriority.Medium);
+            .HasDefaultValue(TaskPriority.Medium)
+            // TaskPriority.Low is 0 — the CLR default — which EF otherwise reads as
+            // "never set" and drops from the INSERT, letting the column default (Medium)
+            // overwrite it. Move the sentinel to a value nothing can assign so an
+            // explicit Low is always written.
+            .HasSentinel((TaskPriority)(-1));
         builder.Property(t => t.Order).IsRequired();
         builder.Property(t => t.IsArchived).IsRequired().HasDefaultValue(false);
         builder.Property(t => t.CreatedAt).IsRequired();
