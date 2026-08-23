@@ -6,6 +6,7 @@ using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
 using Serilog;
 using Worklane.Application;
+using Worklane.Application.Board.Interfaces;
 using Worklane.Application.Common.Interfaces;
 using Worklane.Application.Common.Options;
 using Worklane.Infrastructure;
@@ -54,7 +55,9 @@ builder.Services.AddSwaggerGen(options =>
     });
 });
 
-builder.Services.AddSignalR();
+builder.Services.AddSignalR()
+    .AddJsonProtocol(options => options.PayloadSerializerOptions.Converters.Add(new JsonStringEnumConverter()));
+builder.Services.AddScoped<IBoardNotifier, SignalRBoardNotifier>();
 
 builder.Services.AddCors(options =>
 {

@@ -13,10 +13,12 @@ namespace Worklane.Infrastructure.Services;
 public class BoardService : IBoardService
 {
     private readonly WorklaneDbContext _db;
+    private readonly IBoardNotifier _notifier;
 
-    public BoardService(WorklaneDbContext db)
+    public BoardService(WorklaneDbContext db, IBoardNotifier notifier)
     {
         _db = db;
+        _notifier = notifier;
     }
 
     // ── Columns ──────────────────────────────────────────────────────────────
@@ -189,7 +191,9 @@ public class BoardService : IBoardService
         });
         await _db.SaveChangesAsync(ct);
 
-        return ToDto(task, project.Key, await BuildAssigneeMapAsync([task], ct));
+        var dto = ToDto(task, project.Key, await BuildAssigneeMapAsync([task], ct));
+        await _notifier.TaskCreatedAsync(projectId, dto, ct);
+        return dto;
     }
 
     public async Task<TaskItemDto> GetTaskAsync(Guid taskId, CancellationToken ct = default)
@@ -219,7 +223,9 @@ public class BoardService : IBoardService
         task.UpdatedAt = DateTimeOffset.UtcNow;
         await _db.SaveChangesAsync(ct);
 
-        return await GetTaskAsync(taskId, ct);
+        var dto = await GetTaskAsync(taskId, ct);
+        await _notifier.TaskUpdatedAsync(dto.ProjectId, dto, ct);
+        return dto;
     }
 
     public async Task<TaskItemDto> MoveTaskAsync(Guid taskId, MoveTaskRequest request, Guid userId, CancellationToken ct = default)
@@ -287,7 +293,9 @@ public class BoardService : IBoardService
         }
 
         await _db.SaveChangesAsync(ct);
-        return await GetTaskAsync(taskId, ct);
+        var dto = await GetTaskAsync(taskId, ct);
+        await _notifier.TaskMovedAsync(dto.ProjectId, dto, ct);
+        return dto;
     }
 
     public async Task ArchiveTaskAsync(Guid taskId, CancellationToken ct = default)
