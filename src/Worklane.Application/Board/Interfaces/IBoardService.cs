@@ -18,6 +18,7 @@ public interface IBoardService
     Task<TaskItemDto> MoveTaskAsync(Guid taskId, MoveTaskRequest request, Guid userId, CancellationToken ct = default);
     Task ArchiveTaskAsync(Guid taskId, CancellationToken ct = default);
     Task<IReadOnlyList<TaskItemDto>> GetTasksAsync(Guid projectId, Guid? assigneeId, TaskPriority? priority, string? search, CancellationToken ct = default);
+    Task<IReadOnlyList<MyTaskDto>> GetMyTasksAsync(Guid workspaceId, Guid userId, CancellationToken ct = default);
 
     // Auth-filter helpers
     Task<Guid?> GetWorkspaceIdForColumnAsync(Guid columnId, CancellationToken ct = default);

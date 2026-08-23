@@ -75,3 +75,13 @@ public record UpdateTaskRequest(
 );
 
 public record MoveTaskRequest(Guid ToColumnId, int ToIndex);
+
+/// <summary>A task assigned to the current user, with just enough of its project/column
+/// context to render and link to it from a cross-project "My tasks" list.</summary>
+public record MyTaskDto(
+    TaskItemDto Task,
+    string ProjectKey,
+    string ProjectName,
+    string ColumnName,
+    bool IsColumnDone
+);

@@ -329,6 +329,31 @@ public class BoardService : IBoardService
         return tasks.Select(t => ToDto(t, project.Key, assigneeMap)).ToList();
     }
 
+    public async Task<IReadOnlyList<MyTaskDto>> GetMyTasksAsync(Guid workspaceId, Guid userId, CancellationToken ct = default)
+    {
+        var tasks = await _db.TaskItems
+            .Include(t => t.Project)
+            .Include(t => t.Column)
+            .Where(t => t.AssigneeId == userId && t.Project.WorkspaceId == workspaceId)
+            // Overdue and undated work first, then soonest due date; done columns sink
+            // to the bottom regardless, since finished work is not what "my tasks" is for.
+            .OrderBy(t => t.Column.IsDone)
+            .ThenBy(t => t.DueDate == null)
+            .ThenBy(t => t.DueDate)
+            .ToListAsync(ct);
+
+        var assigneeMap = await BuildAssigneeMapAsync(tasks, ct);
+
+        return tasks
+            .Select(t => new MyTaskDto(
+                ToDto(t, t.Project.Key, assigneeMap),
+                t.Project.Key,
+                t.Project.Name,
+                t.Column.Name,
+                t.Column.IsDone))
+            .ToList();
+    }
+
     // ── Auth-filter helpers ───────────────────────────────────────────────────
 
     public async Task<Guid?> GetWorkspaceIdForColumnAsync(Guid columnId, CancellationToken ct = default)

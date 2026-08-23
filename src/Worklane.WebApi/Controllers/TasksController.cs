@@ -90,6 +90,15 @@ public class TasksController : ControllerBase
         return Ok(result);
     }
 
+    /// <summary>Returns every task assigned to the current user across all projects in a workspace.</summary>
+    [HttpGet("api/workspaces/{workspaceId:guid}/my-tasks")]
+    [RequireWorkspaceRole(WorkspaceRole.Viewer, WorkspaceResourceType.Workspace, "workspaceId")]
+    public async Task<ActionResult<IReadOnlyList<MyTaskDto>>> GetMyTasks(Guid workspaceId, CancellationToken ct)
+    {
+        var result = await _board.GetMyTasksAsync(workspaceId, _currentUser.UserId, ct);
+        return Ok(result);
+    }
+
     /// <summary>Archives (soft-deletes) a task so it no longer appears on the board.</summary>
     [HttpDelete("api/tasks/{taskId:guid}")]
     [RequireWorkspaceRole(WorkspaceRole.Member, WorkspaceResourceType.Task, "taskId")]
