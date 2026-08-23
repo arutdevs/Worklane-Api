@@ -11,8 +11,8 @@ Worklane = ระบบจัดการงานแบบ multi-tenant (Jira �
 
 | Repo | Path | Branch | Commit ล่าสุด |
 |---|---|---|---|
-| Backend | `C:\dev\worklane` | `develop` | `eb99353` (2026-08-23) — commit ไว้ในเครื่อง ยังไม่ได้ push (ดูการ์ด WL-39) |
-| Frontend | `C:\dev\worklane\web` | `develop` | `d20884e` (2026-08-23) — commit ไว้ในเครื่อง ยังไม่ได้ push (ดูการ์ด WL-39) |
+| Backend | `C:\dev\worklane` | `develop` | `a27c99b` (2026-08-23) — commit ไว้ในเครื่อง ยังไม่ได้ push (ดูการ์ด WL-39) |
+| Frontend | `C:\dev\worklane\web` | `develop` | `1ee4b24` (2026-08-23) — commit ไว้ในเครื่อง ยังไม่ได้ push (ดูการ์ด WL-39) |
 
 > ⚠️ `web/` ถูก ignore ไว้ใน repo หลัก (`.gitignore` บรรทัดที่ 2) เพราะเป็น repo แยกชื่อ `Worklane-Web`
 > — เวลาสั่ง `git status` ที่ root **จะไม่เห็นงานฝั่ง frontend เลย** ต้อง `cd web` ก่อน
@@ -34,6 +34,8 @@ Worklane = ระบบจัดการงานแบบ multi-tenant (Jira �
 | 2026-08-22 | **Phase 3 — วัดผลเป็นแมนเดย์** → `482b346` (backend) + `d97b4f4` (frontend) |
 | 2026-08-23 | **WL-18 — SignalR broadcast** (สร้าง/ย้าย/แก้การ์ด) → `a09b9f3` (backend) + `3911c93` (frontend), ยังไม่ได้ push |
 | 2026-08-23 | **WL-19 — Presence** (ใครออนไลน์ + badge ใครกำลังแก้การ์ด) → `eb99353` (backend) + `d20884e` (frontend), ยังไม่ได้ push |
+| 2026-08-23 | 🐛 แก้บั๊ก quick-add ซ้ำ/มองไม่เห็น + badge จำนวนการ์ดสีชนกัน (WL-51, WL-52) → `96af1a8`, `74feb15` (frontend) |
+| 2026-08-23 | **WL-24 — ส่งอีเมลเชิญจริง** (Gmail SMTP) + สร้างหน้ารับคำเชิญที่หายไป → `a27c99b` (backend) + `1ee4b24` (frontend), ยังไม่ได้ push |
 
 ---
 
@@ -62,6 +64,7 @@ Worklane = ระบบจัดการงานแบบ multi-tenant (Jira �
 - **Task number แบบ atomic** — `INSERT ... ON CONFLICT DO UPDATE RETURNING` กันเลขซ้ำตอนสร้างพร้อมกัน (`DEMO-1`, `DEMO-2`, ...)
 - **จับเวลาโดยไม่ต้องกรอก** — ลากการ์ดเข้าคอลัมน์ที่ตั้ง `IsInProgress` แล้วระบบ stamp เวลาให้เอง
   `TaskActivity` เก็บประวัติทุกการย้าย เผื่อการ์ดถูกลากออกจาก Done แล้วกลับเข้าใหม่
+- **อีเมลเชิญจริงผ่าน Gmail SMTP** — `IEmailService` ส่งไม่สำเร็จก็แค่ log warning ไม่ทำให้สร้างคำเชิญล้มเหลว, credential เก็บใน user-secrets เท่านั้น
 
 **เทสต์:** `dotnet test` → ✅ **45/45 ผ่าน** (auth, authorization, move/reorder, priority, การจับเวลา, WorkingDays, report)
 
@@ -81,6 +84,7 @@ Worklane = ระบบจัดการงานแบบ multi-tenant (Jira �
 | **หน้า Dashboard** สรุปรายคน + กราฟเทียบประมาณ/จริง | ✅ |
 | **Realtime บอร์ด (SignalR)** — เห็นการ์ดที่คนอื่นสร้าง/ย้าย/แก้สด ๆ โดยไม่ reload | ✅ |
 | **Presence** — avatar คนที่ออนไลน์อยู่บนบอร์ดเดียวกัน + badge ว่าใครกำลังแก้การ์ดใบไหน | ✅ |
+| **หน้ารับคำเชิญ** (`/invitations/accept`) — accept ทันทีถ้า login แล้ว, ถ้ายังไม่ login พาไป login/register แล้วพากลับมา accept ต่ออัตโนมัติ | ✅ |
 | i18n ไทย/อังกฤษ | ✅ |
 
 ---
@@ -89,16 +93,11 @@ Worklane = ระบบจัดการงานแบบ multi-tenant (Jira �
 
 > รายการด้านล่างอัปเดตตามเท่าที่ทราบ ณ 2026-08-23 — ของจริงดูที่บอร์ด **WL** เป็นหลัก
 
-### 🔴 ติดขัดจนใช้งานไม่ได้
-
-- **หน้ารับคำเชิญไม่มีอยู่จริง** — ระบบสร้างลิงก์ `/invitations/accept?token=...` แต่ `app.routes.ts` ไม่มี route นี้ ลิงก์เลยเด้งกลับหน้าแรก และ dialog ก็ไม่แสดง `inviteLink` ที่ API ส่งมา → **เชิญเพื่อนร่วมทีมจริงยังไม่ได้**
-
 ### 🟡 ยังไม่ได้เริ่ม (ตรงกับเป้าหมายที่ตั้งไว้)
 
 - **"งานของฉัน" (My tasks)** — ยังไม่มี
 - Comment / attachment / activity log ในการ์ด
-- แก้ชื่อ–ลบคอลัมน์จาก UI, WIP limit
-- ส่งอีเมลเชิญจริง (ตอนนี้ log ลิงก์ออก console)
+- WIP limit ต่อคอลัมน์
 
 ---
 
@@ -209,6 +208,15 @@ cd web && npm start
 **Login:** `demo@worklane.app` / `Demo123!`
 
 > 💡 ถ้าจะรัน `dotnet test` ต้อง **ปิด API ที่รันค้างอยู่ก่อน** ไม่งั้น build fail เพราะไฟล์ `Worklane.Infrastructure.dll` ถูกล็อก
+
+**อีเมลเชิญจริง (ไม่บังคับ):** ไม่ตั้งค่าไว้ก็ยังใช้งานได้ปกติ — แค่ log warning แล้วลิงก์เชิญยัง log ไว้ใน console เหมือนเดิม ถ้าจะให้ส่งอีเมลจริงผ่าน Gmail:
+
+```bash
+dotnet user-secrets set "Email:SmtpUsername" "you@gmail.com" --project src/Worklane.WebApi
+dotnet user-secrets set "Email:SmtpPassword" "<App Password จาก https://myaccount.google.com/apppasswords>" --project src/Worklane.WebApi
+```
+
+ต้องเปิด 2-Step Verification ในบัญชี Google ก่อนถึงจะสร้าง App Password ได้ — credential เก็บนอก repo เสมอ (user-secrets), ห้ามใส่ใน `appsettings.json`
 
 ---
 
