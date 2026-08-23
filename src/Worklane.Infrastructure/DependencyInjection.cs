@@ -34,10 +34,13 @@ public static class DependencyInjection
             .AddDefaultTokenProviders();
 
         services.Configure<JwtSettings>(configuration.GetSection(JwtSettings.SectionName));
+        services.Configure<EmailSettings>(configuration.GetSection(EmailSettings.SectionName));
+        services.Configure<FrontendSettings>(configuration.GetSection(FrontendSettings.SectionName));
 
         services.AddScoped<ICurrentTenantService, CurrentTenantService>();
         services.AddScoped<ITokenService, JwtTokenService>();
 
+        services.AddScoped<IEmailService, SmtpEmailService>();
         services.AddScoped<IAuthService, AuthService>();
         services.AddScoped<IWorkspaceService, WorkspaceService>();
         services.AddScoped<IProjectService, ProjectService>();

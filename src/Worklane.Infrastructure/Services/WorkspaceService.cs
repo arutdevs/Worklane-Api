@@ -1,7 +1,10 @@
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Worklane.Application.Common.Exceptions;
+using Worklane.Application.Common.Interfaces;
+using Worklane.Application.Common.Options;
 using Worklane.Application.Workspaces.Dtos;
 using Worklane.Application.Workspaces.Interfaces;
 using Worklane.Domain.Entities;
@@ -16,12 +19,21 @@ public class WorkspaceService : IWorkspaceService
     private readonly WorklaneDbContext _db;
     private readonly UserManager<AppUser> _userManager;
     private readonly ILogger<WorkspaceService> _logger;
+    private readonly IEmailService _emailService;
+    private readonly FrontendSettings _frontendSettings;
 
-    public WorkspaceService(WorklaneDbContext db, UserManager<AppUser> userManager, ILogger<WorkspaceService> logger)
+    public WorkspaceService(
+        WorklaneDbContext db,
+        UserManager<AppUser> userManager,
+        ILogger<WorkspaceService> logger,
+        IEmailService emailService,
+        IOptions<FrontendSettings> frontendSettings)
     {
         _db = db;
         _userManager = userManager;
         _logger = logger;
+        _emailService = emailService;
+        _frontendSettings = frontendSettings.Value;
     }
 
     public async Task<List<WorkspaceDto>> GetMyWorkspacesAsync(Guid userId, CancellationToken cancellationToken)
@@ -126,10 +138,34 @@ public class WorkspaceService : IWorkspaceService
         _db.Invitations.Add(invitation);
         await _db.SaveChangesAsync(cancellationToken);
 
-        var inviteLink = $"/invitations/accept?token={invitation.Token}";
-        _logger.LogInformation("Invitation created for {Email} to workspace {WorkspaceId}: {InviteLink}", request.Email, workspaceId, inviteLink);
+        var relativeLink = $"/invitations/accept?token={invitation.Token}";
+        var absoluteLink = $"{_frontendSettings.BaseUrl.TrimEnd('/')}{relativeLink}";
+        _logger.LogInformation("Invitation created for {Email} to workspace {WorkspaceId}: {InviteLink}", request.Email, workspaceId, absoluteLink);
 
-        return new InvitationDto(invitation.Id, invitation.Email, invitation.Role, invitation.ExpiresAt, inviteLink);
+        // Best-effort: a workspace member is invited either way, and the link above is
+        // logged, so a delivery failure (no SMTP credentials configured, provider outage)
+        // should not fail invite creation — it just falls back to sharing the link by hand.
+        try
+        {
+            var workspaceName = await _db.Workspaces
+                .Where(w => w.Id == workspaceId)
+                .Select(w => w.Name)
+                .FirstOrDefaultAsync(cancellationToken) ?? "Worklane";
+
+            var html = $"""
+                <p>You've been invited to join <strong>{System.Net.WebUtility.HtmlEncode(workspaceName)}</strong> on Worklane.</p>
+                <p><a href="{absoluteLink}">Accept the invitation</a></p>
+                <p style="color:#64748b;font-size:.875rem;">This link expires on {invitation.ExpiresAt:MMM d, yyyy}.</p>
+                """;
+
+            await _emailService.SendAsync(invitation.Email, $"You're invited to {workspaceName} on Worklane", html, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to send invitation email to {Email}; the link above still works", request.Email);
+        }
+
+        return new InvitationDto(invitation.Id, invitation.Email, invitation.Role, invitation.ExpiresAt, absoluteLink);
     }
 
     public async Task AcceptInvitationAsync(Guid acceptingUserId, string token, CancellationToken cancellationToken)
