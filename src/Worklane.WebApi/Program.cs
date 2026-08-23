@@ -58,6 +58,7 @@ builder.Services.AddSwaggerGen(options =>
 builder.Services.AddSignalR()
     .AddJsonProtocol(options => options.PayloadSerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 builder.Services.AddScoped<IBoardNotifier, SignalRBoardNotifier>();
+builder.Services.AddSingleton<IPresenceTracker, PresenceTracker>();
 
 builder.Services.AddCors(options =>
 {
