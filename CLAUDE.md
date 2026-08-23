@@ -84,6 +84,26 @@ docker run -d --name worklane-pg -e POSTGRES_DB=worklane -e POSTGRES_USER=workla
 
 ---
 
+## ⚠️ Docker Desktop will not start after an unclean shutdown
+
+Shutting Windows down without quitting Docker Desktop leaves its Unix sockets behind as
+reparse points. On the next start Docker tries to remove each one before listening on it,
+fails with `The file cannot be accessed by the system`, and dies with "An unexpected error
+occurred". This has happened repeatedly on this machine.
+
+The sockets cannot be deleted — not by `Remove-Item`, `del`, or `fsutil reparsepoint
+delete`. Renaming the directory holding them does work. Failures also surface one service
+at a time, so clearing the Inference manager's socket only reveals the Secrets Engine's.
+
+```bash
+powershell -ExecutionPolicy Bypass -File scripts/Repair-DockerSockets.ps1
+```
+
+**Never use "Reset to factory defaults" in Docker's error dialog.** It deletes every
+volume, including `worklane_pgdata` — the whole database.
+
+---
+
 ## ⚠️ Stop the API before building
 
 A running `dotnet run` holds `Worklane.Infrastructure.dll`, and `dotnet test`,
