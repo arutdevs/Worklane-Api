@@ -11,8 +11,8 @@ Worklane = ระบบจัดการงานแบบ multi-tenant (Jira �
 
 | Repo | Path | Branch | Commit ล่าสุด |
 |---|---|---|---|
-| Backend | `C:\dev\worklane` | `develop` | `a09b9f3` (2026-08-23) — commit ไว้ในเครื่อง ยังไม่ได้ push (ดูการ์ด WL-39) |
-| Frontend | `C:\dev\worklane\web` | `develop` | `3911c93` (2026-08-23) — commit ไว้ในเครื่อง ยังไม่ได้ push (ดูการ์ด WL-39) |
+| Backend | `C:\dev\worklane` | `develop` | `eb99353` (2026-08-23) — commit ไว้ในเครื่อง ยังไม่ได้ push (ดูการ์ด WL-39) |
+| Frontend | `C:\dev\worklane\web` | `develop` | `d20884e` (2026-08-23) — commit ไว้ในเครื่อง ยังไม่ได้ push (ดูการ์ด WL-39) |
 
 > ⚠️ `web/` ถูก ignore ไว้ใน repo หลัก (`.gitignore` บรรทัดที่ 2) เพราะเป็น repo แยกชื่อ `Worklane-Web`
 > — เวลาสั่ง `git status` ที่ root **จะไม่เห็นงานฝั่ง frontend เลย** ต้อง `cd web` ก่อน
@@ -33,6 +33,7 @@ Worklane = ระบบจัดการงานแบบ multi-tenant (Jira �
 | 2026-08-22 | **commit งาน frontend ที่ค้าง 5 สัปดาห์** (31 ไฟล์) → `734512f` |
 | 2026-08-22 | **Phase 3 — วัดผลเป็นแมนเดย์** → `482b346` (backend) + `d97b4f4` (frontend) |
 | 2026-08-23 | **WL-18 — SignalR broadcast** (สร้าง/ย้าย/แก้การ์ด) → `a09b9f3` (backend) + `3911c93` (frontend), ยังไม่ได้ push |
+| 2026-08-23 | **WL-19 — Presence** (ใครออนไลน์ + badge ใครกำลังแก้การ์ด) → `eb99353` (backend) + `d20884e` (frontend), ยังไม่ได้ push |
 
 ---
 
@@ -53,7 +54,7 @@ Worklane = ระบบจัดการงานแบบ multi-tenant (Jira �
 | Columns | `GET/POST /api/projects/{projectId}/columns` · `PATCH/DELETE /api/columns/{columnId}` |
 | Tasks | `GET/POST /api/projects/{projectId}/tasks` · `GET/PATCH/DELETE /api/tasks/{taskId}` · `POST /api/tasks/{taskId}/move` |
 | Reports | `GET /api/workspaces/{id}/reports/members` |
-| Realtime | SignalR hub `/hubs/notifications` — `JoinProject`/`LeaveProject`, broadcast `TaskCreated`/`TaskMoved`/`TaskUpdated` ต่อกลุ่ม `project:{id}` |
+| Realtime | SignalR hub `/hubs/notifications` — `JoinProject`/`LeaveProject`, broadcast `TaskCreated`/`TaskMoved`/`TaskUpdated` ต่อกลุ่ม `project:{id}`; presence (`UserOnline`/`UserOffline`) + `Start`/`StopEditingTask` |
 
 **จุดที่ออกแบบไว้ดี:**
 - **Multi-tenancy 2 ชั้น** — `[RequireWorkspaceRole]` อ่าน `WorkspaceId` จาก *route* เท่านั้น (ไม่เชื่อ body) + EF global query filter กันข้อมูลข้าม tenant ซ้ำอีกชั้น
@@ -79,6 +80,7 @@ Worklane = ระบบจัดการงานแบบ multi-tenant (Jira �
 | **Estimate บนการ์ด** + chip เวลาที่ใช้ + ขอบแดงเมื่อเกิน | ✅ |
 | **หน้า Dashboard** สรุปรายคน + กราฟเทียบประมาณ/จริง | ✅ |
 | **Realtime บอร์ด (SignalR)** — เห็นการ์ดที่คนอื่นสร้าง/ย้าย/แก้สด ๆ โดยไม่ reload | ✅ |
+| **Presence** — avatar คนที่ออนไลน์อยู่บนบอร์ดเดียวกัน + badge ว่าใครกำลังแก้การ์ดใบไหน | ✅ |
 | i18n ไทย/อังกฤษ | ✅ |
 
 ---
