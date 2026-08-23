@@ -164,8 +164,10 @@ bit-identical to the one a write returned from the tracked entity. Use
 runs on a machine that has been through Phase 1. A fresh clone gets a board; an existing
 database does not.
 
-**There is no CI.** `.github/` is empty — nothing runs build or tests on push. Run them
-yourself before saying something works.
+**CI runs, but only on GitHub.** `.github/workflows/` builds and tests both repos on push
+and pull request against `main` and `develop`, and audits dependencies weekly. That is no
+substitute for running things locally before saying they work — a green pipeline arrives
+minutes after the claim, and only for what was pushed.
 
 ---
 
