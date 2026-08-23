@@ -11,8 +11,8 @@ Worklane = ระบบจัดการงานแบบ multi-tenant (Jira �
 
 | Repo | Path | Branch | Commit ล่าสุด |
 |---|---|---|---|
-| Backend | `C:\dev\worklane` | `develop` | `a27c99b` (2026-08-23) — commit ไว้ในเครื่อง ยังไม่ได้ push (ดูการ์ด WL-39) |
-| Frontend | `C:\dev\worklane\web` | `develop` | `1ee4b24` (2026-08-23) — commit ไว้ในเครื่อง ยังไม่ได้ push (ดูการ์ด WL-39) |
+| Backend | `C:\dev\worklane` | `develop` | `1da19ce` (2026-08-23) — commit ไว้ในเครื่อง ยังไม่ได้ push (ดูการ์ด WL-39) |
+| Frontend | `C:\dev\worklane\web` | `develop` | `2e8f2be` (2026-08-23) — commit ไว้ในเครื่อง ยังไม่ได้ push (ดูการ์ด WL-39) |
 
 > ⚠️ `web/` ถูก ignore ไว้ใน repo หลัก (`.gitignore` บรรทัดที่ 2) เพราะเป็น repo แยกชื่อ `Worklane-Web`
 > — เวลาสั่ง `git status` ที่ root **จะไม่เห็นงานฝั่ง frontend เลย** ต้อง `cd web` ก่อน
@@ -36,6 +36,7 @@ Worklane = ระบบจัดการงานแบบ multi-tenant (Jira �
 | 2026-08-23 | **WL-19 — Presence** (ใครออนไลน์ + badge ใครกำลังแก้การ์ด) → `eb99353` (backend) + `d20884e` (frontend), ยังไม่ได้ push |
 | 2026-08-23 | 🐛 แก้บั๊ก quick-add ซ้ำ/มองไม่เห็น + badge จำนวนการ์ดสีชนกัน (WL-51, WL-52) → `96af1a8`, `74feb15` (frontend) |
 | 2026-08-23 | **WL-24 — ส่งอีเมลเชิญจริง** (Gmail SMTP) + สร้างหน้ารับคำเชิญที่หายไป → `a27c99b` (backend) + `1ee4b24` (frontend), ยังไม่ได้ push |
+| 2026-08-23 | **WL-21 — หน้า "งานของฉัน" ข้ามโปรเจค** → `1da19ce` (backend) + `2e8f2be` (frontend), ยังไม่ได้ push |
 
 ---
 
@@ -45,7 +46,7 @@ Worklane = ระบบจัดการงานแบบ multi-tenant (Jira �
 
 **Domain (10 entities):** `Workspace` `WorkspaceMember` `Invitation` `Project` `ProjectMember` `BoardColumn` `TaskItem` `TaskActivity` `ProjectTaskCounter` `RefreshToken`
 
-**API endpoints ทั้งหมด 26 เส้น:**
+**API endpoints ทั้งหมด 27 เส้น:**
 
 | กลุ่ม | Endpoints |
 |---|---|
@@ -54,7 +55,7 @@ Worklane = ระบบจัดการงานแบบ multi-tenant (Jira �
 | Invitations | `POST /api/invitations/accept` |
 | Projects | `GET/POST /api/workspaces/{id}/projects` · `PATCH/DELETE /api/projects/{id}` |
 | Columns | `GET/POST /api/projects/{projectId}/columns` · `PATCH/DELETE /api/columns/{columnId}` |
-| Tasks | `GET/POST /api/projects/{projectId}/tasks` · `GET/PATCH/DELETE /api/tasks/{taskId}` · `POST /api/tasks/{taskId}/move` |
+| Tasks | `GET/POST /api/projects/{projectId}/tasks` · `GET/PATCH/DELETE /api/tasks/{taskId}` · `POST /api/tasks/{taskId}/move` · `GET /api/workspaces/{id}/my-tasks` |
 | Reports | `GET /api/workspaces/{id}/reports/members` |
 | Realtime | SignalR hub `/hubs/notifications` — `JoinProject`/`LeaveProject`, broadcast `TaskCreated`/`TaskMoved`/`TaskUpdated` ต่อกลุ่ม `project:{id}`; presence (`UserOnline`/`UserOffline`) + `Start`/`StopEditingTask` |
 
@@ -85,6 +86,7 @@ Worklane = ระบบจัดการงานแบบ multi-tenant (Jira �
 | **Realtime บอร์ด (SignalR)** — เห็นการ์ดที่คนอื่นสร้าง/ย้าย/แก้สด ๆ โดยไม่ reload | ✅ |
 | **Presence** — avatar คนที่ออนไลน์อยู่บนบอร์ดเดียวกัน + badge ว่าใครกำลังแก้การ์ดใบไหน | ✅ |
 | **หน้ารับคำเชิญ** (`/invitations/accept`) — accept ทันทีถ้า login แล้ว, ถ้ายังไม่ login พาไป login/register แล้วพากลับมา accept ต่ออัตโนมัติ | ✅ |
+| **หน้า "งานของฉัน"** (`/my-tasks`) — รวมงานที่ตัวเองรับผิดชอบข้ามทุกโปรเจคใน workspace | ✅ |
 | i18n ไทย/อังกฤษ | ✅ |
 
 ---
@@ -95,7 +97,6 @@ Worklane = ระบบจัดการงานแบบ multi-tenant (Jira �
 
 ### 🟡 ยังไม่ได้เริ่ม (ตรงกับเป้าหมายที่ตั้งไว้)
 
-- **"งานของฉัน" (My tasks)** — ยังไม่มี
 - Comment / attachment / activity log ในการ์ด
 - WIP limit ต่อคอลัมน์
 
