@@ -1,7 +1,7 @@
 # Worklane — Development Log
 
 > บันทึกสถานะโปรเจค ว่าตอนนี้ไปถึงไหน ทำอะไรไปแล้วบ้าง และอะไรยังขาด
-> อัปเดตล่าสุด: **2026-08-23**
+> อัปเดตล่าสุด: **2026-10-17**
 
 ---
 
@@ -37,6 +37,7 @@ Worklane = ระบบจัดการงานแบบ multi-tenant (Jira �
 | 2026-08-23 | 🐛 แก้บั๊ก quick-add ซ้ำ/มองไม่เห็น + badge จำนวนการ์ดสีชนกัน (WL-51, WL-52) → `96af1a8`, `74feb15` (frontend) |
 | 2026-08-23 | **WL-24 — ส่งอีเมลเชิญจริง** (Gmail SMTP) + สร้างหน้ารับคำเชิญที่หายไป → `a27c99b` (backend) + `1ee4b24` (frontend), ยังไม่ได้ push |
 | 2026-08-23 | **WL-21 — หน้า "งานของฉัน" ข้ามโปรเจค** → `1da19ce` (backend) + `2e8f2be` (frontend), ยังไม่ได้ push |
+| 2026-10-17 | **Activity log, comments, WIP limit, attachments** (backend) — migration `AddCommentsAttachmentsActivityAndWip` · ตัดสินใจ WL-35: งานวันเสาร์-อาทิตย์นับ 0 วันทำการ |
 
 ---
 
@@ -44,9 +45,9 @@ Worklane = ระบบจัดการงานแบบ multi-tenant (Jira �
 
 ### Backend — เสร็จและมีเทสต์คุม
 
-**Domain (10 entities):** `Workspace` `WorkspaceMember` `Invitation` `Project` `ProjectMember` `BoardColumn` `TaskItem` `TaskActivity` `ProjectTaskCounter` `RefreshToken`
+**Domain (12 entities):** `Workspace` `WorkspaceMember` `Invitation` `Project` `ProjectMember` `BoardColumn` `TaskItem` `TaskActivity` `TaskComment` `TaskAttachment` `ProjectTaskCounter` `RefreshToken`
 
-**API endpoints ทั้งหมด 27 เส้น:**
+**API endpoints ทั้งหมด 36 เส้น:**
 
 | กลุ่ม | Endpoints |
 |---|---|
@@ -56,8 +57,11 @@ Worklane = ระบบจัดการงานแบบ multi-tenant (Jira �
 | Projects | `GET/POST /api/workspaces/{id}/projects` · `PATCH/DELETE /api/projects/{id}` |
 | Columns | `GET/POST /api/projects/{projectId}/columns` · `PATCH/DELETE /api/columns/{columnId}` |
 | Tasks | `GET/POST /api/projects/{projectId}/tasks` · `GET/PATCH/DELETE /api/tasks/{taskId}` · `POST /api/tasks/{taskId}/move` · `GET /api/workspaces/{id}/my-tasks` |
+| Activity | `GET /api/tasks/{taskId}/activity` — ใหม่สุดก่อน |
+| Comments | `GET/POST /api/tasks/{taskId}/comments` · `PATCH/DELETE /api/comments/{commentId}` |
+| Attachments | `GET/POST /api/tasks/{taskId}/attachments` · `GET /api/attachments/{attachmentId}/download` · `DELETE /api/attachments/{attachmentId}` |
 | Reports | `GET /api/workspaces/{id}/reports/members` |
-| Realtime | SignalR hub `/hubs/notifications` — `JoinProject`/`LeaveProject`, broadcast `TaskCreated`/`TaskMoved`/`TaskUpdated` ต่อกลุ่ม `project:{id}`; presence (`UserOnline`/`UserOffline`) + `Start`/`StopEditingTask` |
+| Realtime | SignalR hub `/hubs/notifications` — `JoinProject`/`LeaveProject`, broadcast `TaskCreated`/`TaskMoved`/`TaskUpdated`, `CommentCreated`/`CommentUpdated`/`CommentDeleted`, `AttachmentAdded`/`AttachmentDeleted` ต่อกลุ่ม `project:{id}`; presence (`UserOnline`/`UserOffline`) + `Start`/`StopEditingTask` |
 
 **จุดที่ออกแบบไว้ดี:**
 - **Multi-tenancy 2 ชั้น** — `[RequireWorkspaceRole]` อ่าน `WorkspaceId` จาก *route* เท่านั้น (ไม่เชื่อ body) + EF global query filter กันข้อมูลข้าม tenant ซ้ำอีกชั้น
@@ -66,8 +70,13 @@ Worklane = ระบบจัดการงานแบบ multi-tenant (Jira �
 - **จับเวลาโดยไม่ต้องกรอก** — ลากการ์ดเข้าคอลัมน์ที่ตั้ง `IsInProgress` แล้วระบบ stamp เวลาให้เอง
   `TaskActivity` เก็บประวัติทุกการย้าย เผื่อการ์ดถูกลากออกจาก Done แล้วกลับเข้าใหม่
 - **อีเมลเชิญจริงผ่าน Gmail SMTP** — `IEmailService` ส่งไม่สำเร็จก็แค่ log warning ไม่ทำให้สร้างคำเชิญล้มเหลว, credential เก็บใน user-secrets เท่านั้น
+- **Activity log** — `TaskActivity` เดิมเก็บบันทึกการสร้าง/ย้ายคอลัมน์ ตอนนี้มี type + details และครอบคลุมการแก้ฟิลด์, คอมเมนต์, ไฟล์แนบ
+- **คอมเมนต์** — สร้าง/ดู/แก้ (เจ้าของเท่านั้น)/ลบ (เจ้าของ หรือ admin/owner) แล้ว broadcast ผ่าน SignalR
+- **WIP limit แบบ soft** — ตั้งบนคอลัมน์ได้, เกินแล้วยังย้าย/สร้างการ์ดได้ แต่ response บอก `isOverWipLimit`
+- **ไฟล์แนบ** — อัปโหลดผ่าน `IFileStorage` (ดิสก์ในเครื่อง, สลับ S3/Blob ได้ทีหลัง), จำกัดขนาดและชนิดไฟล์, ดาวน์โหลดเช็ค tenant เหมือน endpoint อื่น
+- **แมนเดย์วันหยุดสุดสัปดาห์ = 0** (WL-35) — คงกฎเดิม ไม่มีปฏิทินวันหยุดนักขัตฤกษ์
 
-**เทสต์:** `dotnet test` → ✅ **45/45 ผ่าน** (auth, authorization, move/reorder, priority, การจับเวลา, WorkingDays, report)
+**เทสต์:** `dotnet test` → ✅ **68/68 ผ่าน** (ของเดิม 45 + activity, comments, WIP, attachments, file storage)
 
 ### Frontend
 
@@ -93,12 +102,14 @@ Worklane = ระบบจัดการงานแบบ multi-tenant (Jira �
 
 ## 4. สิ่งที่ยังขาด
 
-> รายการด้านล่างอัปเดตตามเท่าที่ทราบ ณ 2026-08-23 — ของจริงดูที่บอร์ด **WL** เป็นหลัก
+> รายการด้านล่างอัปเดตตามเท่าที่ทราบ ณ 2026-10-17 — ของจริงดูที่บอร์ด **WL** เป็นหลัก
 
-### 🟡 ยังไม่ได้เริ่ม (ตรงกับเป้าหมายที่ตั้งไว้)
+### ✅ ฝั่ง backend ทำแล้วในรอบ 2026-10-17 (ฝั่ง Angular อยู่คนละ repo จะต่อจากสัญญา API นี้)
 
-- Comment / attachment / activity log ในการ์ด
-- WIP limit ต่อคอลัมน์
+- Activity log, comments, attachments, WIP limit — ดูรายละเอียดในหัวข้อ 8
+- WL-35 ตัดสินแล้ว: งานที่ตกวันเสาร์-อาทิตย์นับเป็น 0 วันทำการ
+
+หน้ารายละเอียดการ์ดฝั่งเว็บ (แสดง log / คอมเมนต์ / ไฟล์ / คำเตือน WIP) ยังไม่ได้อยู่ใน repo นี้
 
 ---
 
@@ -225,3 +236,19 @@ dotnet user-secrets set "Email:SmtpPassword" "<App Password จาก https://my
 
 > รายการที่เคยอยู่ตรงนี้ (commit ค้าง, UI จัดการคอลัมน์, DevSeeder, SignalR, Dashboard) ทำเสร็จหมดแล้ว
 > ลำดับงานจริงตอนนี้อยู่ที่บอร์ด **WL** (Backlog → To Do → In Progress → Done) ไม่ใช่ตารางนี้ — ดูที่บอร์ดแทน
+
+---
+
+## 8. รอบ 2026-10-17 — activity, comments, WIP, attachments
+
+ทำฝั่ง API เพื่อให้ frontend (repo `Worklane-Web`) สร้างหน้ารายละเอียดการ์ดต่อได้ สัญญา JSON อยู่ใน `README.md`
+
+**Activity** — `GET /api/tasks/{taskId}/activity` เรียงใหม่สุดก่อน แถวเดิมของการสร้าง/ย้ายคอลัมน์ถูก backfill เป็น `Created` / `Moved` พร้อมชื่อคอลัมน์ใน `details` การแก้การ์ดหนึ่งครั้งที่แตะหลายฟิลด์จะเขียนแถว `Updated` **หนึ่งแถวต่อหนึ่งฟิลด์** (`{ field, oldValue, newValue }`) การลากภายในคอลัมน์เดิมไม่บันทึก (พฤติกรรมเดิม) การส่ง `columnId` ผ่าน PATCH นับเป็น `Updated` ไม่ใช่ `Moved` — นาฬิกาแมนเดย์ขยับเฉพาะ `POST /move`
+
+**Comments** — เรียงเก่าสุดก่อน `updatedAt` เป็น `null` จนกว่าผู้เขียนจะแก้ แก้ได้เฉพาะผู้เขียน ลบได้ทั้งผู้เขียนและ admin/owner ของ workspace SignalR: `CommentCreated` / `CommentUpdated` (ฟิลด์ของ comment + `projectId`) และ `CommentDeleted` (`{ projectId, taskId, commentId }`)
+
+**WIP** — `wipLimit` เป็น null ได้ ตั้งตอนสร้างคอลัมน์หรือ PATCH (`null` คือล้าง, ไม่ส่งฟิลด์มาคือไม่แตะ) เกินลิมิตแล้วยังสร้าง/ย้ายได้ `isOverWipLimit` เป็นจริงเมื่อจำนวนการ์ด **มากกว่า** ลิมิต (เท่ากับลิมิตยังไม่เกิน) ฟิลด์นี้อยู่บน response ของการ์ดทุกเส้นเพราะใช้ DTO เดียวกัน และอยู่บนคอลัมน์คู่กับ `taskCount`
+
+**Attachments** — multipart ฟิลด์ `file` เก็บผ่าน `IFileStorage` + `LocalFileStorage` ตาม `FileStorage:LocalPath` (ค่าเริ่มต้น 10 MB) ชนิดที่ไม่อยู่ใน allow-list ได้ 415, เกินขนาดได้ 413, ไฟล์ว่างได้ 400 ดาวน์โหลดตั้ง `Content-Disposition: attachment` และเช็ค workspace จาก id ของไฟล์ ไม่มี static path ให้เดาข้าม tenant ลบได้เฉพาะผู้อัปโหลดหรือ admin/owner `docker-compose` mount volume `attachments` SignalR: `AttachmentAdded` / `AttachmentDeleted`
+
+**WL-35** — คงกฎวันทำการจันทร์–ศุกร์ งานทั้งก้อนที่เกิดในวันเสาร์-อาทิตย์ได้ 0 วันทำการ ไม่ได้เปลี่ยนสูตร `WorkingDays`

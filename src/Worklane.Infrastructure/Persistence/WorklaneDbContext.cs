@@ -27,6 +27,8 @@ public class WorklaneDbContext : IdentityDbContext<AppUser, IdentityRole<Guid>, 
     public DbSet<TaskItem> TaskItems => Set<TaskItem>();
     public DbSet<ProjectTaskCounter> ProjectTaskCounters => Set<ProjectTaskCounter>();
     public DbSet<TaskActivity> TaskActivities => Set<TaskActivity>();
+    public DbSet<TaskComment> TaskComments => Set<TaskComment>();
+    public DbSet<TaskAttachment> TaskAttachments => Set<TaskAttachment>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -55,5 +57,17 @@ public class WorklaneDbContext : IdentityDbContext<AppUser, IdentityRole<Guid>, 
         builder.Entity<TaskItem>().HasQueryFilter(t =>
             !t.IsArchived &&
             (!_currentTenantService.WorkspaceId.HasValue || t.Project.WorkspaceId == _currentTenantService.WorkspaceId));
+
+        builder.Entity<TaskComment>().HasQueryFilter(c =>
+            !c.Task.IsArchived &&
+            (!_currentTenantService.WorkspaceId.HasValue || c.Task.Project.WorkspaceId == _currentTenantService.WorkspaceId));
+
+        builder.Entity<TaskAttachment>().HasQueryFilter(a =>
+            !a.Task.IsArchived &&
+            (!_currentTenantService.WorkspaceId.HasValue || a.Task.Project.WorkspaceId == _currentTenantService.WorkspaceId));
+
+        builder.Entity<TaskActivity>().HasQueryFilter(a =>
+            !a.Task.IsArchived &&
+            (!_currentTenantService.WorkspaceId.HasValue || a.Task.Project.WorkspaceId == _currentTenantService.WorkspaceId));
     }
 }

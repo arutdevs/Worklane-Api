@@ -8,5 +8,6 @@ public class CreateColumnValidator : AbstractValidator<CreateColumnRequest>
     public CreateColumnValidator()
     {
         RuleFor(x => x.Name).NotEmpty().MaximumLength(100);
+        RuleFor(x => x.WipLimit).GreaterThan(0).When(x => x.WipLimit.HasValue);
     }
 }

@@ -14,6 +14,13 @@ public class BoardColumn
     /// </summary>
     public bool IsInProgress { get; set; }
 
+    /// <summary>
+    /// Soft cap on how many cards may sit in this column. Null means no limit.
+    /// Crossing it does not block a move or a create — callers surface
+    /// <c>IsOverWipLimit</c> so the UI can warn.
+    /// </summary>
+    public int? WipLimit { get; set; }
+
     public Project Project { get; set; } = null!;
     public ICollection<TaskItem> Tasks { get; set; } = new List<TaskItem>();
 }

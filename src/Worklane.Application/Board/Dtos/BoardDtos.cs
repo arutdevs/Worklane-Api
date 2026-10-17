@@ -1,3 +1,4 @@
+using Worklane.Application.Common;
 using Worklane.Domain.Enums;
 
 namespace Worklane.Application.Board.Dtos;
@@ -9,7 +10,10 @@ public record BoardColumnDto(
     int Order,
     bool IsDone,
     bool IsInProgress,
-    IReadOnlyList<TaskItemDto> Tasks
+    IReadOnlyList<TaskItemDto> Tasks,
+    int? WipLimit,
+    int TaskCount,
+    bool IsOverWipLimit
 );
 
 public record TaskItemDto(
@@ -47,12 +51,23 @@ public record TaskItemDto(
     bool IsOverEstimate,
     double DaysOverEstimate,
     bool IsOverdue,
-    int DaysOverdue
+    int DaysOverdue,
+
+    /// <summary>
+    /// True when the task's current column has a WIP limit and more cards than that
+    /// limit. Create and move responses report the destination column.
+    /// </summary>
+    bool IsOverWipLimit
 );
 
-public record CreateColumnRequest(string Name);
+public record CreateColumnRequest(string Name, int? WipLimit = null);
 
-public record UpdateColumnRequest(string? Name, int? Order, bool? IsDone, bool? IsInProgress);
+public record UpdateColumnRequest(
+    string? Name,
+    int? Order,
+    bool? IsDone,
+    bool? IsInProgress,
+    Optional<int?> WipLimit);
 
 public record CreateTaskRequest(
     string Title,

@@ -8,6 +8,7 @@ using Serilog;
 using Worklane.Application;
 using Worklane.Application.Board.Interfaces;
 using Worklane.Application.Common.Interfaces;
+using Microsoft.AspNetCore.Http.Features;
 using Worklane.Application.Common.Options;
 using Worklane.Infrastructure;
 using Worklane.Infrastructure.Persistence;
@@ -54,6 +55,14 @@ builder.Services.AddSwaggerGen(options =>
         { new OpenApiSecuritySchemeReference("Bearer", document), new List<string>() }
     });
 });
+
+var fileStorage = builder.Configuration.GetSection(FileStorageSettings.SectionName).Get<FileStorageSettings>() ?? new FileStorageSettings();
+var maxUploadBytes = fileStorage.MaxBytes > 0 ? fileStorage.MaxBytes : 10 * 1024 * 1024;
+// Leave room for the multipart envelope so a file at the configured cap still fits,
+// while anything larger is rejected by Kestrel with 413 before it is buffered.
+var requestCeiling = maxUploadBytes + (1024 * 1024);
+builder.Services.Configure<FormOptions>(options => options.MultipartBodyLengthLimit = requestCeiling);
+builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = requestCeiling);
 
 builder.Services.AddSignalR()
     .AddJsonProtocol(options => options.PayloadSerializerOptions.Converters.Add(new JsonStringEnumConverter()));

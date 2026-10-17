@@ -174,7 +174,7 @@ public class WorkMetricsTests : IClassFixture<WorklaneWebApplicationFactory>
         var activity = await db.TaskActivities
             .IgnoreQueryFilters()
             .Where(a => a.TaskId == task.Id)
-            .OrderBy(a => a.MovedAt)
+            .OrderBy(a => a.CreatedAt)
             .ToListAsync();
 
         // Creation, then the two moves.

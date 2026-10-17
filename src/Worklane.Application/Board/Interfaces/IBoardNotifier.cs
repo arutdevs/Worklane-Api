@@ -12,4 +12,11 @@ public interface IBoardNotifier
     Task TaskCreatedAsync(Guid projectId, TaskItemDto task, CancellationToken ct = default);
     Task TaskMovedAsync(Guid projectId, TaskItemDto task, CancellationToken ct = default);
     Task TaskUpdatedAsync(Guid projectId, TaskItemDto task, CancellationToken ct = default);
+
+    Task CommentCreatedAsync(Guid projectId, CommentBroadcastDto comment, CancellationToken ct = default);
+    Task CommentUpdatedAsync(Guid projectId, CommentBroadcastDto comment, CancellationToken ct = default);
+    Task CommentDeletedAsync(Guid projectId, CommentDeletedEvent payload, CancellationToken ct = default);
+
+    Task AttachmentAddedAsync(Guid projectId, AttachmentBroadcastDto attachment, CancellationToken ct = default);
+    Task AttachmentDeletedAsync(Guid projectId, AttachmentDeletedEvent payload, CancellationToken ct = default);
 }

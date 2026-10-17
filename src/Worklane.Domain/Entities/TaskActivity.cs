@@ -1,22 +1,33 @@
+using Worklane.Domain.Enums;
+
 namespace Worklane.Domain.Entities;
 
 /// <summary>
-/// One recorded move of a task between columns. Kept as history because
-/// <see cref="TaskItem.StartedAt"/> and <see cref="TaskItem.CompletedAt"/> only hold
-/// the latest state — a task dragged out of Done and finished again would otherwise
-/// lose the earlier pass, and time reports would be wrong.
+/// One recorded event in a task's history. Column moves were the original rows
+/// (<see cref="FromColumnId"/> / <see cref="ToColumnId"/>); field edits, comments
+/// and attachments are stored in <see cref="Details"/> as a JSON object.
 /// </summary>
 public class TaskActivity
 {
     public Guid Id { get; set; }
     public Guid TaskId { get; set; }
+    public TaskActivityType Type { get; set; }
 
-    /// <summary>Null for the very first placement, when the task was created.</summary>
+    /// <summary>Set for <see cref="TaskActivityType.Moved"/>. Null for every other event.</summary>
     public Guid? FromColumnId { get; set; }
-    public Guid ToColumnId { get; set; }
 
-    public Guid MovedByUserId { get; set; }
-    public DateTimeOffset MovedAt { get; set; }
+    /// <summary>Set for <see cref="TaskActivityType.Created"/> and <see cref="TaskActivityType.Moved"/>.</summary>
+    public Guid? ToColumnId { get; set; }
+
+    public Guid ActorUserId { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+
+    /// <summary>
+    /// Event-specific JSON object. Null only for legacy rows that could not be backfilled.
+    /// Moved: fromColumnId, fromColumnName, toColumnId, toColumnName.
+    /// Updated: field, oldValue, newValue — one row per changed field.
+    /// </summary>
+    public string? Details { get; set; }
 
     public TaskItem Task { get; set; } = null!;
 }
