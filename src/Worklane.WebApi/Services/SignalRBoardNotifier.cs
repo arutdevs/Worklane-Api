@@ -23,5 +23,20 @@ public class SignalRBoardNotifier : IBoardNotifier
     public Task TaskUpdatedAsync(Guid projectId, TaskItemDto task, CancellationToken ct = default) =>
         Group(projectId).SendAsync("TaskUpdated", task, ct);
 
+    public Task CommentCreatedAsync(Guid projectId, CommentBroadcastDto comment, CancellationToken ct = default) =>
+        Group(projectId).SendAsync("CommentCreated", comment, ct);
+
+    public Task CommentUpdatedAsync(Guid projectId, CommentBroadcastDto comment, CancellationToken ct = default) =>
+        Group(projectId).SendAsync("CommentUpdated", comment, ct);
+
+    public Task CommentDeletedAsync(Guid projectId, CommentDeletedEvent payload, CancellationToken ct = default) =>
+        Group(projectId).SendAsync("CommentDeleted", payload, ct);
+
+    public Task AttachmentAddedAsync(Guid projectId, AttachmentBroadcastDto attachment, CancellationToken ct = default) =>
+        Group(projectId).SendAsync("AttachmentAdded", attachment, ct);
+
+    public Task AttachmentDeletedAsync(Guid projectId, AttachmentDeletedEvent payload, CancellationToken ct = default) =>
+        Group(projectId).SendAsync("AttachmentDeleted", payload, ct);
+
     private IClientProxy Group(Guid projectId) => _hub.Clients.Group(NotificationsHub.GroupName(projectId));
 }

@@ -33,10 +33,13 @@ public class ExceptionHandlingMiddleware
         var (statusCode, title) = exception switch
         {
             ValidationException => (HttpStatusCode.BadRequest, "Validation Failed"),
+            BadRequestException => (HttpStatusCode.BadRequest, "Bad Request"),
             NotFoundException => (HttpStatusCode.NotFound, "Not Found"),
             ForbiddenAccessException => (HttpStatusCode.Forbidden, "Forbidden"),
             AuthenticationFailedException => (HttpStatusCode.Unauthorized, "Unauthorized"),
             ConflictException => (HttpStatusCode.Conflict, "Conflict"),
+            PayloadTooLargeException => (HttpStatusCode.RequestEntityTooLarge, "Payload Too Large"),
+            UnsupportedMediaTypeException => (HttpStatusCode.UnsupportedMediaType, "Unsupported Media Type"),
             _ => (HttpStatusCode.InternalServerError, "Server Error")
         };
 

@@ -152,7 +152,8 @@ replace this with integer indexes.
 `CompletedAt`. Every column change also writes a `TaskActivity` row, because the two
 timestamps only hold the latest state. Man-day figures are **elapsed weekdays, not
 effort**: someone holding three cards accrues full time on all three, and there is no
-holiday calendar. Say so whenever you report these numbers.
+holiday calendar. Work that falls on Saturday or Sunday counts as **0 working days**
+(WL-35 — this rule stays). Say so whenever you report these numbers.
 
 **Services** are registered in `Worklane.Infrastructure/DependencyInjection.cs`. Follow the
 existing shape: interface in `Application/<Area>/Interfaces`, implementation in

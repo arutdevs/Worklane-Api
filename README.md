@@ -13,7 +13,7 @@ a Kanban board with drag-and-drop, and a dashboard that measures effort per pers
 - **Auth:** ASP.NET Core Identity + JWT access tokens (15 min) + rotating refresh tokens (7 days, hashed in DB)
 - **Frontend:** Angular 22 (standalone components) + Bootstrap 5 + ng-bootstrap
 - **i18n:** ngx-translate, English (`en`, default) and Thai (`th`)
-- **Realtime:** SignalR hub wired up (`/hubs/notifications`), **no events yet** — nothing broadcasts
+- **Realtime:** SignalR hub at `/hubs/notifications`. Clients join a project group and receive board, comment, attachment, and presence events (see below)
 - **Containers:** Docker Compose — `api`, `web`, `postgres`
 
 ## Run everything
@@ -46,12 +46,46 @@ EF Core migrations are applied automatically on API startup in the `Development`
 5. Open **Dashboard** → estimated against actual man-days, per person.
 
    > Actual time is *elapsed weekdays*, not effort. Holding several cards at once bills the
-   > full duration to each, and there is no holiday calendar. Read it as a trend.
+   > full duration to each. Work that falls on Saturday or Sunday counts as **0 working days**
+   > (WL-35 — this rule stays), and there is no holiday calendar. Read it as a trend.
 6. Go to **Workspace settings** → invite a member by email + role.
    - If the invited email already has an account, they're added directly.
-   - Otherwise a pending invitation is created and the invite link is **logged to the API console**.
-     ⚠️ There is no `/invitations/accept` page in the app yet, so that link goes nowhere —
-     the invitation can only be accepted through `POST /api/invitations/accept { token }`.
+   - Otherwise a pending invitation is created. With Gmail SMTP configured the link is emailed;
+     it is always logged to the API console as well. The app has an `/invitations/accept` page:
+     a signed-in user accepts immediately, and a signed-out user is sent through login or
+     register and then back to accept. `POST /api/invitations/accept { token }` is the same call.
+
+## Board API added for the card detail
+
+JSON is camelCase. Enums are strings. `UserRef` is `{ userId, displayName }`.
+
+| | |
+|---|---|
+| Activity | `GET /api/tasks/{taskId}/activity` → `TaskActivityDto[]`, newest first |
+| Comments | `GET/POST /api/tasks/{taskId}/comments` (list is oldest first; create is 201) · `PATCH/DELETE /api/comments/{commentId}` (delete is 204) |
+| Attachments | `GET/POST /api/tasks/{taskId}/attachments` (multipart field `file`, create is 201) · `GET /api/attachments/{attachmentId}/download` · `DELETE /api/attachments/{attachmentId}` (204) |
+| Columns | create and `PATCH` accept `wipLimit` (`null` clears it; omitting it on PATCH leaves it). Column payloads include `wipLimit`, `taskCount`, `isOverWipLimit` |
+
+`TaskActivityDto`: `{ id, taskId, type, actor: UserRef, createdAt, details }`. `type` is `Created`, `Moved`, `Updated`, `CommentAdded`, `CommentEdited`, `CommentDeleted`, `AttachmentAdded`, or `AttachmentDeleted`. A field edit writes **one `Updated` row per changed field**, with `details` `{ field, oldValue, newValue }`. A move's `details` are `{ fromColumnId, fromColumnName, toColumnId, toColumnName }`. Dragging a card inside the same column does not write a row. Changing `columnId` through `PATCH /api/tasks/{id}` is an `Updated` event; only `POST /api/tasks/{id}/move` writes `Moved` and moves the clock.
+
+`CommentDto`: `{ id, taskId, author: UserRef, body, createdAt, updatedAt }`. `updatedAt` is `null` until the author edits. Only the author can edit. The author, or a workspace admin or owner, can delete.
+
+`AttachmentDto`: `{ id, taskId, fileName, contentType, sizeBytes, uploadedBy: UserRef, createdAt }`. Files are stored through `IFileStorage` (local disk at `FileStorage:LocalPath`, default 10 MB, content-type allow-list in `appsettings.json`). Over the cap is **413**, a disallowed type is **415**, an empty file is **400**. Download and delete resolve the workspace from the attachment id, the same way other task routes do — guessing an id from another workspace is rejected. The uploader, or a workspace admin or owner, can delete. `docker compose` mounts the `attachments` volume at `/var/worklane/attachments`.
+
+Every task payload (get, project list, my-tasks, cards inside a column, and create/move/update) includes `commentCount` and `attachmentCount`, filled by two grouped counts for the whole result set. Create and move responses are still the task object, plus `isOverWipLimit` for the destination column. The limit is soft: a full column still accepts the card. `isOverWipLimit` is true only when the card count is **greater** than `wipLimit` (sitting exactly at the limit is not over). The same flag is on every task payload, because they share one DTO.
+
+SignalR group `project:{projectId}` (`JoinProject` / `LeaveProject`):
+
+| Event | Payload |
+|---|---|
+| `TaskCreated` `TaskMoved` `TaskUpdated` | task |
+| `CommentCreated` `CommentUpdated` | comment fields plus `projectId` |
+| `CommentDeleted` | `{ projectId, taskId, commentId }` |
+| `AttachmentAdded` | attachment fields plus `projectId` |
+| `AttachmentDeleted` | `{ projectId, taskId, attachmentId }` |
+| `UserOnline` `UserOffline` | user id |
+| `PresenceSnapshot` | user ids, sent to the caller on join |
+| `TaskEditingStarted` `TaskEditingStopped` | task id, user id |
 
 ## Multi-tenancy
 

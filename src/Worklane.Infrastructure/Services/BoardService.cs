@@ -39,15 +39,16 @@ public class BoardService : IBoardService
             .ToListAsync(ct);
 
         var assigneeMap = await BuildAssigneeMapAsync(tasks, ct);
+        var cardCounts = await LoadCardCountsAsync(tasks.Select(t => t.Id), ct);
 
         return columns.Select(col =>
         {
-            var colTasks = tasks
-                .Where(t => t.ColumnId == col.Id)
-                .Select(t => ToDto(t, project.Key, assigneeMap))
-                .ToList();
-
-            return new BoardColumnDto(col.Id, col.ProjectId, col.Name, col.Order, col.IsDone, col.IsInProgress, colTasks);
+            var colTasks = tasks.Where(t => t.ColumnId == col.Id).ToList();
+            var over = IsOverWip(col.WipLimit, colTasks.Count);
+            return new BoardColumnDto(
+                col.Id, col.ProjectId, col.Name, col.Order, col.IsDone, col.IsInProgress,
+                colTasks.Select(t => ToDto(t, project.Key, assigneeMap, over, cardCounts)).ToList(),
+                col.WipLimit, colTasks.Count, over);
         }).ToList();
     }
 
@@ -64,13 +65,14 @@ public class BoardService : IBoardService
             Name = request.Name,
             Order = maxOrder + 1000,
             IsDone = false,
-            IsInProgress = false
+            IsInProgress = false,
+            WipLimit = request.WipLimit
         };
 
         _db.BoardColumns.Add(column);
         await _db.SaveChangesAsync(ct);
 
-        return ToDto(column);
+        return ToColumnDto(column, 0);
     }
 
     public async Task<BoardColumnDto> UpdateColumnAsync(Guid columnId, UpdateColumnRequest request, CancellationToken ct = default)
@@ -82,9 +84,11 @@ public class BoardService : IBoardService
         if (request.Order.HasValue) column.Order = request.Order.Value;
         if (request.IsDone.HasValue) column.IsDone = request.IsDone.Value;
         if (request.IsInProgress.HasValue) column.IsInProgress = request.IsInProgress.Value;
+        if (request.WipLimit.IsSpecified) column.WipLimit = request.WipLimit.Value;
 
         await _db.SaveChangesAsync(ct);
-        return ToDto(column);
+        var taskCount = await _db.TaskItems.CountAsync(t => t.ColumnId == column.Id, ct);
+        return ToColumnDto(column, taskCount);
     }
 
     public async Task DeleteColumnAsync(Guid columnId, Guid? targetColumnId, CancellationToken ct = default)
@@ -184,14 +188,16 @@ public class BoardService : IBoardService
         {
             Id = Guid.NewGuid(),
             TaskId = task.Id,
+            Type = TaskActivityType.Created,
             FromColumnId = null,
             ToColumnId = columnId,
-            MovedByUserId = userId,
-            MovedAt = now
+            ActorUserId = userId,
+            CreatedAt = now,
+            Details = ActivityJson.Of(new { columnId, columnName = column.Name, title = task.Title })
         });
         await _db.SaveChangesAsync(ct);
 
-        var dto = ToDto(task, project.Key, await BuildAssigneeMapAsync([task], ct));
+        var dto = ToDto(task, project.Key, await BuildAssigneeMapAsync([task], ct), await IsColumnOverWipAsync(columnId, ct), await LoadCardCountsAsync([task.Id], ct));
         await _notifier.TaskCreatedAsync(projectId, dto, ct);
         return dto;
     }
@@ -203,24 +209,74 @@ public class BoardService : IBoardService
             .FirstOrDefaultAsync(t => t.Id == taskId, ct)
             ?? throw new NotFoundException(nameof(TaskItem), taskId);
 
-        return ToDto(task, task.Project.Key, await BuildAssigneeMapAsync([task], ct));
+        return ToDto(task, task.Project.Key, await BuildAssigneeMapAsync([task], ct), await IsColumnOverWipAsync(task.ColumnId, ct), await LoadCardCountsAsync([task.Id], ct));
     }
 
-    public async Task<TaskItemDto> UpdateTaskAsync(Guid taskId, UpdateTaskRequest request, CancellationToken ct = default)
+    public async Task<TaskItemDto> UpdateTaskAsync(Guid taskId, UpdateTaskRequest request, Guid userId, CancellationToken ct = default)
     {
         var task = await _db.TaskItems
             .FirstOrDefaultAsync(t => t.Id == taskId, ct)
             ?? throw new NotFoundException(nameof(TaskItem), taskId);
 
-        if (request.Title is not null) task.Title = request.Title;
-        if (request.Description is not null) task.Description = request.Description;
-        if (request.AssigneeId is not null) task.AssigneeId = request.AssigneeId;
-        if (request.Priority.HasValue) task.Priority = request.Priority.Value;
-        if (request.DueDate is not null) task.DueDate = request.DueDate;
-        if (request.ColumnId.HasValue) task.ColumnId = request.ColumnId.Value;
-        if (request.EstimateDays.HasValue) task.EstimateDays = request.EstimateDays.Value;
+        var changes = new List<(string Field, object? OldValue, object? NewValue)>();
+        void Track(string field, object? current, object? updated)
+        {
+            if (!Equals(current, updated))
+                changes.Add((field, current, updated));
+        }
 
-        task.UpdatedAt = DateTimeOffset.UtcNow;
+        if (request.Title is not null)
+        {
+            Track("title", task.Title, request.Title);
+            task.Title = request.Title;
+        }
+        if (request.Description is not null)
+        {
+            Track("description", task.Description, request.Description);
+            task.Description = request.Description;
+        }
+        if (request.AssigneeId is not null)
+        {
+            Track("assigneeId", IdText(task.AssigneeId), IdText(request.AssigneeId));
+            task.AssigneeId = request.AssigneeId;
+        }
+        if (request.Priority.HasValue)
+        {
+            Track("priority", task.Priority.ToString(), request.Priority.Value.ToString());
+            task.Priority = request.Priority.Value;
+        }
+        if (request.DueDate is not null)
+        {
+            Track("dueDate", DateText(task.DueDate), DateText(request.DueDate));
+            task.DueDate = request.DueDate;
+        }
+        if (request.ColumnId.HasValue)
+        {
+            Track("columnId", IdText(task.ColumnId), IdText(request.ColumnId));
+            task.ColumnId = request.ColumnId.Value;
+        }
+        if (request.EstimateDays.HasValue)
+        {
+            Track("estimateDays", task.EstimateDays, request.EstimateDays.Value);
+            task.EstimateDays = request.EstimateDays.Value;
+        }
+
+        var now = DateTimeOffset.UtcNow;
+        task.UpdatedAt = now;
+        for (var i = 0; i < changes.Count; i++)
+        {
+            var (field, oldValue, newValue) = changes[i];
+            _db.TaskActivities.Add(new TaskActivity
+            {
+                Id = Guid.NewGuid(),
+                TaskId = task.Id,
+                Type = TaskActivityType.Updated,
+                ActorUserId = userId,
+                CreatedAt = now.AddTicks(i),
+                Details = ActivityJson.Of(new { field, oldValue, newValue })
+            });
+        }
+
         await _db.SaveChangesAsync(ct);
 
         var dto = await GetTaskAsync(taskId, ct);
@@ -271,14 +327,27 @@ public class BoardService : IBoardService
             // column, cleared when the task is pulled back out of one.
             task.CompletedAt = toColumn.IsDone ? now : null;
 
+            var fromColumnName = await _db.BoardColumns
+                .Where(c => c.Id == fromColumnId)
+                .Select(c => c.Name)
+                .FirstOrDefaultAsync(ct);
+
             _db.TaskActivities.Add(new TaskActivity
             {
                 Id = Guid.NewGuid(),
                 TaskId = task.Id,
+                Type = TaskActivityType.Moved,
                 FromColumnId = fromColumnId,
                 ToColumnId = toColumn.Id,
-                MovedByUserId = userId,
-                MovedAt = now
+                ActorUserId = userId,
+                CreatedAt = now,
+                Details = ActivityJson.Of(new
+                {
+                    fromColumnId,
+                    fromColumnName,
+                    toColumnId = toColumn.Id,
+                    toColumnName = toColumn.Name
+                })
             });
         }
 
@@ -325,8 +394,10 @@ public class BoardService : IBoardService
 
         var tasks = await query.OrderBy(t => t.Order).ToListAsync(ct);
         var assigneeMap = await BuildAssigneeMapAsync(tasks, ct);
+        var wip = await LoadWipAsync(tasks.Select(t => t.ColumnId), ct);
+        var cardCounts = await LoadCardCountsAsync(tasks.Select(t => t.Id), ct);
 
-        return tasks.Select(t => ToDto(t, project.Key, assigneeMap)).ToList();
+        return tasks.Select(t => ToDto(t, project.Key, assigneeMap, Over(wip, t.ColumnId), cardCounts)).ToList();
     }
 
     public async Task<IReadOnlyList<MyTaskDto>> GetMyTasksAsync(Guid workspaceId, Guid userId, CancellationToken ct = default)
@@ -343,10 +414,12 @@ public class BoardService : IBoardService
             .ToListAsync(ct);
 
         var assigneeMap = await BuildAssigneeMapAsync(tasks, ct);
+        var wip = await LoadWipAsync(tasks.Select(t => t.ColumnId), ct);
+        var cardCounts = await LoadCardCountsAsync(tasks.Select(t => t.Id), ct);
 
         return tasks
             .Select(t => new MyTaskDto(
-                ToDto(t, t.Project.Key, assigneeMap),
+                ToDto(t, t.Project.Key, assigneeMap, Over(wip, t.ColumnId), cardCounts),
                 t.Project.Key,
                 t.Project.Name,
                 t.Column.Name,
@@ -404,13 +477,86 @@ public class BoardService : IBoardService
                 ct);
     }
 
-    private static BoardColumnDto ToDto(BoardColumn c) =>
-        new(c.Id, c.ProjectId, c.Name, c.Order, c.IsDone, c.IsInProgress, []);
+    private static BoardColumnDto ToColumnDto(BoardColumn c, int taskCount) =>
+        new(c.Id, c.ProjectId, c.Name, c.Order, c.IsDone, c.IsInProgress, [],
+            c.WipLimit, taskCount, IsOverWip(c.WipLimit, taskCount));
+
+    private readonly record struct ColumnWip(int? Limit, int Count)
+    {
+        public bool IsOver => IsOverWip(Limit, Count);
+    }
+
+    private static bool IsOverWip(int? wipLimit, int taskCount) =>
+        wipLimit is int limit && taskCount > limit;
+
+    private static bool Over(IReadOnlyDictionary<Guid, ColumnWip> wip, Guid columnId) =>
+        wip.TryGetValue(columnId, out var snapshot) && snapshot.IsOver;
+
+    private async Task<bool> IsColumnOverWipAsync(Guid columnId, CancellationToken ct)
+    {
+        var wip = await LoadWipAsync([columnId], ct);
+        return Over(wip, columnId);
+    }
+
+    private async Task<Dictionary<Guid, ColumnWip>> LoadWipAsync(IEnumerable<Guid> columnIds, CancellationToken ct)
+    {
+        var ids = columnIds.Distinct().ToList();
+        if (ids.Count == 0) return [];
+
+        var limits = await _db.BoardColumns
+            .Where(c => ids.Contains(c.Id))
+            .Select(c => new { c.Id, c.WipLimit })
+            .ToListAsync(ct);
+
+        var counts = await _db.TaskItems
+            .Where(t => ids.Contains(t.ColumnId))
+            .GroupBy(t => t.ColumnId)
+            .Select(g => new { g.Key, Count = g.Count() })
+            .ToDictionaryAsync(x => x.Key, x => x.Count, ct);
+
+        return limits.ToDictionary(
+            c => c.Id,
+            c => new ColumnWip(c.WipLimit, counts.GetValueOrDefault(c.Id)));
+    }
+
+    private readonly record struct CardCounts(int Comments, int Attachments);
+
+    /// <summary>
+    /// Comment and attachment totals for a set of cards, in two grouped queries.
+    /// Tasks with neither stay at zero via <see cref="Dictionary{TKey,TValue}.GetValueOrDefault"/>.
+    /// </summary>
+    private async Task<Dictionary<Guid, CardCounts>> LoadCardCountsAsync(IEnumerable<Guid> taskIds, CancellationToken ct)
+    {
+        var ids = taskIds.Distinct().ToList();
+        if (ids.Count == 0) return [];
+
+        var comments = await _db.TaskComments
+            .Where(c => ids.Contains(c.TaskId))
+            .GroupBy(c => c.TaskId)
+            .Select(g => new { TaskId = g.Key, Count = g.Count() })
+            .ToDictionaryAsync(x => x.TaskId, x => x.Count, ct);
+
+        var attachments = await _db.TaskAttachments
+            .Where(a => ids.Contains(a.TaskId))
+            .GroupBy(a => a.TaskId)
+            .Select(g => new { TaskId = g.Key, Count = g.Count() })
+            .ToDictionaryAsync(x => x.TaskId, x => x.Count, ct);
+
+        return ids.ToDictionary(
+            id => id,
+            id => new CardCounts(comments.GetValueOrDefault(id), attachments.GetValueOrDefault(id)));
+    }
+
+    private static string? IdText(Guid? id) => id?.ToString();
+
+    private static string? DateText(DateTimeOffset? value) => value?.ToString("O");
 
     private static TaskItemDto ToDto(
         TaskItem t,
         string projectKey,
-        Dictionary<Guid, (string DisplayName, string? AvatarUrl)> assigneeMap)
+        Dictionary<Guid, (string DisplayName, string? AvatarUrl)> assigneeMap,
+        bool isOverWipLimit,
+        IReadOnlyDictionary<Guid, CardCounts> cardCounts)
     {
         (string? name, string? avatar) = t.AssigneeId.HasValue && assigneeMap.TryGetValue(t.AssigneeId.Value, out var a)
             ? a
@@ -418,6 +564,7 @@ public class BoardService : IBoardService
 
         var (actualDays, isOverEstimate, daysOverEstimate) = CalculateEffort(t);
         var (isOverdue, daysOverdue) = CalculateOverdue(t);
+        var counts = cardCounts.GetValueOrDefault(t.Id);
 
         return new TaskItemDto(
             t.Id, t.ProjectId, t.ColumnId,
@@ -428,7 +575,9 @@ public class BoardService : IBoardService
             t.CreatedById, t.CreatedAt, t.UpdatedAt, t.IsArchived,
             t.EstimateDays, t.StartedAt, t.CompletedAt,
             actualDays, isOverEstimate, daysOverEstimate,
-            isOverdue, daysOverdue);
+            isOverdue, daysOverdue,
+            isOverWipLimit,
+            counts.Comments, counts.Attachments);
     }
 
     /// <summary>

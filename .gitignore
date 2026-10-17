@@ -10,6 +10,9 @@ obj/
 .vs/
 .vscode/
 
+# Local attachment storage (see FileStorage:LocalPath)
+data/
+
 # OS
 .DS_Store
 Thumbs.db

@@ -72,6 +72,14 @@ public class RequireWorkspaceRoleAttribute : Attribute, IAsyncActionFilter
                     await context.HttpContext.RequestServices
                         .GetRequiredService<IBoardService>()
                         .GetWorkspaceIdForTaskAsync(routeId, context.HttpContext.RequestAborted),
+                WorkspaceResourceType.Comment =>
+                    await context.HttpContext.RequestServices
+                        .GetRequiredService<ITaskCommentService>()
+                        .GetWorkspaceIdForCommentAsync(routeId, context.HttpContext.RequestAborted),
+                WorkspaceResourceType.Attachment =>
+                    await context.HttpContext.RequestServices
+                        .GetRequiredService<ITaskAttachmentService>()
+                        .GetWorkspaceIdForAttachmentAsync(routeId, context.HttpContext.RequestAborted),
                 _ => null
             };
 

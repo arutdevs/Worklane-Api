@@ -13,5 +13,11 @@ public enum WorkspaceResourceType
     Column,
 
     /// <summary>The route parameter is a TaskId; its WorkspaceId is looked up via the task's project.</summary>
-    Task
+    Task,
+
+    /// <summary>The route parameter is a CommentId; its WorkspaceId is looked up via the comment's task.</summary>
+    Comment,
+
+    /// <summary>The route parameter is an AttachmentId; its WorkspaceId is looked up via the attachment's task.</summary>
+    Attachment
 }

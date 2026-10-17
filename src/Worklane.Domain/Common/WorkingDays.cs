@@ -3,10 +3,13 @@ namespace Worklane.Domain.Common;
 /// <summary>
 /// Elapsed working time in man-days, counting Monday–Friday only.
 ///
-/// This measures wall-clock elapsed time, not effort: a person holding three tasks
-/// in progress at once accrues the full duration on all three. Treat the numbers as
-/// a trend, not as billable days. There is no holiday calendar — a task spanning a
-/// public holiday still counts that day as worked.
+/// Work that falls on Saturday or Sunday counts as 0 working days (WL-35: this
+/// rule stays). A card that starts and finishes entirely over a weekend therefore
+/// contributes nothing, and a range that merely crosses a weekend drops those two
+/// days. This measures wall-clock elapsed time, not effort: a person holding three
+/// tasks in progress at once accrues the full duration on all three. Treat the
+/// numbers as a trend, not as billable days. There is no holiday calendar — a task
+/// spanning a public holiday still counts that weekday as worked.
 /// </summary>
 public static class WorkingDays
 {

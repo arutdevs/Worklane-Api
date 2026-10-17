@@ -26,6 +26,10 @@ services:
       Jwt__Issuer: "Worklane"
       Jwt__Audience: "WorklaneClient"
       Cors__AllowedOrigins__0: "http://localhost:4200"
+      FileStorage__LocalPath: /var/worklane/attachments
+      FileStorage__MaxBytes: "10485760"
+    volumes:
+      - attachments:/var/worklane/attachments
     ports:
       - "5000:8080"
     depends_on:
@@ -43,3 +47,4 @@ services:
 
 volumes:
   pgdata:
+  attachments:

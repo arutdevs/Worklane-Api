@@ -38,6 +38,9 @@ public record MemberReportDto(
 
 /// <summary>
 /// Workspace-wide totals plus the per-person rows behind them.
+/// Actual man-days count Monday–Friday only: work done on a weekend counts as 0
+/// working days, and there is no holiday calendar. The figure is elapsed time, not
+/// effort — several cards in progress at once each accrue the full duration.
 /// </summary>
 public record WorkspaceReportDto(
     Guid WorkspaceId,

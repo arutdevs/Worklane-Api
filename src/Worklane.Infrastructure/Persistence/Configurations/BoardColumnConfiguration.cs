@@ -14,6 +14,7 @@ public class BoardColumnConfiguration : IEntityTypeConfiguration<BoardColumn>
         builder.Property(c => c.Order).IsRequired();
         builder.Property(c => c.IsDone).IsRequired().HasDefaultValue(false);
         builder.Property(c => c.IsInProgress).IsRequired().HasDefaultValue(false);
+        builder.Property(c => c.WipLimit);
 
         builder.HasOne(c => c.Project)
             .WithMany()

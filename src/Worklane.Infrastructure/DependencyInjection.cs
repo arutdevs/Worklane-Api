@@ -36,6 +36,7 @@ public static class DependencyInjection
         services.Configure<JwtSettings>(configuration.GetSection(JwtSettings.SectionName));
         services.Configure<EmailSettings>(configuration.GetSection(EmailSettings.SectionName));
         services.Configure<FrontendSettings>(configuration.GetSection(FrontendSettings.SectionName));
+        services.Configure<FileStorageSettings>(configuration.GetSection(FileStorageSettings.SectionName));
 
         services.AddScoped<ICurrentTenantService, CurrentTenantService>();
         services.AddScoped<ITokenService, JwtTokenService>();
@@ -45,6 +46,10 @@ public static class DependencyInjection
         services.AddScoped<IWorkspaceService, WorkspaceService>();
         services.AddScoped<IProjectService, ProjectService>();
         services.AddScoped<IBoardService, BoardService>();
+        services.AddScoped<ITaskActivityService, TaskActivityService>();
+        services.AddScoped<ITaskCommentService, TaskCommentService>();
+        services.AddScoped<ITaskAttachmentService, TaskAttachmentService>();
+        services.AddScoped<IFileStorage, LocalFileStorage>();
         services.AddScoped<IReportService, ReportService>();
 
         return services;

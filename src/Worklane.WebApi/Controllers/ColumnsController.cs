@@ -52,8 +52,10 @@ public class ColumnsController : ControllerBase
     public async Task<ActionResult<BoardColumnDto>> UpdateColumn(
         Guid columnId,
         [FromBody] UpdateColumnRequest request,
+        [FromServices] IValidator<UpdateColumnRequest> validator,
         CancellationToken ct)
     {
+        await validator.ValidateAndThrowAsync(request, ct);
         var result = await _board.UpdateColumnAsync(columnId, request, ct);
         return Ok(result);
     }
