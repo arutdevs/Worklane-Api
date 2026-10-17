@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Text.Json;
 using FluentAssertions;
@@ -8,6 +9,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Abstractions;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Worklane.Application.Common.Exceptions;
 using Worklane.WebApi.Middleware;
@@ -94,11 +96,35 @@ public class ExceptionHandlingMiddlewareTests
     [Fact]
     public async Task UnhandledException_IsInternalErrorWithoutTheMessage()
     {
-        var body = await Invoke(new InvalidOperationException("SELECT secret FROM users"));
-        body.Status.Should().Be(HttpStatusCode.InternalServerError);
-        body.Json.GetProperty("code").GetString().Should().Be("internal_error");
-        body.Json.GetProperty("detail").GetString().Should().Be("An unexpected error occurred.");
-        body.Json.GetRawText().Should().NotContain("secret");
+        const string secret = "SELECT secret FROM users";
+        var exception = new InvalidOperationException(secret, new InvalidOperationException("inner-secret-value"));
+        var logs = new List<LoggedException>();
+        var middleware = new ExceptionHandlingMiddleware(_ => throw exception, new CollectingLogger<ExceptionHandlingMiddleware>(logs));
+        var context = new DefaultHttpContext();
+        context.TraceIdentifier = "trace-500";
+        context.Request.Path = "/api/example";
+        context.Response.Body = new MemoryStream();
+
+        await middleware.InvokeAsync(context);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status500InternalServerError);
+        context.Response.Body.Position = 0;
+        using var document = await JsonDocument.ParseAsync(context.Response.Body);
+        var json = document.RootElement;
+        json.GetProperty("code").GetString().Should().Be("internal_error");
+        json.GetProperty("detail").GetString().Should().Be("An unexpected error occurred.");
+        json.GetProperty("traceId").GetString().Should().Be(Activity.Current?.Id ?? "trace-500");
+        var raw = json.GetRawText();
+        raw.Should().NotContain(secret);
+        raw.Should().NotContain("inner-secret-value");
+        raw.Should().NotContain(exception.GetType().Name);
+
+        var logged = logs.Should().ContainSingle().Subject;
+        logged.Level.Should().Be(LogLevel.Error);
+        logged.Exception.Should().BeSameAs(exception);
+        logged.Exception!.ToString().Should().Contain(secret);
+        logged.Exception.ToString().Should().Contain("inner-secret-value");
+        logged.Exception.StackTrace.Should().NotBeNullOrEmpty();
     }
 
     [Fact]
@@ -183,4 +209,18 @@ public class ExceptionHandlingMiddlewareTests
     }
 
     private sealed class BoardColumnPlaceholder;
+
+    private sealed record LoggedException(LogLevel Level, Exception? Exception);
+
+    private sealed class CollectingLogger<T>(List<LoggedException> entries) : ILogger<T>
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            entries.Add(new LoggedException(logLevel, exception));
+        }
+    }
 }

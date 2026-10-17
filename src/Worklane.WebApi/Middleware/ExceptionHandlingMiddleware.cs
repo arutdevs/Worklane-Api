@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Text;
 using FluentValidation;
@@ -70,6 +71,8 @@ public class ExceptionHandlingMiddleware
         };
 
         problemDetails.Extensions["code"] = CodeFor(exception, statusCode);
+        if (statusCode == HttpStatusCode.InternalServerError)
+            problemDetails.Extensions["traceId"] = Activity.Current?.Id ?? context.TraceIdentifier;
 
         if (exception is AppException app)
         {
