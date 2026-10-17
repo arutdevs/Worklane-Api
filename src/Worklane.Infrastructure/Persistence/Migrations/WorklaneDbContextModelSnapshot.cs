@@ -581,6 +581,45 @@ namespace Worklane.Infrastructure.Persistence.Migrations
                     b.ToTable("WorkspaceMembers");
                 });
 
+            modelBuilder.Entity("Worklane.Domain.Entities.WorkspaceMembershipEvent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Action")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<Guid>("ActorUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("NewRole")
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<DateTimeOffset>("OccurredAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("OldRole")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<Guid>("TargetUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("WorkspaceId")
+                        .HasColumnType("uuid");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("WorkspaceId", "OccurredAt");
+
+                    b.ToTable("WorkspaceMembershipEvents");
+                });
+
             modelBuilder.Entity("Worklane.Infrastructure.Identity.AppUser", b =>
                 {
                     b.Property<Guid>("Id")
@@ -819,6 +858,17 @@ namespace Worklane.Infrastructure.Persistence.Migrations
                 {
                     b.HasOne("Worklane.Domain.Entities.Workspace", "Workspace")
                         .WithMany("Members")
+                        .HasForeignKey("WorkspaceId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Workspace");
+                });
+
+            modelBuilder.Entity("Worklane.Domain.Entities.WorkspaceMembershipEvent", b =>
+                {
+                    b.HasOne("Worklane.Domain.Entities.Workspace", "Workspace")
+                        .WithMany()
                         .HasForeignKey("WorkspaceId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();

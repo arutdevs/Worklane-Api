@@ -1,9 +1,16 @@
 using System.Net;
 using System.Net.Http.Json;
 using FluentAssertions;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Worklane.Application.Common.Exceptions;
 using Worklane.Application.Projects.Dtos;
+using Worklane.Application.Workspaces;
 using Worklane.Application.Workspaces.Dtos;
+using Worklane.Domain.Entities;
 using Worklane.Domain.Enums;
+using Worklane.Infrastructure.Persistence;
 using Worklane.IntegrationTests.Infrastructure;
 
 namespace Worklane.IntegrationTests.Workspaces;
@@ -94,5 +101,409 @@ public class WorkspaceAuthorizationTests : IClassFixture<WorklaneWebApplicationF
         var archiveResponse = await outsider.Client.DeleteAsync($"/api/projects/{project!.Id}");
 
         archiveResponse.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    [Fact]
+    public async Task Admin_CannotPromoteSelfToOwner_AndRoleStaysAdmin()
+    {
+        var (owner, admin, _) = await WorkspaceWithAdminAsync();
+
+        var before = await EventCountAsync(owner.Workspace.Id);
+        var response = await PatchRole(admin, owner.Workspace.Id, admin.Tokens.User.Id, WorkspaceRole.Owner);
+
+        await AssertForbidden(response, "Owner");
+        await AssertRole(owner, owner.Workspace.Id, admin.Tokens.User.Id, WorkspaceRole.Admin);
+        (await EventCountAsync(owner.Workspace.Id)).Should().Be(before);
+    }
+
+    [Fact]
+    public async Task Admin_CannotGrantOwnerToSomeoneElse_AndRoleStays()
+    {
+        var (owner, admin, member) = await WorkspaceWithAdminAsync();
+
+        var before = await EventCountAsync(owner.Workspace.Id);
+        var response = await PatchRole(admin, owner.Workspace.Id, member.Tokens.User.Id, WorkspaceRole.Owner);
+
+        await AssertForbidden(response, "Owner");
+        await AssertRole(owner, owner.Workspace.Id, member.Tokens.User.Id, WorkspaceRole.Member);
+        (await EventCountAsync(owner.Workspace.Id)).Should().Be(before);
+    }
+
+    [Fact]
+    public async Task Admin_PromoteMemberToAdmin_FollowsAdminMayGrantAdmin()
+    {
+        var (owner, admin, member) = await WorkspaceWithAdminAsync();
+        var before = await EventCountAsync(owner.Workspace.Id);
+
+        var response = await PatchRole(admin, owner.Workspace.Id, member.Tokens.User.Id, WorkspaceRole.Admin);
+
+        // AC #2 and #12 say 204. AdminMayGrantAdmin is false because an Admin manages only
+        // Viewer and Member. Flip that constant to allow the promotion; this test follows it.
+        await FollowSwitch(
+            WorkspaceMembershipPolicy.AdminMayGrantAdmin,
+            whenAllowed: async () =>
+            {
+                response.StatusCode.Should().Be(HttpStatusCode.NoContent);
+                await AssertRole(owner, owner.Workspace.Id, member.Tokens.User.Id, WorkspaceRole.Admin);
+                var audit = await SingleEventAsync(owner.Workspace.Id, member.Tokens.User.Id, WorkspaceMembershipAction.RoleChanged);
+                audit.ActorUserId.Should().Be(admin.Tokens.User.Id);
+                audit.OldRole.Should().Be(WorkspaceRole.Member);
+                audit.NewRole.Should().Be(WorkspaceRole.Admin);
+            },
+            whenForbidden: async () =>
+            {
+                await AssertForbidden(response, "Admin");
+                await AssertRole(owner, owner.Workspace.Id, member.Tokens.User.Id, WorkspaceRole.Member);
+                (await EventCountAsync(owner.Workspace.Id)).Should().Be(before);
+            });
+    }
+
+    [Fact]
+    public async Task Admin_CannotDemoteOrRemoveOwner_EvenWhenThatOwnerIsTheLastOne()
+    {
+        var (owner, admin, _) = await WorkspaceWithAdminAsync();
+        var before = await EventCountAsync(owner.Workspace.Id);
+
+        var demote = await PatchRole(admin, owner.Workspace.Id, owner.Tokens.User.Id, WorkspaceRole.Viewer);
+        await AssertForbidden(demote, "Owner");
+        demote.StatusCode.Should().NotBe(HttpStatusCode.Conflict);
+        await AssertRole(owner, owner.Workspace.Id, owner.Tokens.User.Id, WorkspaceRole.Owner);
+
+        var remove = await admin.Client.DeleteAsync($"/api/workspaces/{owner.Workspace.Id}/members/{owner.Tokens.User.Id}");
+        await AssertForbidden(remove, "Owner");
+        remove.StatusCode.Should().NotBe(HttpStatusCode.Conflict);
+        await AssertRole(owner, owner.Workspace.Id, owner.Tokens.User.Id, WorkspaceRole.Owner);
+        (await EventCountAsync(owner.Workspace.Id)).Should().Be(before);
+    }
+
+    [Fact]
+    public async Task Admin_ChangeOrRemoveAnotherAdmin_FollowsPeerAdminSwitch()
+    {
+        var (owner, admin, _) = await WorkspaceWithAdminAsync();
+        var peer = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
+        await InviteAsync(owner, peer, WorkspaceRole.Admin);
+        var before = await EventCountAsync(owner.Workspace.Id);
+
+        var demote = await PatchRole(admin, owner.Workspace.Id, peer.Tokens.User.Id, WorkspaceRole.Member);
+        var remove = await admin.Client.DeleteAsync($"/api/workspaces/{owner.Workspace.Id}/members/{peer.Tokens.User.Id}");
+
+        // Flip WorkspaceMembershipPolicy.AdminMayManagePeerAdmins to allow both calls.
+        // Nothing else in the policy changes with that constant.
+        await FollowSwitch(
+            WorkspaceMembershipPolicy.AdminMayManagePeerAdmins,
+            whenAllowed: async () =>
+            {
+                demote.StatusCode.Should().Be(HttpStatusCode.NoContent);
+                remove.StatusCode.Should().Be(HttpStatusCode.NoContent);
+                await AssertRole(owner, owner.Workspace.Id, peer.Tokens.User.Id, null);
+            },
+            whenForbidden: async () =>
+            {
+                await AssertForbidden(demote, "another Admin");
+                await AssertForbidden(remove, "another Admin");
+                await AssertRole(owner, owner.Workspace.Id, peer.Tokens.User.Id, WorkspaceRole.Admin);
+                (await EventCountAsync(owner.Workspace.Id)).Should().Be(before);
+            });
+    }
+
+    [Fact]
+    public async Task Admin_CanMoveMemberBetweenViewerAndMember_AndRemoveAMember()
+    {
+        var (owner, admin, member) = await WorkspaceWithAdminAsync();
+        var viewer = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
+        await InviteAsync(owner, viewer, WorkspaceRole.Viewer);
+
+        var toViewer = await PatchRole(admin, owner.Workspace.Id, member.Tokens.User.Id, WorkspaceRole.Viewer);
+        toViewer.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        await AssertRole(owner, owner.Workspace.Id, member.Tokens.User.Id, WorkspaceRole.Viewer);
+
+        var backToMember = await PatchRole(admin, owner.Workspace.Id, member.Tokens.User.Id, WorkspaceRole.Member);
+        backToMember.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        await AssertRole(owner, owner.Workspace.Id, member.Tokens.User.Id, WorkspaceRole.Member);
+
+        var viewerToMember = await PatchRole(admin, owner.Workspace.Id, viewer.Tokens.User.Id, WorkspaceRole.Member);
+        viewerToMember.StatusCode.Should().Be(HttpStatusCode.NoContent);
+
+        var remove = await admin.Client.DeleteAsync($"/api/workspaces/{owner.Workspace.Id}/members/{member.Tokens.User.Id}");
+        remove.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        await AssertRole(owner, owner.Workspace.Id, member.Tokens.User.Id, null);
+
+        var removed = await SingleEventAsync(owner.Workspace.Id, member.Tokens.User.Id, WorkspaceMembershipAction.MemberRemoved);
+        removed.ActorUserId.Should().Be(admin.Tokens.User.Id);
+        removed.WorkspaceId.Should().Be(owner.Workspace.Id);
+        removed.OldRole.Should().Be(WorkspaceRole.Member);
+        removed.NewRole.Should().BeNull();
+        removed.OccurredAt.Should().BeCloseTo(DateTimeOffset.UtcNow, TimeSpan.FromSeconds(10));
+    }
+
+    [Fact]
+    public async Task Admin_CanDemoteSelfToMemberOrViewer()
+    {
+        var (owner, admin, _) = await WorkspaceWithAdminAsync();
+        var otherAdmin = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
+        await InviteAsync(owner, otherAdmin, WorkspaceRole.Admin);
+
+        var toMember = await PatchRole(admin, owner.Workspace.Id, admin.Tokens.User.Id, WorkspaceRole.Member);
+        toMember.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        await AssertRole(owner, owner.Workspace.Id, admin.Tokens.User.Id, WorkspaceRole.Member);
+
+        var toViewer = await PatchRole(otherAdmin, owner.Workspace.Id, otherAdmin.Tokens.User.Id, WorkspaceRole.Viewer);
+        toViewer.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        await AssertRole(owner, owner.Workspace.Id, otherAdmin.Tokens.User.Id, WorkspaceRole.Viewer);
+
+        var self = await SingleEventAsync(owner.Workspace.Id, admin.Tokens.User.Id, WorkspaceMembershipAction.RoleChanged);
+        self.ActorUserId.Should().Be(admin.Tokens.User.Id);
+        self.OldRole.Should().Be(WorkspaceRole.Admin);
+        self.NewRole.Should().Be(WorkspaceRole.Member);
+    }
+
+    [Fact]
+    public async Task Owner_CanGrantOwner_AndThatChangeIsAudited()
+    {
+        var (owner, _, member) = await WorkspaceWithAdminAsync();
+
+        var response = await PatchRole(owner, owner.Workspace.Id, member.Tokens.User.Id, WorkspaceRole.Owner);
+
+        response.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        await AssertRole(owner, owner.Workspace.Id, member.Tokens.User.Id, WorkspaceRole.Owner);
+
+        var audit = await SingleEventAsync(owner.Workspace.Id, member.Tokens.User.Id, WorkspaceMembershipAction.RoleChanged);
+        audit.ActorUserId.Should().Be(owner.Tokens.User.Id);
+        audit.WorkspaceId.Should().Be(owner.Workspace.Id);
+        audit.OldRole.Should().Be(WorkspaceRole.Member);
+        audit.NewRole.Should().Be(WorkspaceRole.Owner);
+    }
+
+    [Fact]
+    public async Task Owner_CanDemoteAndRemoveAdmin()
+    {
+        var (owner, admin, _) = await WorkspaceWithAdminAsync();
+        var otherAdmin = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
+        await InviteAsync(owner, otherAdmin, WorkspaceRole.Admin);
+
+        var demote = await PatchRole(owner, owner.Workspace.Id, admin.Tokens.User.Id, WorkspaceRole.Viewer);
+        demote.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        await AssertRole(owner, owner.Workspace.Id, admin.Tokens.User.Id, WorkspaceRole.Viewer);
+
+        var remove = await owner.Client.DeleteAsync($"/api/workspaces/{owner.Workspace.Id}/members/{otherAdmin.Tokens.User.Id}");
+        remove.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        await AssertRole(owner, owner.Workspace.Id, otherAdmin.Tokens.User.Id, null);
+
+        var audit = await SingleEventAsync(owner.Workspace.Id, otherAdmin.Tokens.User.Id, WorkspaceMembershipAction.MemberRemoved);
+        audit.ActorUserId.Should().Be(owner.Tokens.User.Id);
+        audit.OldRole.Should().Be(WorkspaceRole.Admin);
+        audit.NewRole.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task CannotRemove_TheLastOwnerOfAWorkspace()
+    {
+        var owner = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
+
+        var response = await owner.Client.DeleteAsync($"/api/workspaces/{owner.Workspace.Id}/members/{owner.Tokens.User.Id}");
+
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(TestAuthHelper.JsonOptions);
+        problem!.Title.Should().Be("Conflict");
+        problem.Detail.Should().Be("Cannot remove or demote the last Owner of a workspace.");
+        await AssertRole(owner, owner.Workspace.Id, owner.Tokens.User.Id, WorkspaceRole.Owner);
+        (await EventCountAsync(owner.Workspace.Id)).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task OwnerOfAnotherWorkspace_CannotChangeOrRemoveMembersHere()
+    {
+        var (owner, _, member) = await WorkspaceWithAdminAsync();
+        var outsider = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
+        var before = await EventCountAsync(owner.Workspace.Id);
+
+        var patch = await PatchRole(outsider, owner.Workspace.Id, member.Tokens.User.Id, WorkspaceRole.Owner);
+        var delete = await outsider.Client.DeleteAsync($"/api/workspaces/{owner.Workspace.Id}/members/{owner.Tokens.User.Id}");
+
+        patch.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        delete.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        await AssertRole(owner, owner.Workspace.Id, member.Tokens.User.Id, WorkspaceRole.Member);
+        await AssertRole(owner, owner.Workspace.Id, owner.Tokens.User.Id, WorkspaceRole.Owner);
+        (await EventCountAsync(owner.Workspace.Id)).Should().Be(before);
+    }
+
+    [Fact]
+    public async Task OwnerElsewhere_WhoIsOnlyAnAdminHere_CannotGrantOwner()
+    {
+        var (owner, _, member) = await WorkspaceWithAdminAsync();
+        var ownerElsewhere = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
+        await InviteAsync(owner, ownerElsewhere, WorkspaceRole.Admin);
+        var before = await EventCountAsync(owner.Workspace.Id);
+
+        var response = await PatchRole(ownerElsewhere, owner.Workspace.Id, member.Tokens.User.Id, WorkspaceRole.Owner);
+
+        await AssertForbidden(response, "Owner");
+        await AssertRole(owner, owner.Workspace.Id, member.Tokens.User.Id, WorkspaceRole.Member);
+        await AssertRole(ownerElsewhere, ownerElsewhere.Workspace.Id, ownerElsewhere.Tokens.User.Id, WorkspaceRole.Owner);
+        (await EventCountAsync(owner.Workspace.Id)).Should().Be(before);
+    }
+
+    [Fact]
+    public async Task MembershipAuditMigration_DownDropsTheTable_AndUpRecreatesIt()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<WorklaneDbContext>();
+
+        try
+        {
+            await db.Database.MigrateAsync("20261017180618_AddCommentsAttachmentsActivityAndWip");
+            (await AuditTableCountAsync(db)).Should().Be(0);
+        }
+        finally
+        {
+            await db.Database.MigrateAsync();
+        }
+
+        (await AuditTableCountAsync(db)).Should().Be(1);
+    }
+
+    private async Task<(RegisteredUser Owner, RegisteredUser Admin, RegisteredUser Member)> WorkspaceWithAdminAsync()
+    {
+        var owner = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
+        var admin = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
+        var member = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
+        await InviteAsync(owner, admin, WorkspaceRole.Admin);
+        await InviteAsync(owner, member, WorkspaceRole.Member);
+        return (owner, admin, member);
+    }
+
+    private static async Task InviteAsync(RegisteredUser owner, RegisteredUser user, WorkspaceRole role)
+    {
+        var response = await owner.Client.PostAsJsonAsync(
+            $"/api/workspaces/{owner.Workspace.Id}/invitations",
+            new InviteMemberRequest(user.Tokens.User.Email, role));
+        response.EnsureSuccessStatusCode();
+    }
+
+    private static async Task<HttpResponseMessage> PatchRole(RegisteredUser actor, Guid workspaceId, Guid userId, WorkspaceRole role)
+    {
+        return await actor.Client.PatchAsJsonAsync(
+            $"/api/workspaces/{workspaceId}/members/{userId}",
+            new UpdateMemberRoleRequest(role));
+    }
+
+    private static async Task AssertRole(RegisteredUser reader, Guid workspaceId, Guid userId, WorkspaceRole? expected)
+    {
+        var response = await reader.Client.GetAsync($"/api/workspaces/{workspaceId}/members");
+        response.EnsureSuccessStatusCode();
+        var members = await response.Content.ReadFromJsonAsync<List<WorkspaceMemberDto>>(TestAuthHelper.JsonOptions);
+        WorkspaceRole? role = members!.SingleOrDefault(m => m.UserId == userId)?.Role;
+        role.Should().Be(expected);
+    }
+
+    private static async Task AssertForbidden(HttpResponseMessage response, string detailFragment)
+    {
+        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(TestAuthHelper.JsonOptions);
+        problem!.Status.Should().Be(403);
+        problem.Title.Should().Be("Forbidden");
+        problem.Detail.Should().Contain(detailFragment);
+    }
+
+    private async Task<List<WorkspaceMembershipEvent>> EventsAsync(Guid workspaceId)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<WorklaneDbContext>();
+        // The audit filter is fail-closed, and this scope has no tenant pinned.
+        return await db.WorkspaceMembershipEvents
+            .IgnoreQueryFilters()
+            .Where(e => e.WorkspaceId == workspaceId)
+            .ToListAsync();
+    }
+
+    private async Task<int> EventCountAsync(Guid workspaceId) => (await EventsAsync(workspaceId)).Count;
+
+    private async Task<WorkspaceMembershipEvent> SingleEventAsync(Guid workspaceId, Guid targetUserId, WorkspaceMembershipAction action)
+    {
+        var events = await EventsAsync(workspaceId);
+        return events.Should().ContainSingle(e => e.TargetUserId == targetUserId && e.Action == action).Subject;
+    }
+
+    /// <summary>
+    /// The switch is a const, so the branch lives in this method. Otherwise the compiler
+    /// deletes the unused side and a flip looks like a test change instead of a policy change.
+    /// </summary>
+    private static async Task FollowSwitch(bool allowed, Func<Task> whenAllowed, Func<Task> whenForbidden)
+    {
+        if (allowed)
+            await whenAllowed();
+        else
+            await whenForbidden();
+    }
+
+    private static async Task<int> AuditTableCountAsync(WorklaneDbContext db)
+    {
+        var count = await db.Database.SqlQueryRaw<int>(
+            """
+            SELECT COUNT(*)::int AS "Value"
+            FROM information_schema.tables
+            WHERE table_schema = 'public' AND table_name = 'WorkspaceMembershipEvents'
+            """)
+            .ToListAsync();
+        return count.Single();
+    }
+}
+
+/// <summary>
+/// The peer-Admin rows follow <see cref="WorkspaceMembershipPolicy.AdminMayManagePeerAdmins"/>.
+/// Member → Admin follows <see cref="WorkspaceMembershipPolicy.AdminMayGrantAdmin"/>.
+/// Every other row stays put when either constant is flipped.
+/// </summary>
+public class WorkspaceMembershipPolicyTests
+{
+    private static readonly WorkspaceRole Owner = WorkspaceRole.Owner;
+    private static readonly WorkspaceRole Admin = WorkspaceRole.Admin;
+    private static readonly WorkspaceRole Member = WorkspaceRole.Member;
+    private static readonly WorkspaceRole Viewer = WorkspaceRole.Viewer;
+
+    [Fact]
+    public void PeerAdminRows_FollowTheSingleSwitch_AndOwnerRulesDoNot()
+    {
+        // These two calls are the only ones that change when AdminMayManagePeerAdmins flips.
+        Expect(WorkspaceMembershipPolicy.AdminMayManagePeerAdmins, Admin, Admin, Member, isSelf: false);
+        Expect(WorkspaceMembershipPolicy.AdminMayManagePeerAdmins, Admin, Admin, newRole: null, isSelf: false);
+
+        // Granting Admin is the other switch. It is false today (stricter than AC #2).
+        Expect(WorkspaceMembershipPolicy.AdminMayGrantAdmin, Admin, Member, Admin, isSelf: false);
+        Expect(WorkspaceMembershipPolicy.AdminMayGrantAdmin, Admin, Viewer, Admin, isSelf: false);
+
+        Allow(Owner, Member, Owner, isSelf: false);
+        Allow(Owner, Admin, Viewer, isSelf: false);
+        Allow(Owner, Admin, newRole: null, isSelf: false);
+        Allow(Owner, Owner, Member, isSelf: true);
+
+        Allow(Admin, Member, Viewer, isSelf: false);
+        Allow(Admin, Viewer, Member, isSelf: false);
+        Allow(Admin, Member, newRole: null, isSelf: false);
+        Allow(Admin, Viewer, newRole: null, isSelf: false);
+        Allow(Admin, Admin, Member, isSelf: true);
+        Allow(Admin, Admin, Viewer, isSelf: true);
+
+        Deny(Admin, Member, Owner, isSelf: false);
+        Deny(Admin, Owner, Viewer, isSelf: false);
+        Deny(Admin, Owner, newRole: null, isSelf: false);
+        Deny(Admin, Admin, Owner, isSelf: true);
+        Deny(Admin, Admin, newRole: null, isSelf: true);
+        Deny(Member, Viewer, Member, isSelf: false);
+    }
+
+    private static void Allow(WorkspaceRole actor, WorkspaceRole target, WorkspaceRole? newRole, bool isSelf)
+        => Expect(allowed: true, actor, target, newRole, isSelf);
+
+    private static void Deny(WorkspaceRole actor, WorkspaceRole target, WorkspaceRole? newRole, bool isSelf)
+        => Expect(allowed: false, actor, target, newRole, isSelf);
+
+    private static void Expect(bool allowed, WorkspaceRole actor, WorkspaceRole target, WorkspaceRole? newRole, bool isSelf)
+    {
+        var act = () => WorkspaceMembershipPolicy.EnsureCanManage(actor, target, newRole, isSelf);
+        if (allowed)
+            act.Should().NotThrow();
+        else
+            act.Should().Throw<ForbiddenAccessException>();
     }
 }

@@ -29,6 +29,7 @@ public class WorklaneDbContext : IdentityDbContext<AppUser, IdentityRole<Guid>, 
     public DbSet<TaskActivity> TaskActivities => Set<TaskActivity>();
     public DbSet<TaskComment> TaskComments => Set<TaskComment>();
     public DbSet<TaskAttachment> TaskAttachments => Set<TaskAttachment>();
+    public DbSet<WorkspaceMembershipEvent> WorkspaceMembershipEvents => Set<WorkspaceMembershipEvent>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -78,5 +79,11 @@ public class WorklaneDbContext : IdentityDbContext<AppUser, IdentityRole<Guid>, 
             !a.Task.IsArchived &&
             _currentTenantService.WorkspaceId.HasValue &&
             a.Task.Project.WorkspaceId == _currentTenantService.WorkspaceId);
+
+        // Fail closed, same as the filters above. Membership history must not come back
+        // for every workspace when no tenant is pinned.
+        builder.Entity<WorkspaceMembershipEvent>().HasQueryFilter(e =>
+            _currentTenantService.WorkspaceId.HasValue &&
+            e.WorkspaceId == _currentTenantService.WorkspaceId);
     }
 }

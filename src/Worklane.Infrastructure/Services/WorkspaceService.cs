@@ -5,6 +5,7 @@ using Microsoft.Extensions.Options;
 using Worklane.Application.Common.Exceptions;
 using Worklane.Application.Common.Interfaces;
 using Worklane.Application.Common.Options;
+using Worklane.Application.Workspaces;
 using Worklane.Application.Workspaces.Dtos;
 using Worklane.Application.Workspaces.Interfaces;
 using Worklane.Domain.Entities;
@@ -208,8 +209,9 @@ public class WorkspaceService : IWorkspaceService
         await _db.SaveChangesAsync(cancellationToken);
     }
 
-    public async Task UpdateMemberRoleAsync(Guid workspaceId, Guid targetUserId, WorkspaceRole newRole, CancellationToken cancellationToken)
+    public async Task UpdateMemberRoleAsync(Guid workspaceId, Guid actorUserId, Guid targetUserId, WorkspaceRole newRole, CancellationToken cancellationToken)
     {
+        var actor = await RequireActorAsync(workspaceId, actorUserId, cancellationToken);
         var member = await _db.WorkspaceMembers
             .SingleOrDefaultAsync(m => m.WorkspaceId == workspaceId && m.UserId == targetUserId, cancellationToken);
 
@@ -217,18 +219,29 @@ public class WorkspaceService : IWorkspaceService
         {
             throw new NotFoundException(nameof(WorkspaceMember), targetUserId);
         }
+
+        // Authorize before the last-Owner guard. An Admin targeting the sole Owner is 403, not 409.
+        WorkspaceMembershipPolicy.EnsureCanManage(
+            actor.Role, member.Role, newRole, isSelf: actor.UserId == member.UserId);
+
+        if (member.Role == newRole)
+            return;
 
         if (member.Role == WorkspaceRole.Owner && newRole != WorkspaceRole.Owner)
         {
             await EnsureNotLastOwnerAsync(workspaceId, targetUserId, cancellationToken);
         }
 
+        var oldRole = member.Role;
         member.Role = newRole;
+        AddMembershipEvent(workspaceId, actorUserId, targetUserId, WorkspaceMembershipAction.RoleChanged, oldRole, newRole);
         await _db.SaveChangesAsync(cancellationToken);
+        LogMembershipChange(workspaceId, actorUserId, targetUserId, WorkspaceMembershipAction.RoleChanged, oldRole, newRole);
     }
 
-    public async Task RemoveMemberAsync(Guid workspaceId, Guid targetUserId, CancellationToken cancellationToken)
+    public async Task RemoveMemberAsync(Guid workspaceId, Guid actorUserId, Guid targetUserId, CancellationToken cancellationToken)
     {
+        var actor = await RequireActorAsync(workspaceId, actorUserId, cancellationToken);
         var member = await _db.WorkspaceMembers
             .SingleOrDefaultAsync(m => m.WorkspaceId == workspaceId && m.UserId == targetUserId, cancellationToken);
 
@@ -237,15 +250,21 @@ public class WorkspaceService : IWorkspaceService
             throw new NotFoundException(nameof(WorkspaceMember), targetUserId);
         }
 
+        // Authorize before the last-Owner guard. An Admin targeting the sole Owner is 403, not 409.
+        WorkspaceMembershipPolicy.EnsureCanManage(
+            actor.Role, member.Role, newRole: null, isSelf: actor.UserId == member.UserId);
+
         if (member.Role == WorkspaceRole.Owner)
         {
             await EnsureNotLastOwnerAsync(workspaceId, targetUserId, cancellationToken);
         }
 
+        var oldRole = member.Role;
+        AddMembershipEvent(workspaceId, actorUserId, targetUserId, WorkspaceMembershipAction.MemberRemoved, oldRole, newRole: null);
         _db.WorkspaceMembers.Remove(member);
         await _db.SaveChangesAsync(cancellationToken);
-
         await _realtime.RemoveUserFromWorkspaceAsync(workspaceId, targetUserId, cancellationToken);
+        LogMembershipChange(workspaceId, actorUserId, targetUserId, WorkspaceMembershipAction.MemberRemoved, oldRole, newRole: null);
     }
 
     public async Task<WorkspaceRole?> GetUserRoleAsync(Guid workspaceId, Guid userId, CancellationToken cancellationToken)
@@ -257,6 +276,60 @@ public class WorkspaceService : IWorkspaceService
             .SingleOrDefaultAsync(m => m.WorkspaceId == workspaceId && m.UserId == userId, cancellationToken);
 
         return member?.Role;
+    }
+
+    /// <summary>
+    /// Role comes from this workspace's membership row. A query with no tenant pinned still
+    /// cannot see another workspace, because the predicate is the route workspace id.
+    /// </summary>
+    private async Task<WorkspaceMember> RequireActorAsync(Guid workspaceId, Guid actorUserId, CancellationToken cancellationToken)
+    {
+        var actor = await _db.WorkspaceMembers
+            .SingleOrDefaultAsync(m => m.WorkspaceId == workspaceId && m.UserId == actorUserId, cancellationToken);
+
+        if (actor is null)
+            throw new ForbiddenAccessException("You do not have permission to manage workspace members.");
+
+        return actor;
+    }
+
+    private void AddMembershipEvent(
+        Guid workspaceId,
+        Guid actorUserId,
+        Guid targetUserId,
+        WorkspaceMembershipAction action,
+        WorkspaceRole oldRole,
+        WorkspaceRole? newRole)
+    {
+        _db.WorkspaceMembershipEvents.Add(new WorkspaceMembershipEvent
+        {
+            Id = Guid.NewGuid(),
+            WorkspaceId = workspaceId,
+            ActorUserId = actorUserId,
+            TargetUserId = targetUserId,
+            Action = action,
+            OldRole = oldRole,
+            NewRole = newRole,
+            OccurredAt = DateTimeOffset.UtcNow
+        });
+    }
+
+    private void LogMembershipChange(
+        Guid workspaceId,
+        Guid actorUserId,
+        Guid targetUserId,
+        WorkspaceMembershipAction action,
+        WorkspaceRole oldRole,
+        WorkspaceRole? newRole)
+    {
+        _logger.LogInformation(
+            "Workspace membership {Action} in {WorkspaceId}: actor {ActorUserId} target {TargetUserId} role {OldRole} -> {NewRole}",
+            action,
+            workspaceId,
+            actorUserId,
+            targetUserId,
+            oldRole,
+            newRole?.ToString() ?? "removed");
     }
 
     private async Task EnsureNotLastOwnerAsync(Guid workspaceId, Guid excludingUserId, CancellationToken cancellationToken)
