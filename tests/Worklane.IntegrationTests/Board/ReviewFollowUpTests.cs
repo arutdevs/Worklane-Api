@@ -52,6 +52,7 @@ public class RateLimitAndQuotaTests : IClassFixture<RateLimitAndQuotaFactory>
         var limited = JsonDocument.Parse(blockedBody).RootElement;
         limited.GetProperty("code").GetString().Should().Be("rate_limited");
         limited.GetProperty("status").GetInt32().Should().Be(StatusCodes.Status429TooManyRequests);
+        limited.GetProperty("retryAfterSeconds").GetInt32().Should().Be((int)blocked.Headers.RetryAfter!.Delta!.Value.TotalSeconds);
 
         (await Upload(board.Client, task.Id, SampleFiles.Png, "still.png")).StatusCode.Should().Be(HttpStatusCode.Created);
         (await Comment(member.Client, task.Id, "member")).StatusCode.Should().Be(HttpStatusCode.Created);

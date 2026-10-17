@@ -576,8 +576,9 @@ public class RestrictedExtensionTests : IClassFixture<RestrictedExtensionFactory
         var board = await BoardTestSetup.CreateAsync(_factory, "ext-owner@test.com");
         var task = await BoardTestSetup.CreateTaskAsync(board, "Text only");
 
-        (await Upload(board.Client, task.Id, SampleFiles.Png, "image/png", "shot.png"))
-            .StatusCode.Should().Be(HttpStatusCode.UnsupportedMediaType);
+        await TaskAttachmentTests.AssertUnsupportedFileType(
+            await Upload(board.Client, task.Id, SampleFiles.Png, "image/png", "shot.png"),
+            ".png");
         (await Upload(board.Client, task.Id, SampleFiles.Text, "application/octet-stream", "note.txt"))
             .StatusCode.Should().Be(HttpStatusCode.Created);
     }
@@ -648,7 +649,9 @@ public class KestrelUploadLimitTests : IClassFixture<KestrelUploadFactory>
             var raised = await board.Client.PostAsync($"/api/tasks/{task.Id}/attachments", form);
             var raisedBody = await raised.Content.ReadAsStringAsync();
             raised.StatusCode.Should().Be(HttpStatusCode.UnsupportedMediaType, raisedBody);
-            JsonDocument.Parse(raisedBody).RootElement.GetProperty("code").GetString().Should().Be("unsupported_media_type");
+            var raisedProblem = JsonDocument.Parse(raisedBody).RootElement;
+            raisedProblem.GetProperty("code").GetString().Should().Be("unsupported_file_type");
+            raisedProblem.GetProperty("extension").GetString().Should().Be(".png");
         }
 
         var overFile = new byte[settings.MaxBytes + 1];
@@ -698,8 +701,10 @@ public class KestrelUploadLimitTests : IClassFixture<KestrelUploadFactory>
         login.Content.Headers.ContentType!.MediaType.Should().Be("application/problem+json");
         JsonDocument.Parse(loginText).RootElement.GetProperty("code").GetString().Should().Be("request_too_large");
 
+        // The oversized login closes the connection. A new client checks that a small body is not 413.
+        using var fresh = _factory.CreateClient();
         var small = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
-        (await board.Client.PostAsync("/api/auth/login", small)).StatusCode.Should().NotBe(HttpStatusCode.RequestEntityTooLarge);
+        (await fresh.PostAsync("/api/auth/login", small)).StatusCode.Should().NotBe(HttpStatusCode.RequestEntityTooLarge);
     }
 }
 

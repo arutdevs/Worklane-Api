@@ -83,10 +83,11 @@ builder.Services.AddRateLimiter(options =>
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
     options.OnRejected = async (context, cancellationToken) =>
     {
+        int? retryAfterSeconds = null;
         if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out TimeSpan retryAfter))
         {
-            var seconds = Math.Max(1, (int)Math.Ceiling(retryAfter.TotalSeconds));
-            context.HttpContext.Response.Headers.RetryAfter = seconds.ToString(CultureInfo.InvariantCulture);
+            retryAfterSeconds = Math.Max(1, (int)Math.Ceiling(retryAfter.TotalSeconds));
+            context.HttpContext.Response.Headers.RetryAfter = retryAfterSeconds.Value.ToString(CultureInfo.InvariantCulture);
         }
 
         context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
@@ -98,6 +99,8 @@ builder.Services.AddRateLimiter(options =>
             Instance = context.HttpContext.Request.Path
         };
         problem.Extensions["code"] = "rate_limited";
+        if (retryAfterSeconds is int seconds)
+            problem.Extensions["retryAfterSeconds"] = seconds;
         await context.HttpContext.Response.WriteAsJsonAsync(
             problem,
             options: null,

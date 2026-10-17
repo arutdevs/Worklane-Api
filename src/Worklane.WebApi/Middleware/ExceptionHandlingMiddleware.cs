@@ -145,8 +145,10 @@ public class ExceptionHandlingMiddleware
         AppException app => app.Code,
         ValidationException => "validation_failed",
         BadHttpRequestException { StatusCode: StatusCodes.Status413PayloadTooLarge } => "request_too_large",
+        BadHttpRequestException { StatusCode: StatusCodes.Status415UnsupportedMediaType } => "unsupported_file_type",
         BadHttpRequestException => "invalid_request_body",
         InvalidDataException { InnerException: BadHttpRequestException { StatusCode: StatusCodes.Status413PayloadTooLarge } } => "request_too_large",
+        InvalidDataException { InnerException: BadHttpRequestException { StatusCode: StatusCodes.Status415UnsupportedMediaType } } => "unsupported_file_type",
         InvalidDataException { InnerException: BadHttpRequestException } => "invalid_request_body",
         _ => statusCode switch
         {
@@ -156,7 +158,7 @@ public class ExceptionHandlingMiddleware
             HttpStatusCode.NotFound => "not_found",
             HttpStatusCode.Conflict => "conflict",
             HttpStatusCode.RequestEntityTooLarge => "request_too_large",
-            HttpStatusCode.UnsupportedMediaType => "unsupported_media_type",
+            HttpStatusCode.UnsupportedMediaType => "unsupported_file_type",
             HttpStatusCode.TooManyRequests => "rate_limited",
             _ => "internal_error"
         }
