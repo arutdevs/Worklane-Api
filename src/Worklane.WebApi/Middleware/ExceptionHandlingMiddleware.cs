@@ -75,9 +75,11 @@ public class ExceptionHandlingMiddleware
                 .ToDictionary(g => g.Key, g => g.Select(e => e.ErrorMessage).ToArray());
         }
 
-        context.Response.ContentType = "application/problem+json";
         context.Response.StatusCode = (int)statusCode;
-        await context.Response.WriteAsJsonAsync(problemDetails);
+        await context.Response.WriteAsJsonAsync(
+            problemDetails,
+            options: null,
+            contentType: "application/problem+json");
     }
 
     /// <summary>

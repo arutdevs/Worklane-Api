@@ -5,7 +5,6 @@ using Worklane.Application.Board.Dtos;
 using Worklane.Application.Board.Interfaces;
 using Worklane.Application.Common.Exceptions;
 using Worklane.Application.Common.Interfaces;
-using Worklane.Application.Common.Options;
 using Worklane.Domain.Enums;
 using Worklane.WebApi.Filters;
 
@@ -40,7 +39,7 @@ public class TaskAttachmentsController : ControllerBase
     [HttpPost("api/tasks/{taskId:guid}/attachments")]
     [Consumes("multipart/form-data")]
     [EnableRateLimiting("attachments")]
-    [RequestSizeLimit(FileStorageSettings.AttachmentRequestLimitBytes)]
+    [AttachmentUploadLimit]
     [RequireWorkspaceRole(WorkspaceRole.Member, WorkspaceResourceType.Task, "taskId")]
     public async Task<ActionResult<AttachmentDto>> Upload(Guid taskId, CancellationToken ct)
     {

@@ -1,12 +1,14 @@
 using System.Text;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Worklane.Application.Common.Exceptions;
 using Worklane.Application.Common.Options;
+using Worklane.Infrastructure;
 using Worklane.Infrastructure.Services;
 
 namespace Worklane.IntegrationTests.Infrastructure;
@@ -16,7 +18,63 @@ public class FileStorageTests
     [Fact]
     public void DefaultMaxBytes_IsTenMegabytes()
     {
-        new FileStorageSettings().MaxBytes.Should().Be(10 * 1024 * 1024);
+        var settings = new FileStorageSettings();
+        settings.MaxBytes.Should().Be(10 * 1024 * 1024);
+        settings.AttachmentRequestLimit.Should().Be(11 * 1024 * 1024);
+    }
+
+    [Theory]
+    [InlineData("FileStorage:MaxBytes", "0")]
+    [InlineData("FileStorage:MaxBytes", "-1")]
+    [InlineData("FileStorage:WorkspaceQuotaBytes", "0")]
+    [InlineData("FileStorage:WorkspaceQuotaBytes", "-8")]
+    public void NonPositiveStorageLimits_FailValidateOnStart(string key, string value)
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["ConnectionStrings:Default"] = "Host=localhost;Database=worklane;Username=worklane;Password=worklane",
+            [key] = value
+        }).Build();
+
+        var services = new ServiceCollection();
+        services.AddSingleton<IConfiguration>(config);
+        services.AddLogging();
+        services.AddInfrastructure(config);
+        using var provider = services.BuildServiceProvider();
+
+        var act = () =>
+        {
+            foreach (var validator in provider.GetServices<IStartupValidator>())
+                validator.Validate();
+        };
+
+        act.Should().Throw<OptionsValidationException>()
+            .Which.Failures.Should().Contain(message => message.Contains(key, StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("0", 0L)]
+    [InlineData("-5", -5L)]
+    public void ConfiguredNonPositiveLimits_AreBound(string raw, long expected)
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["FileStorage:MaxBytes"] = raw,
+            ["FileStorage:WorkspaceQuotaBytes"] = raw
+        }).Build();
+
+        var settings = FileStorageSettings.FromConfiguration(config);
+        settings.MaxBytes.Should().Be(expected);
+        settings.WorkspaceQuotaBytes.Should().Be(expected);
+    }
+
+    [Fact]
+    public void TextScan_RejectsAMarkerSplitAcrossChunks()
+    {
+        var checker = StreamingTextChecker.Create(".csv", "a,b\n"u8);
+        checker.Accept("aaaa,<scr"u8);
+        var act = () => checker.Accept("ipt>x\n"u8);
+        act.Should().Throw<UnsupportedMediaTypeException>();
     }
 
     [Fact]

@@ -41,6 +41,21 @@ public class SecurityReviewTests : IClassFixture<WorklaneWebApplicationFactory>
     }
 
     [Fact]
+    public async Task Cors_ExposesContentDispositionAndRetryAfter()
+    {
+        var client = _factory.CreateClient();
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/auth/login");
+        request.Headers.TryAddWithoutValidation("Origin", "http://localhost:4200");
+        request.Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
+
+        var response = await client.SendAsync(request);
+        response.Headers.TryGetValues("Access-Control-Expose-Headers", out var exposed).Should().BeTrue();
+        var header = string.Join(',', exposed ?? []);
+        header.Should().Contain("Content-Disposition");
+        header.Should().Contain("Retry-After");
+    }
+
+    [Fact]
     public async Task CreateMoveAndPatch_RejectColumnsFromAnotherProjectOrWorkspace()
     {
         var board = await BoardTestSetup.CreateAsync(_factory, "columns-owner@test.com", "Owner");
@@ -401,17 +416,37 @@ public class SecurityReviewTests : IClassFixture<WorklaneWebApplicationFactory>
                 Type = TaskActivityType.CommentEdited,
                 ActorUserId = board.User.Tokens.User.Id,
                 CreatedAt = DateTimeOffset.UtcNow,
-                Details = $$"""{"commentId":"{{legacyId}}","oldValue":"legacy-secret","newValue":"legacy-secret"}"""
+                Details = $$"""{"commentId":"{{legacyId}}","oldValue":"legacy-secret","newValue":"legacy-secret","edited":true}"""
+            });
+            db.TaskActivities.Add(new Worklane.Domain.Entities.TaskActivity
+            {
+                Id = Guid.NewGuid(),
+                TaskId = task.Id,
+                Type = TaskActivityType.CommentAdded,
+                ActorUserId = board.User.Tokens.User.Id,
+                CreatedAt = DateTimeOffset.UtcNow,
+                Details = $$"""{"commentId":"{{live!.Id}}","body":"still-here"}"""
+            });
+            db.TaskActivities.Add(new Worklane.Domain.Entities.TaskActivity
+            {
+                Id = Guid.NewGuid(),
+                TaskId = task.Id,
+                Type = TaskActivityType.CommentEdited,
+                ActorUserId = board.User.Tokens.User.Id,
+                CreatedAt = DateTimeOffset.UtcNow,
+                Details = $$"""{"commentId":"{{live.Id}}","oldValue":"still-here","newValue":"still-here","edited":true}"""
             });
             await db.SaveChangesAsync();
 
             // ExecuteSqlRaw formats {n} placeholders. The redaction regex uses
-            // {8}/{4}/{12}, so it has to run as a raw command.
+            // {8}/{4}/{12}, so it has to run as a raw command. Twice, because the
+            // statement must be safe to run again.
             var connection = db.Database.GetDbConnection();
             if (connection.State != System.Data.ConnectionState.Open)
                 await connection.OpenAsync();
             await using var command = connection.CreateCommand();
             command.CommandText = DeletedCommentActivityRedaction.Sql;
+            await command.ExecuteNonQueryAsync();
             await command.ExecuteNonQueryAsync();
         }
 
@@ -422,10 +457,19 @@ public class SecurityReviewTests : IClassFixture<WorklaneWebApplicationFactory>
             row.Details!.Value.GetProperty("commentId").GetGuid() == legacyId);
         legacyEdit.Details!.Value.TryGetProperty("oldValue", out _).Should().BeFalse();
         legacyEdit.Details.Value.TryGetProperty("newValue", out _).Should().BeFalse();
+        var liveEdit = activity!.Single(row =>
+            row.Type == TaskActivityType.CommentEdited &&
+            row.Details!.Value.GetProperty("commentId").GetGuid() == live!.Id);
+        liveEdit.Details!.Value.GetProperty("edited").GetBoolean().Should().BeTrue();
+        liveEdit.Details.Value.TryGetProperty("oldValue", out _).Should().BeFalse();
+        liveEdit.Details.Value.TryGetProperty("newValue", out _).Should().BeFalse();
         var text = await (await board.Client.GetAsync($"/api/tasks/{task.Id}/activity")).Content.ReadAsStringAsync();
         text.Should().NotContain("legacy-secret");
-        text.Should().Contain("still-here");
-        text.Should().Contain(live!.Id.ToString());
+        text.Should().NotContain("still-here");
+        text.Should().Contain(live.Id.ToString());
+        var comments = await (await board.Client.GetAsync($"/api/tasks/{task.Id}/comments"))
+            .Content.ReadFromJsonAsync<List<CommentDto>>(TestAuthHelper.JsonOptions);
+        comments!.Single().Body.Should().Be("still-here");
     }
 
     [Fact]
@@ -542,13 +586,18 @@ public class KestrelUploadLimitTests : IClassFixture<KestrelUploadFactory>
         var board = await BoardTestSetup.CreateAsync(_factory, "kestrel-owner@test.com");
         var task = await BoardTestSetup.CreateTaskAsync(board, "Big");
 
+        var settings = _factory.Services.GetRequiredService<IOptions<FileStorageSettings>>().Value;
+        var transportLimit = settings.MaxBytes + FileStorageSettings.UploadEnvelopeBytes;
         var dataSource = _factory.Services.GetRequiredService<EndpointDataSource>();
         var uploadLimit = dataSource.Endpoints
             .Select(endpoint => endpoint.Metadata.GetMetadata<IRequestSizeLimitMetadata>())
-            .FirstOrDefault(metadata => metadata?.MaxRequestBodySize == FileStorageSettings.AttachmentRequestLimitBytes);
+            .FirstOrDefault(metadata => metadata?.MaxRequestBodySize == transportLimit);
         uploadLimit.Should().NotBeNull();
+        settings.MaxBytes.Should().Be(3 * 1024 * 1024);
+        transportLimit.Should().Be(settings.MaxBytes + FileStorageSettings.UploadEnvelopeBytes);
+        new FileStorageSettings().AttachmentRequestLimit.Should().Be(11 * 1024 * 1024);
         FileStorageSettings.GlobalRequestBodyLimitBytes.Should().Be(2 * 1024 * 1024);
-        FileStorageSettings.AttachmentRequestLimitBytes.Should().BeGreaterThan(FileStorageSettings.GlobalRequestBodyLimitBytes);
+        transportLimit.Should().BeGreaterThan(FileStorageSettings.GlobalRequestBodyLimitBytes);
 
         var overGlobal = new byte[FileStorageSettings.GlobalRequestBodyLimitBytes + 1];
         using (var form = new MultipartFormDataContent())
@@ -557,12 +606,23 @@ public class KestrelUploadLimitTests : IClassFixture<KestrelUploadFactory>
             file.Headers.ContentType = new MediaTypeHeaderValue("image/png");
             form.Add(file, "file", "mid.png");
             var raised = await board.Client.PostAsync($"/api/tasks/{task.Id}/attachments", form);
-            var raisedBody = await raised.Content.ReadAsStringAsync();
-            raised.StatusCode.Should().Be(HttpStatusCode.RequestEntityTooLarge, raisedBody);
-            raisedBody.Should().Contain("File exceeds the maximum size");
+            raised.StatusCode.Should().Be(HttpStatusCode.UnsupportedMediaType);
         }
 
-        var overEndpoint = new byte[FileStorageSettings.AttachmentRequestLimitBytes + 1];
+        var overFile = new byte[settings.MaxBytes + 1];
+        SampleFiles.Png.CopyTo(overFile, 0);
+        using (var form = new MultipartFormDataContent())
+        {
+            var file = new ByteArrayContent(overFile);
+            file.Headers.ContentType = new MediaTypeHeaderValue("image/png");
+            form.Add(file, "file", "cap.png");
+            var capped = await board.Client.PostAsync($"/api/tasks/{task.Id}/attachments", form);
+            var cappedBody = await capped.Content.ReadAsStringAsync();
+            capped.StatusCode.Should().Be(HttpStatusCode.RequestEntityTooLarge, cappedBody);
+            cappedBody.Should().Contain("File exceeds the maximum size");
+        }
+
+        var overEndpoint = new byte[transportLimit + 1];
         using (var form = new MultipartFormDataContent())
         {
             var file = new ByteArrayContent(overEndpoint);
@@ -579,6 +639,7 @@ public class KestrelUploadLimitTests : IClassFixture<KestrelUploadFactory>
             var upload = await board.Client.SendAsync(request);
             var uploadBody = await upload.Content.ReadAsStringAsync();
             upload.StatusCode.Should().Be(HttpStatusCode.RequestEntityTooLarge, uploadBody);
+            upload.Content.Headers.ContentType!.MediaType.Should().Be("application/problem+json");
             uploadBody.Should().Contain("exceeds the size limit");
             uploadBody.Should().NotContain("File exceeds the maximum size");
         }
@@ -587,6 +648,7 @@ public class KestrelUploadLimitTests : IClassFixture<KestrelUploadFactory>
         loginBody.Headers.ContentType = new MediaTypeHeaderValue("application/json");
         var login = await board.Client.PostAsync("/api/auth/login", loginBody);
         login.StatusCode.Should().Be(HttpStatusCode.RequestEntityTooLarge);
+        login.Content.Headers.ContentType!.MediaType.Should().Be("application/problem+json");
 
         var small = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
         (await board.Client.PostAsync("/api/auth/login", small)).StatusCode.Should().NotBe(HttpStatusCode.RequestEntityTooLarge);
@@ -598,5 +660,17 @@ public class KestrelUploadFactory : WorklaneWebApplicationFactory
     public KestrelUploadFactory()
     {
         UseKestrel();
+    }
+
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
+        base.ConfigureWebHost(builder);
+        builder.ConfigureAppConfiguration((_, config) =>
+        {
+            config.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["FileStorage:MaxBytes"] = (3 * 1024 * 1024).ToString()
+            });
+        });
     }
 }

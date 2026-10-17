@@ -76,9 +76,11 @@ Worklane = ระบบจัดการงานแบบ multi-tenant (Jira �
 - **ไฟล์แนบ** — อัปโหลดผ่าน `IFileStorage` (ดิสก์ในเครื่อง, สลับ S3/Blob ได้ทีหลัง), จำกัดขนาดและชนิดไฟล์, ดาวน์โหลดเช็ค tenant เหมือน endpoint อื่น
 - **จำนวนคอมเมนต์/ไฟล์บนการ์ด** — `commentCount` และ `attachmentCount` อยู่ใน task DTO ทุกเส้น (get, list, my-tasks, การ์ดในคอลัมน์, create/move/update) นับด้วยสอง grouped query ต่อชุดผลลัพธ์ ไม่ยิงทีละการ์ด และ broadcast `TaskUpdated` เมื่อคอมเมนต์หรือไฟล์เปลี่ยน
 - **คอลัมน์ต้องอยู่โปรเจกต์เดียวกัน** — create/move/PATCH ที่ชี้คอลัมน์คนละโปรเจกต์หรือคนละ workspace ได้ 404 และไม่เก็บชื่อคอลัมน์นั้นใน activity; `BoardColumn` มี tenant filter
-- **ลบคอมเมนต์แล้วข้อความหายจาก activity** — แถว CommentAdded/CommentEdited ถูกลบ `body`/`oldValue`/`newValue`
+- **คอมเมนต์ไม่เก็บข้อความใน activity** — `CommentAdded` มีแค่ `commentId`, `CommentEdited` มีแค่ `commentId` กับ `edited: true` และ migration ลบ `body`/`oldValue`/`newValue` จากแถวเดิมทุกแถว (รันซ้ำได้, Down ไม่คืนข้อความ)
 - **ไฟล์แนบ** — ตรวจนามสกุลและ magic bytes จากหัวไฟล์ ไม่เชื่อ Content-Type จาก client, รองรับ CSV ไทยแบบ TIS-620/cp874 และ UTF-16 ที่มี BOM แต่ยังปฏิเสธ HTML/สคริปต์, ดาวน์โหลดเป็น `application/octet-stream` พร้อม `nosniff` และ CSP, เส้นอัปโหลดใช้ `[RequestSizeLimit]` ที่ 11 MB, endpoint อื่นจำกัดที่ 2 MB, โควต้าต่อ workspace (`FileStorage:WorkspaceQuotaBytes`, รวม `SizeBytes`) เกินแล้วได้ **409**
-- **เรตลิมิต** — policy `attachments` แบ่งตาม user sub กับ workspace, ใส่บนอัปโหลดและสร้างคอมเมนต์, เกินแล้วได้ **429**
+- **เรตลิมิต** — อัปโหลดใช้ policy `attachments` (30 ครั้ง/นาที) สร้างคอมเมนต์ใช้ `comments` (60 ครั้ง/นาที) คนละถัง แบ่งตาม user sub กับ workspace, เกินแล้วได้ **429** เป็น `problem+json` พร้อม `Retry-After`; CORS เปิด `Content-Disposition` และ `Retry-After`
+- **เพดานอัปโหลดตาม MaxBytes** — ค่าเริ่มต้น 10 MB ได้เพดาน 11 MB, ตั้ง MaxBytes หรือโควต้าเป็น 0 หรือติดลบแล้วโปรเซสไม่สตาร์ท
+- **ข้อความในไฟล์ csv/txt** — สแกนทุกช่วงที่สตรีม รวมช่วงที่คาบระหว่างก้อน ไม่บัฟเฟอร์ทั้งไฟล์ซ้ำ
 - **SignalR หลายโปรเจกต์** — connection หนึ่งเข้าได้หลายโปรเจกต์, ถอดสมาชิกแล้วออกจากทุกกลุ่มใน workspace นั้น (ในโปรเซสนี้เท่านั้น), `JoinProject` เช็คซ้ำหลังเข้ากลุ่มและไม่รับโปรเจกต์ที่ archive
 - **แก้คอมเมนต์** — activity เก็บแค่ `commentId` กับ `edited: true` ไม่เก็บข้อความเก่า, migration ลบข้อความของคอมเมนต์ที่ถูกลบไปก่อนหน้านี้, การแก้ไม่ broadcast `TaskUpdated`
 - **ลบแล้ว broadcast พัง** — จับ exception แล้ว log, การลบที่บันทึกแล้วไม่กลายเป็น 404/500
@@ -87,7 +89,7 @@ Worklane = ระบบจัดการงานแบบ multi-tenant (Jira �
 - **tenant filter ปิดเมื่อไม่มี workspace** — query ที่ยังไม่ปัก tenant ไม่คืนแถว; assignee ต้องเป็นสมาชิก workspace; 500 ไม่ส่ง `exception.Message`
 - **แมนเดย์วันหยุดสุดสัปดาห์ = 0** (WL-35) — คงกฎเดิม ไม่มีปฏิทินวันหยุดนักขัตฤกษ์
 
-**เทสต์:** `dotnet test` ✅ **100 ผ่าน / 0 พัง** (เรตลิมิต, โควต้า, presence หลายโปรเจกต์, redact ข้อความเก่า, และข้อความ error คงที่)
+**เทสต์:** `dotnet test` ✅ **110 ผ่าน / 0 พัง** (โควต้าแบบล็อก, สแกนข้อความทั้งไฟล์, เรตลิมิตคนละถัง, เพดานอัปโหลดตาม MaxBytes, และ 413 เป็น problem+json)
 
 ### Frontend
 

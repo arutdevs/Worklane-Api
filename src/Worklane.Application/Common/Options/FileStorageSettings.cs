@@ -85,10 +85,12 @@ public class FileStorageSettings
         if (!string.IsNullOrWhiteSpace(path))
             settings.LocalPath = path;
 
-        if (long.TryParse(section[nameof(MaxBytes)], out var maxBytes) && maxBytes > 0)
+        // Non-positive values are kept so startup validation can reject them.
+        // A missing or unparseable value stays on the positive default.
+        if (long.TryParse(section[nameof(MaxBytes)], out var maxBytes))
             settings.MaxBytes = maxBytes;
 
-        if (long.TryParse(section[nameof(WorkspaceQuotaBytes)], out var quota) && quota >= 0)
+        if (long.TryParse(section[nameof(WorkspaceQuotaBytes)], out var quota))
             settings.WorkspaceQuotaBytes = quota;
 
         if (section.GetSection(nameof(AllowedContentTypes)).Exists())

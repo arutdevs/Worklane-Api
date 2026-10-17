@@ -39,15 +39,16 @@ public class NotificationsHub : Hub
 
         await Groups.AddToGroupAsync(Context.ConnectionId, GroupName(projectId));
 
-        // Membership can be removed between the check and the group add. Drop the group
-        // again so a removed member does not stay subscribed.
+        // Join before the second membership check so a removal that lands in this
+        // window already sees the connection. If the check fails, LeaveProject drops
+        // both the group and the presence entry.
+        var justCameOnline = _presence.Join(projectId, userId, Context.ConnectionId);
         if (!await CanJoinAsync(projectId, userId))
         {
-            await Groups.RemoveFromGroupAsync(Context.ConnectionId, GroupName(projectId));
+            await LeaveProject(projectId);
             throw new HubException("You are not a member of this workspace.");
         }
 
-        var justCameOnline = _presence.Join(projectId, userId, Context.ConnectionId);
         await Clients.Caller.SendAsync("PresenceSnapshot", _presence.OnlineUserIds(projectId));
         if (justCameOnline)
             await Clients.OthersInGroup(GroupName(projectId)).SendAsync("UserOnline", userId);

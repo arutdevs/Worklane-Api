@@ -103,7 +103,8 @@ public class TaskAttachmentService : ITaskAttachmentService
         if (!FileSignature.Matches(extension, header.AsSpan(0, headerRead)))
             throw new UnsupportedMediaTypeException(extension);
 
-        var used = await WorkspaceUsageAsync(task.Project.WorkspaceId, cancellationToken);
+        var workspaceId = task.Project.WorkspaceId;
+        var used = await WorkspaceUsageAsync(workspaceId, cancellationToken);
         if (used >= _settings.WorkspaceQuotaBytes)
             throw new ConflictException("Workspace storage quota exceeded.");
 
@@ -116,44 +117,48 @@ public class TaskAttachmentService : ITaskAttachmentService
             FileName = safeName,
             ContentType = detectedType,
             CreatedAt = DateTimeOffset.UtcNow,
-            StorageKey = $"{task.Project.WorkspaceId:N}/{task.Id:N}/{attachmentId:N}"
+            StorageKey = $"{workspaceId:N}/{task.Id:N}/{attachmentId:N}"
         };
 
         await using var prefixed = new PrefixedReadStream(header.AsMemory(0, headerRead), content);
-        var size = await _storage.SaveAsync(attachment.StorageKey, prefixed, _settings.MaxBytes, cancellationToken);
+        Stream body = prefixed;
+        if (StreamingTextChecker.RequiresFullScan(extension))
+            body = new ScanningReadStream(prefixed, StreamingTextChecker.Create(extension, header.AsSpan(0, headerRead)));
+
+        var size = await _storage.SaveAsync(attachment.StorageKey, body, _settings.MaxBytes, cancellationToken);
         if (size <= 0)
         {
             await _storage.DeleteAsync(attachment.StorageKey, cancellationToken);
             throw new BadRequestException("A non-empty file is required.");
         }
 
-        if (used + size > _settings.WorkspaceQuotaBytes)
-        {
-            await _storage.DeleteAsync(attachment.StorageKey, cancellationToken);
-            throw new ConflictException("Workspace storage quota exceeded.");
-        }
-
-        attachment.SizeBytes = size;
-        _db.TaskAttachments.Add(attachment);
-        _db.TaskActivities.Add(new TaskActivity
-        {
-            Id = Guid.NewGuid(),
-            TaskId = task.Id,
-            Type = TaskActivityType.AttachmentAdded,
-            ActorUserId = userId,
-            CreatedAt = attachment.CreatedAt,
-            Details = ActivityJson.Of(new
-            {
-                attachmentId = attachment.Id,
-                fileName = attachment.FileName,
-                contentType = attachment.ContentType,
-                sizeBytes = attachment.SizeBytes
-            })
-        });
-
         try
         {
+            await using var transaction = await _db.Database.BeginTransactionAsync(cancellationToken);
+            await WorkspaceQuotaLock.AcquireAsync(_db.Database, workspaceId, cancellationToken);
+            var usedNow = await WorkspaceUsageAsync(workspaceId, cancellationToken);
+            if (usedNow + size > _settings.WorkspaceQuotaBytes)
+                throw new ConflictException("Workspace storage quota exceeded.");
+
+            attachment.SizeBytes = size;
+            _db.TaskAttachments.Add(attachment);
+            _db.TaskActivities.Add(new TaskActivity
+            {
+                Id = Guid.NewGuid(),
+                TaskId = task.Id,
+                Type = TaskActivityType.AttachmentAdded,
+                ActorUserId = userId,
+                CreatedAt = attachment.CreatedAt,
+                Details = ActivityJson.Of(new
+                {
+                    attachmentId = attachment.Id,
+                    fileName = attachment.FileName,
+                    contentType = attachment.ContentType,
+                    sizeBytes = attachment.SizeBytes
+                })
+            });
             await _db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
         }
         catch
         {
