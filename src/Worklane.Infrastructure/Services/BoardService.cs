@@ -39,6 +39,7 @@ public class BoardService : IBoardService
             .ToListAsync(ct);
 
         var assigneeMap = await BuildAssigneeMapAsync(tasks, ct);
+        var cardCounts = await LoadCardCountsAsync(tasks.Select(t => t.Id), ct);
 
         return columns.Select(col =>
         {
@@ -46,7 +47,7 @@ public class BoardService : IBoardService
             var over = IsOverWip(col.WipLimit, colTasks.Count);
             return new BoardColumnDto(
                 col.Id, col.ProjectId, col.Name, col.Order, col.IsDone, col.IsInProgress,
-                colTasks.Select(t => ToDto(t, project.Key, assigneeMap, over)).ToList(),
+                colTasks.Select(t => ToDto(t, project.Key, assigneeMap, over, cardCounts)).ToList(),
                 col.WipLimit, colTasks.Count, over);
         }).ToList();
     }
@@ -196,7 +197,7 @@ public class BoardService : IBoardService
         });
         await _db.SaveChangesAsync(ct);
 
-        var dto = ToDto(task, project.Key, await BuildAssigneeMapAsync([task], ct), await IsColumnOverWipAsync(columnId, ct));
+        var dto = ToDto(task, project.Key, await BuildAssigneeMapAsync([task], ct), await IsColumnOverWipAsync(columnId, ct), await LoadCardCountsAsync([task.Id], ct));
         await _notifier.TaskCreatedAsync(projectId, dto, ct);
         return dto;
     }
@@ -208,7 +209,7 @@ public class BoardService : IBoardService
             .FirstOrDefaultAsync(t => t.Id == taskId, ct)
             ?? throw new NotFoundException(nameof(TaskItem), taskId);
 
-        return ToDto(task, task.Project.Key, await BuildAssigneeMapAsync([task], ct), await IsColumnOverWipAsync(task.ColumnId, ct));
+        return ToDto(task, task.Project.Key, await BuildAssigneeMapAsync([task], ct), await IsColumnOverWipAsync(task.ColumnId, ct), await LoadCardCountsAsync([task.Id], ct));
     }
 
     public async Task<TaskItemDto> UpdateTaskAsync(Guid taskId, UpdateTaskRequest request, Guid userId, CancellationToken ct = default)
@@ -394,8 +395,9 @@ public class BoardService : IBoardService
         var tasks = await query.OrderBy(t => t.Order).ToListAsync(ct);
         var assigneeMap = await BuildAssigneeMapAsync(tasks, ct);
         var wip = await LoadWipAsync(tasks.Select(t => t.ColumnId), ct);
+        var cardCounts = await LoadCardCountsAsync(tasks.Select(t => t.Id), ct);
 
-        return tasks.Select(t => ToDto(t, project.Key, assigneeMap, Over(wip, t.ColumnId))).ToList();
+        return tasks.Select(t => ToDto(t, project.Key, assigneeMap, Over(wip, t.ColumnId), cardCounts)).ToList();
     }
 
     public async Task<IReadOnlyList<MyTaskDto>> GetMyTasksAsync(Guid workspaceId, Guid userId, CancellationToken ct = default)
@@ -413,10 +415,11 @@ public class BoardService : IBoardService
 
         var assigneeMap = await BuildAssigneeMapAsync(tasks, ct);
         var wip = await LoadWipAsync(tasks.Select(t => t.ColumnId), ct);
+        var cardCounts = await LoadCardCountsAsync(tasks.Select(t => t.Id), ct);
 
         return tasks
             .Select(t => new MyTaskDto(
-                ToDto(t, t.Project.Key, assigneeMap, Over(wip, t.ColumnId)),
+                ToDto(t, t.Project.Key, assigneeMap, Over(wip, t.ColumnId), cardCounts),
                 t.Project.Key,
                 t.Project.Name,
                 t.Column.Name,
@@ -516,6 +519,34 @@ public class BoardService : IBoardService
             c => new ColumnWip(c.WipLimit, counts.GetValueOrDefault(c.Id)));
     }
 
+    private readonly record struct CardCounts(int Comments, int Attachments);
+
+    /// <summary>
+    /// Comment and attachment totals for a set of cards, in two grouped queries.
+    /// Tasks with neither stay at zero via <see cref="Dictionary{TKey,TValue}.GetValueOrDefault"/>.
+    /// </summary>
+    private async Task<Dictionary<Guid, CardCounts>> LoadCardCountsAsync(IEnumerable<Guid> taskIds, CancellationToken ct)
+    {
+        var ids = taskIds.Distinct().ToList();
+        if (ids.Count == 0) return [];
+
+        var comments = await _db.TaskComments
+            .Where(c => ids.Contains(c.TaskId))
+            .GroupBy(c => c.TaskId)
+            .Select(g => new { TaskId = g.Key, Count = g.Count() })
+            .ToDictionaryAsync(x => x.TaskId, x => x.Count, ct);
+
+        var attachments = await _db.TaskAttachments
+            .Where(a => ids.Contains(a.TaskId))
+            .GroupBy(a => a.TaskId)
+            .Select(g => new { TaskId = g.Key, Count = g.Count() })
+            .ToDictionaryAsync(x => x.TaskId, x => x.Count, ct);
+
+        return ids.ToDictionary(
+            id => id,
+            id => new CardCounts(comments.GetValueOrDefault(id), attachments.GetValueOrDefault(id)));
+    }
+
     private static string? IdText(Guid? id) => id?.ToString();
 
     private static string? DateText(DateTimeOffset? value) => value?.ToString("O");
@@ -524,7 +555,8 @@ public class BoardService : IBoardService
         TaskItem t,
         string projectKey,
         Dictionary<Guid, (string DisplayName, string? AvatarUrl)> assigneeMap,
-        bool isOverWipLimit)
+        bool isOverWipLimit,
+        IReadOnlyDictionary<Guid, CardCounts> cardCounts)
     {
         (string? name, string? avatar) = t.AssigneeId.HasValue && assigneeMap.TryGetValue(t.AssigneeId.Value, out var a)
             ? a
@@ -532,6 +564,7 @@ public class BoardService : IBoardService
 
         var (actualDays, isOverEstimate, daysOverEstimate) = CalculateEffort(t);
         var (isOverdue, daysOverdue) = CalculateOverdue(t);
+        var counts = cardCounts.GetValueOrDefault(t.Id);
 
         return new TaskItemDto(
             t.Id, t.ProjectId, t.ColumnId,
@@ -543,7 +576,8 @@ public class BoardService : IBoardService
             t.EstimateDays, t.StartedAt, t.CompletedAt,
             actualDays, isOverEstimate, daysOverEstimate,
             isOverdue, daysOverdue,
-            isOverWipLimit);
+            isOverWipLimit,
+            counts.Comments, counts.Attachments);
     }
 
     /// <summary>

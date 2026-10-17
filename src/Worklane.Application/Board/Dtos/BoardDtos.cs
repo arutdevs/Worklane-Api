@@ -57,7 +57,13 @@ public record TaskItemDto(
     /// True when the task's current column has a WIP limit and more cards than that
     /// limit. Create and move responses report the destination column.
     /// </summary>
-    bool IsOverWipLimit
+    bool IsOverWipLimit,
+
+    /// <summary>Comments on this card. Present on every task payload so the board can badge a card without opening it.</summary>
+    int CommentCount,
+
+    /// <summary>Files attached to this card.</summary>
+    int AttachmentCount
 );
 
 public record CreateColumnRequest(string Name, int? WipLimit = null);

@@ -74,9 +74,10 @@ Worklane = ระบบจัดการงานแบบ multi-tenant (Jira �
 - **คอมเมนต์** — สร้าง/ดู/แก้ (เจ้าของเท่านั้น)/ลบ (เจ้าของ หรือ admin/owner) แล้ว broadcast ผ่าน SignalR
 - **WIP limit แบบ soft** — ตั้งบนคอลัมน์ได้, เกินแล้วยังย้าย/สร้างการ์ดได้ แต่ response บอก `isOverWipLimit`
 - **ไฟล์แนบ** — อัปโหลดผ่าน `IFileStorage` (ดิสก์ในเครื่อง, สลับ S3/Blob ได้ทีหลัง), จำกัดขนาดและชนิดไฟล์, ดาวน์โหลดเช็ค tenant เหมือน endpoint อื่น
+- **จำนวนคอมเมนต์/ไฟล์บนการ์ด** — `commentCount` และ `attachmentCount` อยู่ใน task DTO ทุกเส้น (get, list, my-tasks, การ์ดในคอลัมน์, create/move/update) นับด้วยสอง grouped query ต่อชุดผลลัพธ์ ไม่ยิงทีละการ์ด
 - **แมนเดย์วันหยุดสุดสัปดาห์ = 0** (WL-35) — คงกฎเดิม ไม่มีปฏิทินวันหยุดนักขัตฤกษ์
 
-**เทสต์:** `dotnet test` → ✅ **68/68 ผ่าน** (ของเดิม 45 + activity, comments, WIP, attachments, file storage)
+**เทสต์:** `dotnet test` → ✅ **69/69 ผ่าน** (ของเดิม 45 + activity, comments, WIP, attachments, file storage, card counts)
 
 ### Frontend
 

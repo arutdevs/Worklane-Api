@@ -72,7 +72,7 @@ JSON is camelCase. Enums are strings. `UserRef` is `{ userId, displayName }`.
 
 `AttachmentDto`: `{ id, taskId, fileName, contentType, sizeBytes, uploadedBy: UserRef, createdAt }`. Files are stored through `IFileStorage` (local disk at `FileStorage:LocalPath`, default 10 MB, content-type allow-list in `appsettings.json`). Over the cap is **413**, a disallowed type is **415**, an empty file is **400**. Download and delete resolve the workspace from the attachment id, the same way other task routes do — guessing an id from another workspace is rejected. The uploader, or a workspace admin or owner, can delete. `docker compose` mounts the `attachments` volume at `/var/worklane/attachments`.
 
-Create and move responses are still the task object, plus `isOverWipLimit` for the destination column. The limit is soft: a full column still accepts the card. `isOverWipLimit` is true only when the card count is **greater** than `wipLimit` (sitting exactly at the limit is not over). The same flag is on every task payload, because they share one DTO.
+Every task payload (get, project list, my-tasks, cards inside a column, and create/move/update) includes `commentCount` and `attachmentCount`, filled by two grouped counts for the whole result set. Create and move responses are still the task object, plus `isOverWipLimit` for the destination column. The limit is soft: a full column still accepts the card. `isOverWipLimit` is true only when the card count is **greater** than `wipLimit` (sitting exactly at the limit is not over). The same flag is on every task payload, because they share one DTO.
 
 SignalR group `project:{projectId}` (`JoinProject` / `LeaveProject`):
 
