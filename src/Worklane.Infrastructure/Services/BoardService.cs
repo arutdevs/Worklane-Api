@@ -129,10 +129,17 @@ public class BoardService : IBoardService
 
             if (otherColumns == 0 && archivedCount > 0)
             {
+                var parameters = new Dictionary<string, object?>
+                {
+                    ["archivedTaskCount"] = archivedCount
+                };
+                if (activeCount > 0)
+                    parameters["activeTaskCount"] = activeCount;
+
                 throw new ConflictException(
                     "last_column_has_archived_cards",
                     $"This is the project's last column and it has {archivedCount} archived card(s). Purge them or add another column first.",
-                    ErrorParams.Of(("archivedTaskCount", archivedCount)));
+                    parameters);
             }
 
             if (activeCount > 0)

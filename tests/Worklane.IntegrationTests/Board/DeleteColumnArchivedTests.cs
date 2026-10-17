@@ -162,7 +162,7 @@ public class DeleteColumnArchivedTests : IClassFixture<WorklaneWebApplicationFac
         var problem = JsonDocument.Parse(body).RootElement;
         problem.GetProperty("code").GetString().Should().Be("last_column_has_archived_cards");
         problem.GetProperty("archivedTaskCount").GetInt32().Should().Be(1);
-        problem.TryGetProperty("activeTaskCount", out _).Should().BeFalse();
+        problem.GetProperty("activeTaskCount").GetInt32().Should().Be(1);
     }
 
     [Fact]
