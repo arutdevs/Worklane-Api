@@ -11,4 +11,7 @@ public interface IProjectService
 
     /// <summary>Used by RequireWorkspaceRoleAttribute to resolve which workspace a project belongs to.</summary>
     Task<Guid?> GetWorkspaceIdForProjectAsync(Guid projectId, CancellationToken cancellationToken);
+
+    /// <summary>True when the project exists and is archived. Missing projects are false.</summary>
+    Task<bool> IsArchivedAsync(Guid projectId, CancellationToken cancellationToken);
 }

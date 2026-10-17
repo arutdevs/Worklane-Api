@@ -179,8 +179,8 @@ namespace Worklane.Infrastructure.Persistence.Migrations
                 table: "TaskActivities",
                 newName: "IX_TaskActivities_TaskId_MovedAt");
 
-            // Created and comment rows have no destination column. Delete them before
-            // the column becomes required so PostgreSQL does not fill Guid.Empty.
+            // Created rows, and rows for comments or files, have no ToColumnId. Delete
+            // them before that column becomes required, so PostgreSQL does not store Guid.Empty.
             migrationBuilder.Sql("""
                 DELETE FROM "TaskActivities" WHERE "ToColumnId" IS NULL;
                 """);

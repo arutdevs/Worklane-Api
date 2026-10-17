@@ -5,7 +5,11 @@ using System.Text.Json;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Connections;
+using Microsoft.AspNetCore.Http.Metadata;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Abstractions;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.EntityFrameworkCore;
@@ -19,6 +23,7 @@ using Worklane.Application.Board.Dtos;
 using Worklane.Application.Common.Exceptions;
 using Worklane.Application.Common.Interfaces;
 using Worklane.Application.Common.Options;
+using Worklane.Domain.Enums;
 using Worklane.Infrastructure.Persistence;
 using Worklane.IntegrationTests.Infrastructure;
 using Worklane.WebApi.Hubs;
@@ -199,6 +204,80 @@ public class SecurityReviewTests : IClassFixture<WorklaneWebApplicationFactory>
     }
 
     [Fact]
+    public async Task OneConnection_JoiningTwoProjects_IsRemovedFromBoth()
+    {
+        var board = await BoardTestSetup.CreateAsync(_factory, "hub-two-owner@test.com", "Owner");
+        var task = await BoardTestSetup.CreateTaskAsync(board, "First");
+        var secondResponse = await board.Client.PostAsJsonAsync($"/api/workspaces/{board.User.Workspace.Id}/projects",
+            new { name = "Second", key = "SC" });
+        secondResponse.EnsureSuccessStatusCode();
+        var second = (await secondResponse.Content.ReadFromJsonAsync<Worklane.Application.Projects.Dtos.ProjectDto>(TestAuthHelper.JsonOptions))!;
+        var secondColumns = await (await board.Client.GetAsync($"/api/projects/{second.Id}/columns"))
+            .Content.ReadFromJsonAsync<List<BoardColumnDto>>(TestAuthHelper.JsonOptions);
+        var secondTaskResponse = await board.Client.PostAsJsonAsync($"/api/projects/{second.Id}/tasks", new
+        {
+            title = "Second",
+            priority = "Medium",
+            columnId = secondColumns!.Single(c => c.Name == "To Do").Id
+        });
+        secondTaskResponse.EnsureSuccessStatusCode();
+        var secondTask = (await secondTaskResponse.Content.ReadFromJsonAsync<TaskItemDto>(TestAuthHelper.JsonOptions))!;
+
+        var member = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), "hub-two-member@test.com", "Member");
+        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, member.Tokens.User.Email, "Member");
+
+        await using var connection = BoardTestSetup.Hub(_factory, member.Tokens.AccessToken);
+        var seen = new List<Guid>();
+        var both = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        connection.On<JsonElement>("CommentCreated", payload =>
+        {
+            lock (seen)
+            {
+                seen.Add(payload.GetProperty("projectId").GetGuid());
+                if (seen.Count >= 2) both.TrySetResult();
+            }
+        });
+        await connection.StartAsync();
+        await connection.InvokeAsync("JoinProject", board.Project.Id);
+        await connection.InvokeAsync("JoinProject", second.Id);
+
+        (await board.Client.PostAsJsonAsync($"/api/tasks/{task.Id}/comments", new { body = "one" })).EnsureSuccessStatusCode();
+        (await board.Client.PostAsJsonAsync($"/api/tasks/{secondTask.Id}/comments", new { body = "two" })).EnsureSuccessStatusCode();
+        await both.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        seen.Should().BeEquivalentTo(new[] { board.Project.Id, second.Id });
+
+        (await board.Client.DeleteAsync($"/api/workspaces/{board.User.Workspace.Id}/members/{member.Tokens.User.Id}"))
+            .StatusCode.Should().Be(HttpStatusCode.NoContent);
+
+        var after = new List<Guid>();
+        connection.On<JsonElement>("CommentCreated", payload =>
+        {
+            lock (after) after.Add(payload.GetProperty("projectId").GetGuid());
+        });
+        (await board.Client.PostAsJsonAsync($"/api/tasks/{task.Id}/comments", new { body = "later-one" })).EnsureSuccessStatusCode();
+        (await board.Client.PostAsJsonAsync($"/api/tasks/{secondTask.Id}/comments", new { body = "later-two" })).EnsureSuccessStatusCode();
+        await Task.Delay(TimeSpan.FromSeconds(1));
+        after.Should().BeEmpty();
+
+        var rejoin = () => connection.InvokeAsync("JoinProject", board.Project.Id);
+        await rejoin.Should().ThrowAsync<Microsoft.AspNetCore.SignalR.HubException>();
+        await connection.StopAsync();
+    }
+
+    [Fact]
+    public async Task JoinProject_RejectsAnArchivedProject()
+    {
+        var board = await BoardTestSetup.CreateAsync(_factory, "hub-archived@test.com");
+        await using var connection = BoardTestSetup.Hub(_factory, board.User.Tokens.AccessToken);
+        await connection.StartAsync();
+        (await board.Client.DeleteAsync($"/api/projects/{board.Project.Id}")).StatusCode.Should().Be(HttpStatusCode.NoContent);
+
+        var join = () => connection.InvokeAsync("JoinProject", board.Project.Id);
+        await join.Should().ThrowAsync<Microsoft.AspNetCore.SignalR.HubException>();
+        await connection.StopAsync();
+    }
+
+    [Fact]
     public void SignalR_ClosesWhenTheAccessTokenExpires()
     {
         _ = _factory.CreateClient();
@@ -235,6 +314,118 @@ public class SecurityReviewTests : IClassFixture<WorklaneWebApplicationFactory>
         clientContext.Response.Body.Position = 0;
         var clientBody = await new StreamReader(clientContext.Response.Body).ReadToEndAsync();
         clientBody.Should().Contain("Assignee must be a member of this workspace.");
+    }
+
+    [Fact]
+    public async Task FrameworkError_UsesAFixedMessage_AndKeepsValidationText()
+    {
+        const string secret = "SECRET_KESTREL_INTERNAL_PATH";
+
+        var badRequest = new ExceptionHandlingMiddleware(
+            _ => throw new BadHttpRequestException(secret, StatusCodes.Status400BadRequest),
+            NullLogger<ExceptionHandlingMiddleware>.Instance);
+        var badRequestContext = new DefaultHttpContext { Response = { Body = new MemoryStream() } };
+        await badRequest.InvokeAsync(badRequestContext);
+        badRequestContext.Response.StatusCode.Should().Be(StatusCodes.Status400BadRequest);
+        badRequestContext.Response.Body.Position = 0;
+        var badRequestBody = await new StreamReader(badRequestContext.Response.Body).ReadToEndAsync();
+        badRequestBody.Should().NotContain(secret);
+        badRequestBody.Should().Contain("The request is invalid.");
+
+        var tooLarge = new ExceptionHandlingMiddleware(
+            _ => throw new InvalidDataException(secret, new BadHttpRequestException(secret, StatusCodes.Status413PayloadTooLarge)),
+            NullLogger<ExceptionHandlingMiddleware>.Instance);
+        var tooLargeContext = new DefaultHttpContext { Response = { Body = new MemoryStream() } };
+        await tooLarge.InvokeAsync(tooLargeContext);
+        tooLargeContext.Response.StatusCode.Should().Be(StatusCodes.Status413PayloadTooLarge);
+        tooLargeContext.Response.Body.Position = 0;
+        var tooLargeBody = await new StreamReader(tooLargeContext.Response.Body).ReadToEndAsync();
+        tooLargeBody.Should().NotContain(secret);
+        tooLargeBody.Should().Contain("The request body exceeds the size limit.");
+
+        var validation = new ExceptionHandlingMiddleware(
+            _ => throw new FluentValidation.ValidationException("Body is required."),
+            NullLogger<ExceptionHandlingMiddleware>.Instance);
+        var validationContext = new DefaultHttpContext { Response = { Body = new MemoryStream() } };
+        await validation.InvokeAsync(validationContext);
+        validationContext.Response.Body.Position = 0;
+        var validationBody = await new StreamReader(validationContext.Response.Body).ReadToEndAsync();
+        validationBody.Should().Contain("Body is required.");
+    }
+
+    [Fact]
+    public void PayloadTooLarge_IsDetectedFromTheExceptionType()
+    {
+        var messageOnly = new ModelStateDictionary();
+        messageOnly.AddModelError(string.Empty, "Request body too large. The max request body size is 10 bytes.");
+        var messageContext = new ActionContext(new DefaultHttpContext(), new RouteData(), new ActionDescriptor(), messageOnly);
+        ExceptionHandlingMiddleware.InvalidModelStateResponse(messageContext, _ => new BadRequestResult())
+            .Should().BeOfType<BadRequestResult>();
+
+        var typed = new ModelStateDictionary();
+        typed.TryAddModelException(
+            string.Empty,
+            new InvalidDataException(
+                "no marker text",
+                new BadHttpRequestException("no marker text", StatusCodes.Status413PayloadTooLarge)));
+        var typedContext = new ActionContext(new DefaultHttpContext(), new RouteData(), new ActionDescriptor(), typed);
+        var result = ExceptionHandlingMiddleware.InvalidModelStateResponse(typedContext, _ => new BadRequestResult());
+        result.Should().BeOfType<ObjectResult>().Which.StatusCode.Should().Be(StatusCodes.Status413PayloadTooLarge);
+    }
+
+    [Fact]
+    public async Task Migration_RedactsActivityForCommentsDeletedBeforeThisRelease()
+    {
+        var board = await BoardTestSetup.CreateAsync(_factory, "redact-legacy@test.com");
+        var task = await BoardTestSetup.CreateTaskAsync(board, "Legacy");
+        var live = await (await board.Client.PostAsJsonAsync($"/api/tasks/{task.Id}/comments", new { body = "still-here" }))
+            .Content.ReadFromJsonAsync<CommentDto>(TestAuthHelper.JsonOptions);
+
+        var legacyId = Guid.NewGuid();
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<WorklaneDbContext>();
+            db.TaskActivities.Add(new Worklane.Domain.Entities.TaskActivity
+            {
+                Id = Guid.NewGuid(),
+                TaskId = task.Id,
+                Type = TaskActivityType.CommentAdded,
+                ActorUserId = board.User.Tokens.User.Id,
+                CreatedAt = DateTimeOffset.UtcNow,
+                Details = $$"""{"commentId":"{{legacyId}}","body":"legacy-secret","oldValue":"legacy-secret"}"""
+            });
+            db.TaskActivities.Add(new Worklane.Domain.Entities.TaskActivity
+            {
+                Id = Guid.NewGuid(),
+                TaskId = task.Id,
+                Type = TaskActivityType.CommentEdited,
+                ActorUserId = board.User.Tokens.User.Id,
+                CreatedAt = DateTimeOffset.UtcNow,
+                Details = $$"""{"commentId":"{{legacyId}}","oldValue":"legacy-secret","newValue":"legacy-secret"}"""
+            });
+            await db.SaveChangesAsync();
+
+            // ExecuteSqlRaw formats {n} placeholders. The redaction regex uses
+            // {8}/{4}/{12}, so it has to run as a raw command.
+            var connection = db.Database.GetDbConnection();
+            if (connection.State != System.Data.ConnectionState.Open)
+                await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = DeletedCommentActivityRedaction.Sql;
+            await command.ExecuteNonQueryAsync();
+        }
+
+        var activity = await (await board.Client.GetAsync($"/api/tasks/{task.Id}/activity"))
+            .Content.ReadFromJsonAsync<List<TaskActivityDto>>(TestAuthHelper.JsonOptions);
+        var legacyEdit = activity!.Single(row =>
+            row.Type == TaskActivityType.CommentEdited &&
+            row.Details!.Value.GetProperty("commentId").GetGuid() == legacyId);
+        legacyEdit.Details!.Value.TryGetProperty("oldValue", out _).Should().BeFalse();
+        legacyEdit.Details.Value.TryGetProperty("newValue", out _).Should().BeFalse();
+        var text = await (await board.Client.GetAsync($"/api/tasks/{task.Id}/activity")).Content.ReadAsStringAsync();
+        text.Should().NotContain("legacy-secret");
+        text.Should().Contain("still-here");
+        text.Should().Contain(live!.Id.ToString());
     }
 
     [Fact]
@@ -346,30 +537,59 @@ public class KestrelUploadLimitTests : IClassFixture<KestrelUploadFactory>
     }
 
     [Fact]
-    public async Task AttachmentUpload_OverTheEndpointLimit_Is413_OtherEndpointsKeepThirtyMegabytes()
+    public async Task AttachmentUpload_OverTheRequestSizeLimit_Is413_OtherRoutesStayAtTwoMegabytes()
     {
         var board = await BoardTestSetup.CreateAsync(_factory, "kestrel-owner@test.com");
         var task = await BoardTestSetup.CreateTaskAsync(board, "Big");
 
-        var options = _factory.Services.GetRequiredService<IOptions<FileStorageSettings>>().Value;
-        var overEndpoint = new byte[options.AttachmentRequestLimit + 1];
+        var dataSource = _factory.Services.GetRequiredService<EndpointDataSource>();
+        var uploadLimit = dataSource.Endpoints
+            .Select(endpoint => endpoint.Metadata.GetMetadata<IRequestSizeLimitMetadata>())
+            .FirstOrDefault(metadata => metadata?.MaxRequestBodySize == FileStorageSettings.AttachmentRequestLimitBytes);
+        uploadLimit.Should().NotBeNull();
+        FileStorageSettings.GlobalRequestBodyLimitBytes.Should().Be(2 * 1024 * 1024);
+        FileStorageSettings.AttachmentRequestLimitBytes.Should().BeGreaterThan(FileStorageSettings.GlobalRequestBodyLimitBytes);
 
-        using var form = new MultipartFormDataContent();
-        var file = new ByteArrayContent(overEndpoint);
-        file.Headers.ContentType = new MediaTypeHeaderValue("image/png");
-        form.Add(file, "file", "big.png");
-        var upload = await board.Client.PostAsync($"/api/tasks/{task.Id}/attachments", form);
-        var uploadBody = await upload.Content.ReadAsStringAsync();
-        upload.StatusCode.Should().Be(HttpStatusCode.RequestEntityTooLarge, uploadBody);
-        uploadBody.Should().Contain("exceeds the size limit");
-        uploadBody.Should().NotContain("File exceeds the maximum size");
+        var overGlobal = new byte[FileStorageSettings.GlobalRequestBodyLimitBytes + 1];
+        using (var form = new MultipartFormDataContent())
+        {
+            var file = new ByteArrayContent(overGlobal);
+            file.Headers.ContentType = new MediaTypeHeaderValue("image/png");
+            form.Add(file, "file", "mid.png");
+            var raised = await board.Client.PostAsync($"/api/tasks/{task.Id}/attachments", form);
+            var raisedBody = await raised.Content.ReadAsStringAsync();
+            raised.StatusCode.Should().Be(HttpStatusCode.RequestEntityTooLarge, raisedBody);
+            raisedBody.Should().Contain("File exceeds the maximum size");
+        }
 
-        var loginBody = new ByteArrayContent(overEndpoint);
+        var overEndpoint = new byte[FileStorageSettings.AttachmentRequestLimitBytes + 1];
+        using (var form = new MultipartFormDataContent())
+        {
+            var file = new ByteArrayContent(overEndpoint);
+            file.Headers.ContentType = new MediaTypeHeaderValue("image/png");
+            form.Add(file, "file", "big.png");
+            using var request = new HttpRequestMessage(HttpMethod.Post, $"/api/tasks/{task.Id}/attachments")
+            {
+                Content = form
+            };
+            // The endpoint ceiling is enforced while the body is still being written.
+            // Expect: 100-continue lets Kestrel answer 413 from Content-Length
+            // before this client copies the rest of an 11 MB body.
+            request.Headers.ExpectContinue = true;
+            var upload = await board.Client.SendAsync(request);
+            var uploadBody = await upload.Content.ReadAsStringAsync();
+            upload.StatusCode.Should().Be(HttpStatusCode.RequestEntityTooLarge, uploadBody);
+            uploadBody.Should().Contain("exceeds the size limit");
+            uploadBody.Should().NotContain("File exceeds the maximum size");
+        }
+
+        var loginBody = new ByteArrayContent(overGlobal);
         loginBody.Headers.ContentType = new MediaTypeHeaderValue("application/json");
         var login = await board.Client.PostAsync("/api/auth/login", loginBody);
-        login.StatusCode.Should().NotBe(HttpStatusCode.RequestEntityTooLarge);
-        options.AttachmentRequestLimit.Should().Be(WorklaneWebApplicationFactory.TestMaxUploadBytes + FileStorageSettings.UploadEnvelopeBytes);
-        options.AttachmentRequestLimit.Should().BeLessThan(FileStorageSettings.GlobalRequestBodyLimitBytes);
+        login.StatusCode.Should().Be(HttpStatusCode.RequestEntityTooLarge);
+
+        var small = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
+        (await board.Client.PostAsync("/api/auth/login", small)).StatusCode.Should().NotBe(HttpStatusCode.RequestEntityTooLarge);
     }
 }
 

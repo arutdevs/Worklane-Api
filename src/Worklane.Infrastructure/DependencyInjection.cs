@@ -42,6 +42,7 @@ public static class DependencyInjection
                 var bound = FileStorageSettings.FromConfiguration(config);
                 settings.LocalPath = bound.LocalPath;
                 settings.MaxBytes = bound.MaxBytes;
+                settings.WorkspaceQuotaBytes = bound.WorkspaceQuotaBytes;
                 settings.AllowedContentTypes = bound.AllowedContentTypes;
                 settings.AllowedExtensions = bound.AllowedExtensions;
             });

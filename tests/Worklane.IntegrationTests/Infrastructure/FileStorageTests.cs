@@ -1,3 +1,4 @@
+using System.Text;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.FileProviders;
@@ -93,6 +94,35 @@ public class FileStorageTests
         FileSignature.Matches(".jpg", SampleFiles.Png).Should().BeFalse();
         FileSignature.Matches(".exe", SampleFiles.Png).Should().BeFalse();
         FileSignature.ContentTypeForExtension(".jpg").Should().Be("image/jpeg");
+    }
+
+    [Fact]
+    public void Signature_AcceptsThaiSingleByteAndUtf16_AndRejectsMarkup()
+    {
+        var tis620 = "col,"u8.ToArray().Concat(new byte[] { 0xCA, 0xC7, 0xD1, 0xCA, 0xB4, 0xD5 }).ToArray();
+        var cp874 = "price,"u8.ToArray().Concat(new byte[] { 0x80, (byte)'1', (byte)'\n' }).ToArray();
+        var utf16 = new List<byte> { 0xFF, 0xFE };
+        foreach (var ch in "name,value\n")
+        {
+            utf16.Add((byte)ch);
+            utf16.Add(0x00);
+        }
+        var utf16Script = new List<byte> { 0xFE, 0xFF };
+        foreach (var ch in "<script>alert(1)</script>")
+        {
+            utf16Script.Add(0x00);
+            utf16Script.Add((byte)ch);
+        }
+
+        FileSignature.Matches(".csv", tis620).Should().BeTrue();
+        FileSignature.Matches(".csv", cp874).Should().BeTrue();
+        FileSignature.Matches(".txt", utf16.ToArray()).Should().BeTrue();
+        FileSignature.Matches(".csv", Encoding.UTF8.GetBytes("สวัสดี\n")).Should().BeTrue();
+        FileSignature.Matches(".csv", "a<b,1\n"u8).Should().BeTrue();
+        FileSignature.Matches(".txt", "<script>alert(1)</script>"u8).Should().BeFalse();
+        FileSignature.Matches(".csv", "<html><body>x</body></html>"u8).Should().BeFalse();
+        FileSignature.Matches(".txt", utf16Script.ToArray()).Should().BeFalse();
+        FileSignature.Matches(".csv", new byte[] { (byte)'a', 0x01, (byte)'b' }).Should().BeFalse();
     }
 
     [Theory]

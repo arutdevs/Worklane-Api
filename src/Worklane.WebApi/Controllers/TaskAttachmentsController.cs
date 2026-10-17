@@ -1,9 +1,11 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Worklane.Application.Board.Dtos;
 using Worklane.Application.Board.Interfaces;
 using Worklane.Application.Common.Exceptions;
 using Worklane.Application.Common.Interfaces;
+using Worklane.Application.Common.Options;
 using Worklane.Domain.Enums;
 using Worklane.WebApi.Filters;
 
@@ -32,11 +34,13 @@ public class TaskAttachmentsController : ControllerBase
     }
 
     /// <summary>
-    /// Uploads a file (multipart field <c>file</c>). 413 when it exceeds the configured
-    /// maximum, 415 when the content type is not on the allow-list.
+    /// Uploads a file (multipart field <c>file</c>). 413 when it exceeds the transport
+    /// or per-file cap, 409 when the workspace quota is full, 415 when the type is not allowed.
     /// </summary>
     [HttpPost("api/tasks/{taskId:guid}/attachments")]
     [Consumes("multipart/form-data")]
+    [EnableRateLimiting("attachments")]
+    [RequestSizeLimit(FileStorageSettings.AttachmentRequestLimitBytes)]
     [RequireWorkspaceRole(WorkspaceRole.Member, WorkspaceResourceType.Task, "taskId")]
     public async Task<ActionResult<AttachmentDto>> Upload(Guid taskId, CancellationToken ct)
     {

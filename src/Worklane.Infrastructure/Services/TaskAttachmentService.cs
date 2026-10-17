@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Worklane.Application.Board.Dtos;
 using Worklane.Application.Board.Interfaces;
@@ -20,6 +21,7 @@ public class TaskAttachmentService : ITaskAttachmentService
     private readonly IBoardService _board;
     private readonly IWorkspaceService _workspaces;
     private readonly FileStorageSettings _settings;
+    private readonly ILogger<TaskAttachmentService> _logger;
 
     public TaskAttachmentService(
         WorklaneDbContext db,
@@ -27,7 +29,8 @@ public class TaskAttachmentService : ITaskAttachmentService
         IBoardNotifier notifier,
         IBoardService board,
         IWorkspaceService workspaces,
-        IOptions<FileStorageSettings> settings)
+        IOptions<FileStorageSettings> settings,
+        ILogger<TaskAttachmentService> logger)
     {
         _db = db;
         _storage = storage;
@@ -35,6 +38,7 @@ public class TaskAttachmentService : ITaskAttachmentService
         _board = board;
         _workspaces = workspaces;
         _settings = settings.Value;
+        _logger = logger;
     }
 
     public async Task<IReadOnlyList<AttachmentDto>> GetAttachmentsAsync(Guid taskId, CancellationToken cancellationToken = default)
@@ -76,24 +80,32 @@ public class TaskAttachmentService : ITaskAttachmentService
         if (detectedType is null || !ExtensionAllowed(extension) || !ContentTypeAllowed(detectedType))
             throw new UnsupportedMediaTypeException(extension);
 
-        await using var buffered = new MemoryStream();
-        var buffer = new byte[81920];
-        long total = 0;
-        int read;
-        while ((read = await content.ReadAsync(buffer, cancellationToken)) > 0)
+        var headerCapacity = (int)Math.Min(FileSignature.HeaderLength, Math.Max(0, _settings.MaxBytes));
+        var header = new byte[headerCapacity];
+        var headerRead = 0;
+        while (headerRead < header.Length)
         {
-            total += read;
-            if (total > _settings.MaxBytes)
-                throw new PayloadTooLargeException(_settings.MaxBytes);
-            await buffered.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+            var read = await content.ReadAsync(header.AsMemory(headerRead), cancellationToken);
+            if (read == 0) break;
+            headerRead += read;
         }
 
-        if (total <= 0)
+        if (headerRead <= 0)
             throw new BadRequestException("A non-empty file is required.");
 
-        var bytes = buffered.ToArray();
-        if (!FileSignature.Matches(extension, bytes))
+        if (headerRead == headerCapacity && headerCapacity == _settings.MaxBytes)
+        {
+            var extra = new byte[1];
+            if (await content.ReadAsync(extra, cancellationToken) > 0)
+                throw new PayloadTooLargeException(_settings.MaxBytes);
+        }
+
+        if (!FileSignature.Matches(extension, header.AsSpan(0, headerRead)))
             throw new UnsupportedMediaTypeException(extension);
+
+        var used = await WorkspaceUsageAsync(task.Project.WorkspaceId, cancellationToken);
+        if (used >= _settings.WorkspaceQuotaBytes)
+            throw new ConflictException("Workspace storage quota exceeded.");
 
         var attachmentId = Guid.NewGuid();
         var attachment = new TaskAttachment
@@ -107,12 +119,18 @@ public class TaskAttachmentService : ITaskAttachmentService
             StorageKey = $"{task.Project.WorkspaceId:N}/{task.Id:N}/{attachmentId:N}"
         };
 
-        buffered.Position = 0;
-        var size = await _storage.SaveAsync(attachment.StorageKey, buffered, _settings.MaxBytes, cancellationToken);
+        await using var prefixed = new PrefixedReadStream(header.AsMemory(0, headerRead), content);
+        var size = await _storage.SaveAsync(attachment.StorageKey, prefixed, _settings.MaxBytes, cancellationToken);
         if (size <= 0)
         {
             await _storage.DeleteAsync(attachment.StorageKey, cancellationToken);
             throw new BadRequestException("A non-empty file is required.");
+        }
+
+        if (used + size > _settings.WorkspaceQuotaBytes)
+        {
+            await _storage.DeleteAsync(attachment.StorageKey, cancellationToken);
+            throw new ConflictException("Workspace storage quota exceeded.");
         }
 
         attachment.SizeBytes = size;
@@ -145,8 +163,11 @@ public class TaskAttachmentService : ITaskAttachmentService
 
         var names = await UserLookup.DisplayNamesAsync(_db, [userId], cancellationToken);
         var dto = ToDto(attachment, names);
-        await _notifier.AttachmentAddedAsync(task.ProjectId, Broadcast(dto, task.ProjectId), cancellationToken);
-        await BroadcastTaskCountsAsync(task.Id, cancellationToken);
+        await BroadcastQuietlyAsync(async () =>
+        {
+            await _notifier.AttachmentAddedAsync(task.ProjectId, Broadcast(dto, task.ProjectId), cancellationToken);
+            await BroadcastTaskCountsAsync(task.Id, cancellationToken);
+        }, cancellationToken);
         return dto;
     }
 
@@ -189,11 +210,14 @@ public class TaskAttachmentService : ITaskAttachmentService
         await _db.SaveChangesAsync(cancellationToken);
         await _storage.DeleteAsync(storageKey, cancellationToken);
 
-        await _notifier.AttachmentDeletedAsync(
-            projectId,
-            new AttachmentDeletedEvent(projectId, taskId, attachmentId),
-            cancellationToken);
-        await BroadcastTaskCountsAsync(taskId, cancellationToken);
+        await BroadcastQuietlyAsync(async () =>
+        {
+            await _notifier.AttachmentDeletedAsync(
+                projectId,
+                new AttachmentDeletedEvent(projectId, taskId, attachmentId),
+                cancellationToken);
+            await BroadcastTaskCountsAsync(taskId, cancellationToken);
+        }, cancellationToken);
     }
 
     public async Task<Guid?> GetWorkspaceIdForAttachmentAsync(Guid attachmentId, CancellationToken cancellationToken = default)
@@ -213,10 +237,30 @@ public class TaskAttachmentService : ITaskAttachmentService
         _settings.AllowedContentTypes.Any(allowed =>
             string.Equals(NormalizeContentType(allowed), contentType, StringComparison.Ordinal));
 
+    private async Task<long> WorkspaceUsageAsync(Guid workspaceId, CancellationToken cancellationToken)
+    {
+        return await _db.TaskAttachments
+            .IgnoreQueryFilters()
+            .Where(a => a.Task.Project.WorkspaceId == workspaceId)
+            .SumAsync(a => (long?)a.SizeBytes, cancellationToken) ?? 0;
+    }
+
     private async Task BroadcastTaskCountsAsync(Guid taskId, CancellationToken cancellationToken)
     {
         var task = await _board.GetTaskAsync(taskId, cancellationToken);
         await _notifier.TaskUpdatedAsync(task.ProjectId, task, cancellationToken);
+    }
+
+    private async Task BroadcastQuietlyAsync(Func<Task> broadcast, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await broadcast();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogError(ex, "Attachment change was saved but could not be broadcast.");
+        }
     }
 
     private static string NormalizeExtension(string extension)
@@ -247,9 +291,56 @@ public class TaskAttachmentService : ITaskAttachmentService
 
     private async Task<bool> CanModerateAsync(Guid workspaceId, Guid authorId, Guid userId, CancellationToken cancellationToken)
     {
-        if (authorId == userId) return true;
         var role = await _workspaces.GetUserRoleAsync(workspaceId, userId, cancellationToken);
-        return role is WorkspaceRole.Admin or WorkspaceRole.Owner;
+        if (role is WorkspaceRole.Admin or WorkspaceRole.Owner)
+            return true;
+        return authorId == userId && role == WorkspaceRole.Member;
+    }
+
+    /// <summary>Replays the header that was already read, then the unread remainder of the upload.</summary>
+    private sealed class PrefixedReadStream : Stream
+    {
+        private readonly ReadOnlyMemory<byte> _prefix;
+        private readonly Stream _rest;
+        private int _prefixOffset;
+
+        public PrefixedReadStream(ReadOnlyMemory<byte> prefix, Stream rest)
+        {
+            _prefix = prefix;
+            _rest = rest;
+        }
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush() { }
+
+        public override int Read(byte[] buffer, int offset, int count) =>
+            ReadAsync(buffer.AsMemory(offset, count)).AsTask().GetAwaiter().GetResult();
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            if (_prefixOffset < _prefix.Length)
+            {
+                var count = Math.Min(buffer.Length, _prefix.Length - _prefixOffset);
+                _prefix.Slice(_prefixOffset, count).CopyTo(buffer);
+                _prefixOffset += count;
+                return count;
+            }
+
+            return await _rest.ReadAsync(buffer, cancellationToken);
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 
     private static AttachmentDto ToDto(TaskAttachment attachment, IReadOnlyDictionary<Guid, string> names) =>

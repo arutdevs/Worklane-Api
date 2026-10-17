@@ -6,17 +6,31 @@ public class FileStorageSettings
 {
     public const string SectionName = "FileStorage";
 
-    /// <summary>Extra room for the multipart envelope above <see cref="MaxBytes"/>.</summary>
+    /// <summary>Extra room for the multipart envelope above the default per-file cap.</summary>
     public const long UploadEnvelopeBytes = 1024 * 1024;
 
-    /// <summary>Kestrel's default, kept for every endpoint except attachment upload.</summary>
-    public const long GlobalRequestBodyLimitBytes = 30_000_000;
+    /// <summary>Kestrel's ceiling for every endpoint that does not raise it with RequestSizeLimit.</summary>
+    public const long GlobalRequestBodyLimitBytes = 2 * 1024 * 1024;
+
+    public const long DefaultMaxBytes = 10 * 1024 * 1024;
+
+    /// <summary>
+    /// Transport ceiling for attachment upload. <c>[RequestSizeLimit]</c> needs a constant,
+    /// so this is the default file cap plus the multipart envelope, not the configured
+    /// <see cref="MaxBytes"/>.
+    /// </summary>
+    public const long AttachmentRequestLimitBytes = DefaultMaxBytes + UploadEnvelopeBytes;
 
     /// <summary>Directory for the local-disk provider. Relative paths are under the content root.</summary>
     public string LocalPath { get; set; } = "data/attachments";
 
-    /// <summary>Per-file cap. Default 10 MB. A larger body is rejected with 413.</summary>
-    public long MaxBytes { get; set; } = 10 * 1024 * 1024;
+    /// <summary>Per-file cap. Default 10 MB. A larger file is rejected with 413.</summary>
+    public long MaxBytes { get; set; } = DefaultMaxBytes;
+
+    /// <summary>
+    /// Workspace storage cap, the sum of attachment <c>SizeBytes</c>. Exceeding it is 409.
+    /// </summary>
+    public long WorkspaceQuotaBytes { get; set; } = 1024L * 1024 * 1024;
 
     /// <summary>
     /// Types we are willing to record. A configured list replaces this default;
@@ -73,6 +87,9 @@ public class FileStorageSettings
 
         if (long.TryParse(section[nameof(MaxBytes)], out var maxBytes) && maxBytes > 0)
             settings.MaxBytes = maxBytes;
+
+        if (long.TryParse(section[nameof(WorkspaceQuotaBytes)], out var quota) && quota >= 0)
+            settings.WorkspaceQuotaBytes = quota;
 
         if (section.GetSection(nameof(AllowedContentTypes)).Exists())
             settings.AllowedContentTypes = section.GetSection(nameof(AllowedContentTypes)).Get<string[]>() ?? [];

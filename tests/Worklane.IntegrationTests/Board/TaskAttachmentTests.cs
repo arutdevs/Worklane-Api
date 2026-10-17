@@ -108,6 +108,81 @@ public class TaskAttachmentTests : IClassFixture<WorklaneWebApplicationFactory>
 
         (await UploadAsync(viewer.Client, task.Id, SampleFiles.Png, "image/png", "notes.png"))
             .StatusCode.Should().Be(HttpStatusCode.Forbidden);
+
+        var uploaded = await UploadAsync(board.Client, task.Id, SampleFiles.Png, "image/png", "notes.png");
+        var file = (await uploaded.Content.ReadFromJsonAsync<AttachmentDto>(TestAuthHelper.JsonOptions))!;
+        (await viewer.Client.DeleteAsync($"/api/attachments/{file.Id}")).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    [Fact]
+    public async Task DemotedUploader_CannotDeleteTheirFile()
+    {
+        var board = await BoardTestSetup.CreateAsync(_factory, "files-demote-owner@test.com", "Owner");
+        var task = await BoardTestSetup.CreateTaskAsync(board, "Demote");
+        var member = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), "files-demote-member@test.com", "Uploader");
+        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, member.Tokens.User.Email, "Member");
+
+        var uploaded = await UploadAsync(member.Client, task.Id, SampleFiles.Text, "text/plain", "note.txt");
+        var file = (await uploaded.Content.ReadFromJsonAsync<AttachmentDto>(TestAuthHelper.JsonOptions))!;
+        (await board.Client.PatchAsJsonAsync(
+            $"/api/workspaces/{board.User.Workspace.Id}/members/{member.Tokens.User.Id}",
+            new { role = "Viewer" })).StatusCode.Should().Be(HttpStatusCode.NoContent);
+
+        (await member.Client.DeleteAsync($"/api/attachments/{file.Id}")).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        var listed = await (await board.Client.GetAsync($"/api/tasks/{task.Id}/attachments"))
+            .Content.ReadFromJsonAsync<List<AttachmentDto>>(TestAuthHelper.JsonOptions);
+        listed.Should().ContainSingle().Which.Id.Should().Be(file.Id);
+    }
+
+    [Fact]
+    public async Task SignalR_TaskUpdatedCarriesAttachmentCount()
+    {
+        var board = await BoardTestSetup.CreateAsync(_factory, "files-count-hub@test.com");
+        var task = await BoardTestSetup.CreateTaskAsync(board, "Badge");
+
+        await using var connection = BoardTestSetup.Hub(_factory, board.User.Tokens.AccessToken);
+        var updates = new List<JsonElement>();
+        var seen = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        connection.On<JsonElement>("TaskUpdated", payload =>
+        {
+            updates.Add(payload.Clone());
+            if (updates.Count >= 2) seen.TrySetResult();
+        });
+        await connection.StartAsync();
+        await connection.InvokeAsync("JoinProject", board.Project.Id);
+
+        var uploaded = await UploadAsync(board.Client, task.Id, SampleFiles.Png, "image/png", "shot.png");
+        var file = (await uploaded.Content.ReadFromJsonAsync<AttachmentDto>(TestAuthHelper.JsonOptions))!;
+        await board.Client.DeleteAsync($"/api/attachments/{file.Id}");
+        await seen.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        updates[0].GetProperty("id").GetGuid().Should().Be(task.Id);
+        updates[0].GetProperty("attachmentCount").GetInt32().Should().Be(1);
+        updates[1].GetProperty("attachmentCount").GetInt32().Should().Be(0);
+
+        await connection.StopAsync();
+    }
+
+    [Fact]
+    public async Task ThaiAndUtf16Text_AreAccepted_ScriptContentIsRejected()
+    {
+        var board = await BoardTestSetup.CreateAsync(_factory, "files-thai@test.com");
+        var task = await BoardTestSetup.CreateTaskAsync(board, "Encodings");
+
+        var tis620 = "name,"u8.ToArray().Concat(new byte[] { 0xCA, 0xC7, 0xD1, 0xCA, 0xB4, 0xD5, (byte)'\n' }).ToArray();
+        var utf16 = new List<byte> { 0xFF, 0xFE };
+        foreach (var ch in "hello,world\n")
+        {
+            utf16.Add((byte)ch);
+            utf16.Add(0x00);
+        }
+
+        (await UploadAsync(board.Client, task.Id, tis620, "application/octet-stream", "thai.csv"))
+            .StatusCode.Should().Be(HttpStatusCode.Created);
+        (await UploadAsync(board.Client, task.Id, utf16.ToArray(), "text/html", "wide.csv"))
+            .StatusCode.Should().Be(HttpStatusCode.Created);
+        (await UploadAsync(board.Client, task.Id, "<script>alert(1)</script>"u8.ToArray(), "text/csv", "bad.csv"))
+            .StatusCode.Should().Be(HttpStatusCode.UnsupportedMediaType);
     }
 
     [Fact]

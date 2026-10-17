@@ -1,7 +1,9 @@
 using System.Text;
 using System.Text.Json.Serialization;
+using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
@@ -9,7 +11,6 @@ using Serilog;
 using Worklane.Application;
 using Worklane.Application.Board.Interfaces;
 using Worklane.Application.Common.Interfaces;
-using Microsoft.AspNetCore.Http.Features;
 using Microsoft.Extensions.Options;
 using Worklane.Application.Common.Options;
 using Worklane.Infrastructure;
@@ -64,11 +65,42 @@ builder.Services.AddSwaggerGen(options =>
     });
 });
 
-// Every other endpoint keeps Kestrel's 30 MB ceiling. Only attachment upload is
-// tightened, to the configured file cap plus room for the multipart envelope
-// (~11 MB at the default). The per-request value is read from options so test
-// overrides of MaxBytes apply.
+// 2 MB for ordinary requests. Attachment upload raises its own ceiling with
+// [RequestSizeLimit] on the action, which still matches a trailing slash.
 builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = FileStorageSettings.GlobalRequestBodyLimitBytes);
+
+builder.Services.Configure<AttachmentRateLimitSettings>(
+    builder.Configuration.GetSection(AttachmentRateLimitSettings.SectionName));
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.OnRejected = async (context, cancellationToken) =>
+    {
+        context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+        await context.HttpContext.Response.WriteAsJsonAsync(new ProblemDetails
+        {
+            Status = StatusCodes.Status429TooManyRequests,
+            Title = "Too Many Requests",
+            Detail = "Too many attachment or comment requests for this user and workspace.",
+            Instance = context.HttpContext.Request.Path
+        }, cancellationToken);
+    };
+    options.AddPolicy("attachments", httpContext =>
+    {
+        var settings = httpContext.RequestServices.GetRequiredService<IOptions<AttachmentRateLimitSettings>>().Value;
+        var permit = settings.PermitLimit < 1 ? 1 : settings.PermitLimit;
+        var windowSeconds = settings.WindowSeconds < 1 ? 1 : settings.WindowSeconds;
+        return RateLimitPartition.GetFixedWindowLimiter(
+            AttachmentRateLimitPartition.Key(httpContext),
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = permit,
+                Window = TimeSpan.FromSeconds(windowSeconds),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            });
+    });
+});
 
 builder.Services.AddSignalR()
     .AddJsonProtocol(options => options.PayloadSerializerOptions.Converters.Add(new JsonStringEnumConverter()));
@@ -128,22 +160,6 @@ builder.Services.AddAuthorization();
 var app = builder.Build();
 
 app.UseSerilogRequestLogging();
-
-app.Use(async (context, next) =>
-{
-    if (HttpMethods.IsPost(context.Request.Method) && IsAttachmentUpload(context.Request.Path))
-    {
-        var feature = context.Features.Get<IHttpMaxRequestBodySizeFeature>();
-        if (feature is { IsReadOnly: false })
-        {
-            var limit = context.RequestServices.GetRequiredService<IOptions<FileStorageSettings>>().Value.AttachmentRequestLimit;
-            feature.MaxRequestBodySize = limit;
-        }
-    }
-
-    await next();
-});
-
 app.UseMiddleware<ExceptionHandlingMiddleware>();
 
 // Configure the HTTP request pipeline.
@@ -164,6 +180,8 @@ app.UseCors("Web");
 
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseRateLimiter();
+app.UseMiddleware<ContentLengthLimitMiddleware>();
 
 app.MapControllers();
 app.MapHub<NotificationsHub>("/hubs/notifications", options =>
@@ -172,19 +190,5 @@ app.MapHub<NotificationsHub>("/hubs/notifications", options =>
 });
 
 app.Run();
-
-static bool IsAttachmentUpload(PathString path)
-{
-    if (!path.HasValue) return false;
-    var value = path.Value!;
-    const string prefix = "/api/tasks/";
-    const string suffix = "/attachments";
-    if (!value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ||
-        !value.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
-        return false;
-
-    var id = value[prefix.Length..^suffix.Length];
-    return Guid.TryParse(id, out _);
-}
 
 public partial class Program { }

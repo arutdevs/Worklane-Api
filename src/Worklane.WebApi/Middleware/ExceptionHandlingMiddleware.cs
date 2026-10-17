@@ -53,14 +53,12 @@ public class ExceptionHandlingMiddleware
         {
             _logger.LogError(exception, "Unhandled exception processing {Method} {Path}", context.Request.Method, context.Request.Path);
         }
-
-        var detail = statusCode switch
+        else if (!IsClientMessage(exception))
         {
-            HttpStatusCode.InternalServerError => "An unexpected error occurred.",
-            HttpStatusCode.RequestEntityTooLarge when exception is not PayloadTooLargeException =>
-                "The request body exceeds the size limit.",
-            _ => exception.Message
-        };
+            _logger.LogWarning(exception, "Rejected {Method} {Path} with status {Status}", context.Request.Method, context.Request.Path, (int)statusCode);
+        }
+
+        var detail = ClientDetail(exception, statusCode);
 
         var problemDetails = new ProblemDetails
         {
@@ -80,6 +78,39 @@ public class ExceptionHandlingMiddleware
         context.Response.ContentType = "application/problem+json";
         context.Response.StatusCode = (int)statusCode;
         await context.Response.WriteAsJsonAsync(problemDetails);
+    }
+
+    /// <summary>
+    /// Exceptions thrown for the client keep the message they were given.
+    /// Anything else, including framework body-limit failures, gets a fixed
+    /// sentence for that status so internal text never leaves the process.
+    /// </summary>
+    private static bool IsClientMessage(Exception exception) =>
+        exception is ValidationException
+            or BadRequestException
+            or NotFoundException
+            or ForbiddenAccessException
+            or AuthenticationFailedException
+            or ConflictException
+            or PayloadTooLargeException
+            or UnsupportedMediaTypeException;
+
+    private static string ClientDetail(Exception exception, HttpStatusCode statusCode)
+    {
+        if (IsClientMessage(exception))
+            return exception.Message;
+
+        return statusCode switch
+        {
+            HttpStatusCode.BadRequest => "The request is invalid.",
+            HttpStatusCode.Unauthorized => "Authentication is required.",
+            HttpStatusCode.Forbidden => "You do not have access to this resource.",
+            HttpStatusCode.NotFound => "The resource was not found.",
+            HttpStatusCode.Conflict => "The request conflicts with the current state.",
+            HttpStatusCode.RequestEntityTooLarge => "The request body exceeds the size limit.",
+            HttpStatusCode.UnsupportedMediaType => "The file type is not allowed.",
+            _ => "An unexpected error occurred."
+        };
     }
 
     /// <summary>
@@ -112,13 +143,20 @@ public class ExceptionHandlingMiddleware
         {
             foreach (var error in entry.Errors)
             {
-                if (error.Exception is BadHttpRequestException bad &&
-                    bad.StatusCode == StatusCodes.Status413PayloadTooLarge)
-                    return true;
-
-                if (error.ErrorMessage.Contains("Request body too large", StringComparison.OrdinalIgnoreCase))
+                if (IsPayloadTooLarge(error.Exception))
                     return true;
             }
+        }
+
+        return false;
+    }
+
+    private static bool IsPayloadTooLarge(Exception? exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is BadHttpRequestException bad && bad.StatusCode == StatusCodes.Status413PayloadTooLarge)
+                return true;
         }
 
         return false;
