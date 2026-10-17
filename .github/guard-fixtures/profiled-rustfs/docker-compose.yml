@@ -1,0 +1,8 @@
+name: guard-fixture
+services:
+  s3:
+    profiles: ["dev"]
+    image: rustfs/rustfs:1.0.3
+    environment:
+      FileStorage__S3__ServiceUrl: http://s3:9000
+      FileStorage__S3__RequireHttps: "false"

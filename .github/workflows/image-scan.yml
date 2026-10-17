@@ -17,89 +17,31 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Rendered deploy compose has no dev S3
+        run: bash scripts/check-deploy-compose.sh
+
+      # Fixtures are pruned out of the scan above. Each one must make that same guard exit 1.
+      - name: Guard fixtures must fail
         run: |
           set -euo pipefail
-          docker compose version
-
-          # Still exported so a variable image that expands to the dev store shows up
-          # in the render. The hard check is the raw `image:` scan below: any `${` in
-          # an image value fails, including when the variable would render as a harmless tag.
-          export S3_IMAGE='rustfs/rustfs:bypass@sha256:9ca95595aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-
-          forbidden_re='rustfs|seaweedfs|9ca95595|ab024bfe|4e61d15f|http://s3:9000|RequireHttps.*false'
-          fail=0
-
-          render_config() {
-            local label="$1"
-            shift
-            local rendered hits
-            if ! rendered="$(docker compose "$@" config)"; then
-              echo "::error file=${label}::docker compose config failed"
-              fail=1
-              return
+          root="$(pwd)"
+          found=0
+          status=0
+          for d in .github/guard-fixtures/*/; do
+            [ -d "$d" ] || continue
+            found=1
+            echo "===== ${d} ====="
+            if (cd "$d" && bash "$root/scripts/check-deploy-compose.sh"); then
+              echo "::error::${d} passed; the guard must exit 1"
+              status=1
+            else
+              echo "expected exit 1: ${d}"
             fi
-            hits="$(printf '%s\n' "$rendered" | grep -E -i -n "$forbidden_re" || true)"
-            if [ -n "$hits" ]; then
-              printf '%s\n' "$hits"
-              echo "::error file=${label}::Rendered compose contains a dev S3 image, digest, endpoint, or RequireHttps false."
-              fail=1
-            fi
-          }
-
-          # --profile '*' keeps services that `config` would otherwise drop.
-          # --env-file is the sibling .env.example when that file exists, so a required
-          # ${VAR:?} such as COMPOSE_PROJECT_NAME still renders. The file is not skipped.
-          render_file() {
-            local file="$1"
-            local env_file
-            local -a args=()
-            env_file="$(dirname "$file")/.env.example"
-            if [ -f "$env_file" ]; then
-              args+=(--env-file "$env_file")
-            fi
-            args+=(-f "$file" --profile '*')
-            render_config "$file" "${args[@]}"
-          }
-
-          # No -f: Compose merges the root file with docker-compose.override.yml the way
-          # a server does. Rendering the override by itself misses that merge.
-          root_args=()
-          if [ -f .env.example ]; then
-            root_args+=(--env-file .env.example)
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "::error::no guard fixtures found"
+            status=1
           fi
-          root_args+=(--profile '*')
-          render_config "(repo root compose project)" "${root_args[@]}"
-
-          # Only the repo-root dev overlay may carry RustFS. A compose.dev.yml in a
-          # subdirectory is not that file. prod.compose.yml and deploy/stack.yml are
-          # compose files too. include: and extends: are rejected in every non-dev file.
-          # Selection is by filename, so a file named prod.yml is not scanned here.
-          while IFS= read -r -d '' file; do
-            rel="${file#./}"
-            case "$rel" in
-              compose.dev.yml|compose.dev.yaml) continue ;;
-            esac
-            if grep -E -n '^[[:space:]]*(include|extends):' "$rel"; then
-              echo "::error file=${rel}::Non-dev compose file must not use include: or extends:."
-              fail=1
-            fi
-            if grep -E -n '^[[:space:]]*image:[[:space:]]*.*\$\{' "$rel"; then
-              echo "::error file=${rel}::Deploy compose image must be a literal reference, not a variable."
-              fail=1
-            fi
-            case "$rel" in
-              docker-compose.override.yml|docker-compose.override.yaml|compose.override.yml|compose.override.yaml)
-                ;;
-              *)
-                render_file "$rel"
-                ;;
-            esac
-          done < <(find . -type f \
-            \( -name '*compose*.yml' -o -name '*compose*.yaml' \
-               -o -name '*stack*.yml' -o -name '*stack*.yaml' \) \
-            -not -path './.git/*' -print0)
-
-          exit "$fail"
+          exit "$status"
 
   trivy:
     runs-on: ubuntu-latest

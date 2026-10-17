@@ -29,6 +29,8 @@ docker compose -f docker-compose.yml -f compose.dev.yml up
 
 ห้าม deploy จนกว่า WL-63 (${JWT_SIGNING_KEY:?}) และ WL-71 จะเสร็จ
 
+The deploy compose guard only selects files by name (`*compose*` and `*stack*`). A file named `prod.yml` would slip through. The real control is C7 in WL-71.
+
 The dev command above also starts local object storage. This builds and starts the stack:
 
 | Service    | URL                                   |
