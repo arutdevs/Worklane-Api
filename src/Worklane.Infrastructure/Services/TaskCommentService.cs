@@ -1,3 +1,4 @@
+using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
 using Worklane.Application.Board.Dtos;
 using Worklane.Application.Board.Interfaces;
@@ -13,12 +14,15 @@ public class TaskCommentService : ITaskCommentService
 {
     private readonly WorklaneDbContext _db;
     private readonly IBoardNotifier _notifier;
+    private readonly IBoardService _board;
     private readonly IWorkspaceService _workspaces;
 
-    public TaskCommentService(WorklaneDbContext db, IBoardNotifier notifier, IWorkspaceService workspaces)
+    public TaskCommentService(
+        WorklaneDbContext db, IBoardNotifier notifier, IBoardService board, IWorkspaceService workspaces)
     {
         _db = db;
         _notifier = notifier;
+        _board = board;
         _workspaces = workspaces;
     }
 
@@ -72,6 +76,7 @@ public class TaskCommentService : ITaskCommentService
         var names = await UserLookup.DisplayNamesAsync(_db, [userId], cancellationToken);
         var dto = ToDto(comment, names);
         await _notifier.CommentCreatedAsync(task.ProjectId, Broadcast(dto, task.ProjectId), cancellationToken);
+        await BroadcastTaskCountsAsync(task.Id, cancellationToken);
         return dto;
     }
 
@@ -111,6 +116,7 @@ public class TaskCommentService : ITaskCommentService
         var names = await UserLookup.DisplayNamesAsync(_db, [comment.AuthorId], cancellationToken);
         var dto = ToDto(comment, names);
         await _notifier.CommentUpdatedAsync(comment.Task.ProjectId, Broadcast(dto, comment.Task.ProjectId), cancellationToken);
+        await BroadcastTaskCountsAsync(comment.TaskId, cancellationToken);
         return dto;
     }
 
@@ -129,6 +135,13 @@ public class TaskCommentService : ITaskCommentService
         var taskId = comment.TaskId;
         var now = DateTimeOffset.UtcNow;
 
+        var history = await _db.TaskActivities
+            .Where(a => a.TaskId == taskId &&
+                (a.Type == TaskActivityType.CommentAdded || a.Type == TaskActivityType.CommentEdited))
+            .ToListAsync(cancellationToken);
+        foreach (var activity in history)
+            RedactCommentText(activity, commentId);
+
         _db.TaskComments.Remove(comment);
         _db.TaskActivities.Add(new TaskActivity
         {
@@ -145,6 +158,7 @@ public class TaskCommentService : ITaskCommentService
             projectId,
             new CommentDeletedEvent(projectId, taskId, commentId),
             cancellationToken);
+        await BroadcastTaskCountsAsync(taskId, cancellationToken);
     }
 
     public async Task<Guid?> GetWorkspaceIdForCommentAsync(Guid commentId, CancellationToken cancellationToken = default)
@@ -165,6 +179,39 @@ public class TaskCommentService : ITaskCommentService
 
     private static CommentDto ToDto(TaskComment comment, IReadOnlyDictionary<Guid, string> names) =>
         new(comment.Id, comment.TaskId, UserLookup.Ref(names, comment.AuthorId), comment.Body, comment.CreatedAt, comment.UpdatedAt);
+
+    private async Task BroadcastTaskCountsAsync(Guid taskId, CancellationToken cancellationToken)
+    {
+        var task = await _board.GetTaskAsync(taskId, cancellationToken);
+        await _notifier.TaskUpdatedAsync(task.ProjectId, task, cancellationToken);
+    }
+
+    /// <summary>
+    /// Drops body, oldValue, and newValue from activity rows for this comment so a
+    /// Viewer reading the log cannot recover text that was deleted.
+    /// </summary>
+    private static void RedactCommentText(TaskActivity activity, Guid commentId)
+    {
+        if (string.IsNullOrEmpty(activity.Details)) return;
+
+        JsonNode? node;
+        try
+        {
+            node = JsonNode.Parse(activity.Details);
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return;
+        }
+
+        if (node is not JsonObject obj) return;
+        if (!Guid.TryParse(obj["commentId"]?.ToString(), out var id) || id != commentId) return;
+
+        obj.Remove("body");
+        obj.Remove("oldValue");
+        obj.Remove("newValue");
+        activity.Details = obj.ToJsonString(ActivityJson.Options);
+    }
 
     private static CommentBroadcastDto Broadcast(CommentDto dto, Guid projectId) =>
         new(dto.Id, dto.TaskId, dto.Author, dto.Body, dto.CreatedAt, dto.UpdatedAt, projectId);

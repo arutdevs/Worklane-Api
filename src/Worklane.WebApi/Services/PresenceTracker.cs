@@ -25,6 +25,8 @@ public interface IPresenceTracker
     Guid? ProjectFor(string connectionId);
 
     IReadOnlyCollection<Guid> OnlineUserIds(Guid projectId);
+
+    IReadOnlyCollection<string> ConnectionIds(Guid projectId, Guid userId);
 }
 
 public class PresenceTracker : IPresenceTracker
@@ -81,4 +83,13 @@ public class PresenceTracker : IPresenceTracker
 
     public IReadOnlyCollection<Guid> OnlineUserIds(Guid projectId) =>
         _projectUsers.TryGetValue(projectId, out var users) ? users.Keys.ToList() : [];
+
+    public IReadOnlyCollection<string> ConnectionIds(Guid projectId, Guid userId)
+    {
+        if (_projectUsers.TryGetValue(projectId, out var users) &&
+            users.TryGetValue(userId, out var connections))
+            return connections.Keys.ToList();
+
+        return [];
+    }
 }

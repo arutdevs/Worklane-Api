@@ -31,13 +31,18 @@ public class NotificationsHub : Hub
     public async Task JoinProject(Guid projectId)
     {
         var userId = GetUserId();
-        if (userId == Guid.Empty) return;
+        var workspaceId = userId == Guid.Empty
+            ? null
+            : await _projects.GetWorkspaceIdForProjectAsync(projectId, Context.ConnectionAborted);
+        var role = workspaceId is null
+            ? null
+            : await _workspaces.GetUserRoleAsync(workspaceId.Value, userId, Context.ConnectionAborted);
 
-        var workspaceId = await _projects.GetWorkspaceIdForProjectAsync(projectId, Context.ConnectionAborted);
-        if (workspaceId is null) return;
-
-        var role = await _workspaces.GetUserRoleAsync(workspaceId.Value, userId, Context.ConnectionAborted);
-        if (role is null) return;
+        if (role is null)
+        {
+            await Groups.RemoveFromGroupAsync(Context.ConnectionId, GroupName(projectId));
+            throw new HubException("You are not a member of this workspace.");
+        }
 
         await Groups.AddToGroupAsync(Context.ConnectionId, GroupName(projectId));
 

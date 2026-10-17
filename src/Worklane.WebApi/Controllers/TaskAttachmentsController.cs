@@ -38,8 +38,12 @@ public class TaskAttachmentsController : ControllerBase
     [HttpPost("api/tasks/{taskId:guid}/attachments")]
     [Consumes("multipart/form-data")]
     [RequireWorkspaceRole(WorkspaceRole.Member, WorkspaceResourceType.Task, "taskId")]
-    public async Task<ActionResult<AttachmentDto>> Upload(Guid taskId, IFormFile? file, CancellationToken ct)
+    public async Task<ActionResult<AttachmentDto>> Upload(Guid taskId, CancellationToken ct)
     {
+        // Read the form here so a Kestrel body-size rejection is not turned into a
+        // model-state 400 by IFormFile binding. The size limit is the endpoint's.
+        var form = await Request.ReadFormAsync(ct);
+        var file = form.Files.GetFile("file");
         if (file is null || file.Length <= 0)
             throw new BadRequestException("A non-empty file is required.");
 
@@ -48,13 +52,18 @@ public class TaskAttachmentsController : ControllerBase
         return Created($"/api/attachments/{result.Id}/download", result);
     }
 
-    /// <summary>Downloads a file. The workspace is resolved from the attachment, not from a client-supplied path.</summary>
+    /// <summary>
+    /// Downloads a file. The body is always application/octet-stream: the stored type
+    /// is not echoed, and the browser is told not to sniff it.
+    /// </summary>
     [HttpGet("api/attachments/{attachmentId:guid}/download")]
     [RequireWorkspaceRole(WorkspaceRole.Viewer, WorkspaceResourceType.Attachment, "attachmentId")]
     public async Task<IActionResult> Download(Guid attachmentId, CancellationToken ct)
     {
         var file = await _attachments.OpenAsync(attachmentId, ct);
-        return File(file.Content, file.ContentType, file.FileName);
+        Response.Headers.XContentTypeOptions = "nosniff";
+        Response.Headers.ContentSecurityPolicy = "default-src 'none'; sandbox";
+        return File(file.Content, "application/octet-stream", file.FileName);
     }
 
     /// <summary>Deletes a file. The uploader, or a workspace admin or owner, may delete.</summary>

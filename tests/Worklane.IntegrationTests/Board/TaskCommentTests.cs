@@ -161,4 +161,72 @@ public class TaskCommentTests : IClassFixture<WorklaneWebApplicationFactory>
 
         await connection.StopAsync();
     }
+
+    [Fact]
+    public async Task Delete_ScrubsCommentTextFromActivity()
+    {
+        var board = await BoardTestSetup.CreateAsync(_factory, "comments-scrub@test.com");
+        var task = await BoardTestSetup.CreateTaskAsync(board, "Redact me");
+        const string original = "super-secret-phrase";
+        const string revised = "other-secret-phrase";
+
+        var created = await (await board.Client.PostAsJsonAsync($"/api/tasks/{task.Id}/comments", new { body = original }))
+            .Content.ReadFromJsonAsync<CommentDto>(TestAuthHelper.JsonOptions);
+        (await board.Client.PatchAsJsonAsync($"/api/comments/{created!.Id}", new { body = revised }))
+            .EnsureSuccessStatusCode();
+
+        var before = await (await board.Client.GetAsync($"/api/tasks/{task.Id}/activity")).Content.ReadAsStringAsync();
+        before.Should().Contain(original).And.Contain(revised);
+
+        (await board.Client.DeleteAsync($"/api/comments/{created.Id}")).StatusCode.Should().Be(HttpStatusCode.NoContent);
+
+        var after = await (await board.Client.GetAsync($"/api/tasks/{task.Id}/activity")).Content.ReadAsStringAsync();
+        after.Should().NotContain(original);
+        after.Should().NotContain(revised);
+        after.Should().Contain("CommentDeleted");
+        after.Should().Contain(created.Id.ToString());
+    }
+
+    [Fact]
+    public async Task AdminOfAnotherWorkspace_CannotEditAComment()
+    {
+        var board = await BoardTestSetup.CreateAsync(_factory, "comments-ws-a@test.com", "Owner A");
+        var task = await BoardTestSetup.CreateTaskAsync(board, "Private");
+        var comment = await (await board.Client.PostAsJsonAsync($"/api/tasks/{task.Id}/comments", new { body = "Stay here" }))
+            .Content.ReadFromJsonAsync<CommentDto>(TestAuthHelper.JsonOptions);
+
+        var otherAdmin = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), "comments-ws-b@test.com", "Owner B");
+
+        (await otherAdmin.Client.PatchAsJsonAsync($"/api/comments/{comment!.Id}", new { body = "Taken" }))
+            .StatusCode.Should().Be(HttpStatusCode.Forbidden);
+    }
+
+    [Fact]
+    public async Task SignalR_TaskUpdatedCarriesCommentCount()
+    {
+        var board = await BoardTestSetup.CreateAsync(_factory, "comments-counts-hub@test.com");
+        var task = await BoardTestSetup.CreateTaskAsync(board, "Badge");
+
+        await using var connection = BoardTestSetup.Hub(_factory, board.User.Tokens.AccessToken);
+        var updates = new List<JsonElement>();
+        var seen = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        connection.On<JsonElement>("TaskUpdated", payload =>
+        {
+            updates.Add(payload);
+            if (updates.Count >= 2) seen.TrySetResult();
+        });
+        await connection.StartAsync();
+        await connection.InvokeAsync("JoinProject", board.Project.Id);
+
+        var comment = await (await board.Client.PostAsJsonAsync($"/api/tasks/{task.Id}/comments", new { body = "One" }))
+            .Content.ReadFromJsonAsync<CommentDto>(TestAuthHelper.JsonOptions);
+        await board.Client.DeleteAsync($"/api/comments/{comment!.Id}");
+        await seen.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+        updates[0].GetProperty("id").GetGuid().Should().Be(task.Id);
+        updates[0].GetProperty("commentCount").GetInt32().Should().Be(1);
+        updates[1].GetProperty("commentCount").GetInt32().Should().Be(0);
+
+        await connection.StopAsync();
+    }
 }

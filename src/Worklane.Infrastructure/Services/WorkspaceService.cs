@@ -20,6 +20,7 @@ public class WorkspaceService : IWorkspaceService
     private readonly UserManager<AppUser> _userManager;
     private readonly ILogger<WorkspaceService> _logger;
     private readonly IEmailService _emailService;
+    private readonly IRealtimeGroupMembership _realtime;
     private readonly FrontendSettings _frontendSettings;
 
     public WorkspaceService(
@@ -27,18 +28,21 @@ public class WorkspaceService : IWorkspaceService
         UserManager<AppUser> userManager,
         ILogger<WorkspaceService> logger,
         IEmailService emailService,
+        IRealtimeGroupMembership realtime,
         IOptions<FrontendSettings> frontendSettings)
     {
         _db = db;
         _userManager = userManager;
         _logger = logger;
         _emailService = emailService;
+        _realtime = realtime;
         _frontendSettings = frontendSettings.Value;
     }
 
     public async Task<List<WorkspaceDto>> GetMyWorkspacesAsync(Guid userId, CancellationToken cancellationToken)
     {
         var memberships = await _db.WorkspaceMembers
+            .IgnoreQueryFilters()
             .Where(m => m.UserId == userId)
             .Include(m => m.Workspace)
             .ToListAsync(cancellationToken);
@@ -170,7 +174,9 @@ public class WorkspaceService : IWorkspaceService
 
     public async Task AcceptInvitationAsync(Guid acceptingUserId, string token, CancellationToken cancellationToken)
     {
-        var invitation = await _db.Invitations.SingleOrDefaultAsync(i => i.Token == token, cancellationToken);
+        var invitation = await _db.Invitations
+            .IgnoreQueryFilters()
+            .SingleOrDefaultAsync(i => i.Token == token, cancellationToken);
         if (invitation is null || invitation.AcceptedAt is not null || invitation.ExpiresAt < DateTimeOffset.UtcNow)
         {
             throw new NotFoundException("Invitation is invalid or has expired.");
@@ -183,6 +189,7 @@ public class WorkspaceService : IWorkspaceService
         }
 
         var alreadyMember = await _db.WorkspaceMembers
+            .IgnoreQueryFilters()
             .AnyAsync(m => m.WorkspaceId == invitation.WorkspaceId && m.UserId == acceptingUserId, cancellationToken);
 
         if (!alreadyMember)
@@ -237,11 +244,16 @@ public class WorkspaceService : IWorkspaceService
 
         _db.WorkspaceMembers.Remove(member);
         await _db.SaveChangesAsync(cancellationToken);
+
+        await _realtime.RemoveUserFromWorkspaceAsync(workspaceId, targetUserId, cancellationToken);
     }
 
     public async Task<WorkspaceRole?> GetUserRoleAsync(Guid workspaceId, Guid userId, CancellationToken cancellationToken)
     {
+        // Runs before the request pins a tenant (and from the hub, which never does),
+        // so the fail-closed filter would hide every membership row.
         var member = await _db.WorkspaceMembers
+            .IgnoreQueryFilters()
             .SingleOrDefaultAsync(m => m.WorkspaceId == workspaceId && m.UserId == userId, cancellationToken);
 
         return member?.Role;

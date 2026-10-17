@@ -74,10 +74,15 @@ Worklane = ระบบจัดการงานแบบ multi-tenant (Jira �
 - **คอมเมนต์** — สร้าง/ดู/แก้ (เจ้าของเท่านั้น)/ลบ (เจ้าของ หรือ admin/owner) แล้ว broadcast ผ่าน SignalR
 - **WIP limit แบบ soft** — ตั้งบนคอลัมน์ได้, เกินแล้วยังย้าย/สร้างการ์ดได้ แต่ response บอก `isOverWipLimit`
 - **ไฟล์แนบ** — อัปโหลดผ่าน `IFileStorage` (ดิสก์ในเครื่อง, สลับ S3/Blob ได้ทีหลัง), จำกัดขนาดและชนิดไฟล์, ดาวน์โหลดเช็ค tenant เหมือน endpoint อื่น
-- **จำนวนคอมเมนต์/ไฟล์บนการ์ด** — `commentCount` และ `attachmentCount` อยู่ใน task DTO ทุกเส้น (get, list, my-tasks, การ์ดในคอลัมน์, create/move/update) นับด้วยสอง grouped query ต่อชุดผลลัพธ์ ไม่ยิงทีละการ์ด
+- **จำนวนคอมเมนต์/ไฟล์บนการ์ด** — `commentCount` และ `attachmentCount` อยู่ใน task DTO ทุกเส้น (get, list, my-tasks, การ์ดในคอลัมน์, create/move/update) นับด้วยสอง grouped query ต่อชุดผลลัพธ์ ไม่ยิงทีละการ์ด และ broadcast `TaskUpdated` เมื่อคอมเมนต์หรือไฟล์เปลี่ยน
+- **คอลัมน์ต้องอยู่โปรเจกต์เดียวกัน** — create/move/PATCH ที่ชี้คอลัมน์คนละโปรเจกต์หรือคนละ workspace ได้ 404 และไม่เก็บชื่อคอลัมน์นั้นใน activity; `BoardColumn` มี tenant filter
+- **ลบคอมเมนต์แล้วข้อความหายจาก activity** — แถว CommentAdded/CommentEdited ถูกลบ `body`/`oldValue`/`newValue`
+- **ไฟล์แนบ** — ตรวจนามสกุลและ magic bytes ไม่เชื่อ Content-Type จาก client, ดาวน์โหลดเป็น `application/octet-stream` พร้อม `nosniff` และ CSP, Kestrel จำกัดเฉพาะเส้นอัปโหลดที่ ~11 MB ส่วน endpoint อื่นคง 30 MB
+- **สมาชิกปัจจุบันเท่านั้นที่เข้ากลุ่ม SignalR** — `JoinProject` เช็คสมาชิก workspace, ถอดสมาชิกแล้วตัดการเชื่อมต่อออกจาก `project:{id}`, และเปิด `CloseOnAuthenticationExpiration`
+- **tenant filter ปิดเมื่อไม่มี workspace** — query ที่ยังไม่ปัก tenant ไม่คืนแถว; assignee ต้องเป็นสมาชิก workspace; 500 ไม่ส่ง `exception.Message`
 - **แมนเดย์วันหยุดสุดสัปดาห์ = 0** (WL-35) — คงกฎเดิม ไม่มีปฏิทินวันหยุดนักขัตฤกษ์
 
-**เทสต์:** `dotnet test` → ✅ **69/69 ผ่าน** (ของเดิม 45 + activity, comments, WIP, attachments, file storage, card counts)
+**เทสต์:** `dotnet test` → ✅ **86/86 ผ่าน** (ของเดิม 45 + activity, comments, WIP, attachments, file storage, card counts, แล้วก็คอลัมน์ข้ามโปรเจกต์/workspace, redact คอมเมนต์, 413 ของ Kestrel, magic bytes, สมาชิก SignalR, tenant แบบ fail-closed, assignee, และ 500 ที่ไม่ส่งข้อความ exception)
 
 ### Frontend
 

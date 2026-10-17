@@ -28,8 +28,8 @@ public class TaskAttachmentTests : IClassFixture<WorklaneWebApplicationFactory>
         var outsider = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), "files-out@test.com", "Outsider");
         await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, member.Tokens.User.Email, "Member");
 
-        var payload = new byte[] { 1, 2, 3, 4, 5 };
-        var uploaded = await UploadAsync(board.Client, task.Id, payload, "image/png", "../../notes.png");
+        var payload = SampleFiles.Png;
+        var uploaded = await UploadAsync(board.Client, task.Id, payload, "text/html", "../../notes.png");
         uploaded.StatusCode.Should().Be(HttpStatusCode.Created);
         var file = (await uploaded.Content.ReadFromJsonAsync<AttachmentDto>(TestAuthHelper.JsonOptions))!;
         file.FileName.Should().Be("notes.png");
@@ -44,7 +44,9 @@ public class TaskAttachmentTests : IClassFixture<WorklaneWebApplicationFactory>
 
         var download = await board.Client.GetAsync($"/api/attachments/{file.Id}/download");
         download.StatusCode.Should().Be(HttpStatusCode.OK);
-        download.Content.Headers.ContentType!.MediaType.Should().Be("image/png");
+        download.Content.Headers.ContentType!.MediaType.Should().Be("application/octet-stream");
+        download.Headers.GetValues("X-Content-Type-Options").Should().ContainSingle().Which.Should().Be("nosniff");
+        download.Headers.GetValues("Content-Security-Policy").Should().ContainSingle().Which.Should().Contain("default-src 'none'");
         download.Content.Headers.ContentDisposition!.DispositionType.Should().Be("attachment");
         download.Content.Headers.ContentDisposition.FileName.Should().Contain("notes.png");
         (await download.Content.ReadAsByteArrayAsync()).Should().Equal(payload);
@@ -77,7 +79,11 @@ public class TaskAttachmentTests : IClassFixture<WorklaneWebApplicationFactory>
         var board = await BoardTestSetup.CreateAsync(_factory, "files-reject@test.com");
         var task = await BoardTestSetup.CreateTaskAsync(board, "Gate");
 
-        (await UploadAsync(board.Client, task.Id, [1, 2], "application/x-msdownload", "run.exe"))
+        (await UploadAsync(board.Client, task.Id, SampleFiles.Png, "image/png", "run.exe"))
+            .StatusCode.Should().Be(HttpStatusCode.UnsupportedMediaType);
+        (await UploadAsync(board.Client, task.Id, SampleFiles.Html, "image/png", "notes.png"))
+            .StatusCode.Should().Be(HttpStatusCode.UnsupportedMediaType);
+        (await UploadAsync(board.Client, task.Id, SampleFiles.Png, "image/png", "photo.jpg"))
             .StatusCode.Should().Be(HttpStatusCode.UnsupportedMediaType);
         (await UploadAsync(board.Client, task.Id, [], "image/png", "empty.png"))
             .StatusCode.Should().Be(HttpStatusCode.BadRequest);
@@ -86,10 +92,22 @@ public class TaskAttachmentTests : IClassFixture<WorklaneWebApplicationFactory>
         (await UploadAsync(board.Client, task.Id, tooBig, "image/png", "big.png"))
             .StatusCode.Should().Be(HttpStatusCode.RequestEntityTooLarge);
 
-        var jpg = await UploadAsync(board.Client, task.Id, [9, 9], "image/jpg", "photo.jpg");
+        var jpg = await UploadAsync(board.Client, task.Id, SampleFiles.Jpeg, "text/html", "photo.jpg");
         jpg.StatusCode.Should().Be(HttpStatusCode.Created);
         var stored = (await jpg.Content.ReadFromJsonAsync<AttachmentDto>(TestAuthHelper.JsonOptions))!;
         stored.ContentType.Should().Be("image/jpeg");
+    }
+
+    [Fact]
+    public async Task Viewer_CannotUpload()
+    {
+        var board = await BoardTestSetup.CreateAsync(_factory, "files-viewer-owner@test.com");
+        var task = await BoardTestSetup.CreateTaskAsync(board, "Read only");
+        var viewer = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), "files-viewer@test.com");
+        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, viewer.Tokens.User.Email, "Viewer");
+
+        (await UploadAsync(viewer.Client, task.Id, SampleFiles.Png, "image/png", "notes.png"))
+            .StatusCode.Should().Be(HttpStatusCode.Forbidden);
     }
 
     [Fact]
@@ -106,7 +124,7 @@ public class TaskAttachmentTests : IClassFixture<WorklaneWebApplicationFactory>
         await connection.StartAsync();
         await connection.InvokeAsync("JoinProject", board.Project.Id);
 
-        var response = await UploadAsync(board.Client, task.Id, [7, 7, 7], "application/pdf", "spec.pdf");
+        var response = await UploadAsync(board.Client, task.Id, SampleFiles.Pdf, "application/pdf", "spec.pdf");
         var file = (await response.Content.ReadFromJsonAsync<AttachmentDto>(TestAuthHelper.JsonOptions))!;
 
         var addedPayload = await added.Task.WaitAsync(TimeSpan.FromSeconds(10));
@@ -115,7 +133,7 @@ public class TaskAttachmentTests : IClassFixture<WorklaneWebApplicationFactory>
         addedPayload.GetProperty("taskId").GetGuid().Should().Be(task.Id);
         addedPayload.GetProperty("fileName").GetString().Should().Be("spec.pdf");
         addedPayload.GetProperty("contentType").GetString().Should().Be("application/pdf");
-        addedPayload.GetProperty("sizeBytes").GetInt64().Should().Be(3);
+        addedPayload.GetProperty("sizeBytes").GetInt64().Should().Be(SampleFiles.Pdf.Length);
         addedPayload.GetProperty("uploadedBy").GetProperty("displayName").GetString().Should().Be("Files");
 
         await board.Client.DeleteAsync($"/api/attachments/{file.Id}");
@@ -135,7 +153,7 @@ public class TaskAttachmentTests : IClassFixture<WorklaneWebApplicationFactory>
         var member = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), "files-admin-member@test.com", "Member");
         await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, member.Tokens.User.Email, "Member");
 
-        var uploaded = await UploadAsync(member.Client, task.Id, [1], "text/plain", "note.txt");
+        var uploaded = await UploadAsync(member.Client, task.Id, SampleFiles.Text, "application/octet-stream", "note.txt");
         var file = (await uploaded.Content.ReadFromJsonAsync<AttachmentDto>(TestAuthHelper.JsonOptions))!;
 
         (await board.Client.DeleteAsync($"/api/attachments/{file.Id}")).StatusCode.Should().Be(HttpStatusCode.NoContent);

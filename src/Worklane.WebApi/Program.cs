@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
@@ -9,6 +10,7 @@ using Worklane.Application;
 using Worklane.Application.Board.Interfaces;
 using Worklane.Application.Common.Interfaces;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.Extensions.Options;
 using Worklane.Application.Common.Options;
 using Worklane.Infrastructure;
 using Worklane.Infrastructure.Persistence;
@@ -34,6 +36,12 @@ builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
 
 builder.Services.AddControllers()
     .AddJsonOptions(options => options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter()));
+builder.Services.Configure<ApiBehaviorOptions>(options =>
+{
+    var builtIn = options.InvalidModelStateResponseFactory;
+    options.InvalidModelStateResponseFactory = context =>
+        ExceptionHandlingMiddleware.InvalidModelStateResponse(context, builtIn);
+});
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>
 {
@@ -56,18 +64,17 @@ builder.Services.AddSwaggerGen(options =>
     });
 });
 
-var fileStorage = builder.Configuration.GetSection(FileStorageSettings.SectionName).Get<FileStorageSettings>() ?? new FileStorageSettings();
-var maxUploadBytes = fileStorage.MaxBytes > 0 ? fileStorage.MaxBytes : 10 * 1024 * 1024;
-// Leave room for the multipart envelope so a file at the configured cap still fits,
-// while anything larger is rejected by Kestrel with 413 before it is buffered.
-var requestCeiling = maxUploadBytes + (1024 * 1024);
-builder.Services.Configure<FormOptions>(options => options.MultipartBodyLengthLimit = requestCeiling);
-builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = requestCeiling);
+// Every other endpoint keeps Kestrel's 30 MB ceiling. Only attachment upload is
+// tightened, to the configured file cap plus room for the multipart envelope
+// (~11 MB at the default). The per-request value is read from options so test
+// overrides of MaxBytes apply.
+builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = FileStorageSettings.GlobalRequestBodyLimitBytes);
 
 builder.Services.AddSignalR()
     .AddJsonProtocol(options => options.PayloadSerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 builder.Services.AddScoped<IBoardNotifier, SignalRBoardNotifier>();
 builder.Services.AddSingleton<IPresenceTracker, PresenceTracker>();
+builder.Services.AddSingleton<IRealtimeGroupMembership, SignalRGroupMembership>();
 
 builder.Services.AddCors(options =>
 {
@@ -122,6 +129,21 @@ var app = builder.Build();
 
 app.UseSerilogRequestLogging();
 
+app.Use(async (context, next) =>
+{
+    if (HttpMethods.IsPost(context.Request.Method) && IsAttachmentUpload(context.Request.Path))
+    {
+        var feature = context.Features.Get<IHttpMaxRequestBodySizeFeature>();
+        if (feature is { IsReadOnly: false })
+        {
+            var limit = context.RequestServices.GetRequiredService<IOptions<FileStorageSettings>>().Value.AttachmentRequestLimit;
+            feature.MaxRequestBodySize = limit;
+        }
+    }
+
+    await next();
+});
+
 app.UseMiddleware<ExceptionHandlingMiddleware>();
 
 // Configure the HTTP request pipeline.
@@ -144,8 +166,25 @@ app.UseAuthentication();
 app.UseAuthorization();
 
 app.MapControllers();
-app.MapHub<NotificationsHub>("/hubs/notifications");
+app.MapHub<NotificationsHub>("/hubs/notifications", options =>
+{
+    options.CloseOnAuthenticationExpiration = true;
+});
 
 app.Run();
+
+static bool IsAttachmentUpload(PathString path)
+{
+    if (!path.HasValue) return false;
+    var value = path.Value!;
+    const string prefix = "/api/tasks/";
+    const string suffix = "/attachments";
+    if (!value.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ||
+        !value.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+        return false;
+
+    var id = value[prefix.Length..^suffix.Length];
+    return Guid.TryParse(id, out _);
+}
 
 public partial class Program { }
