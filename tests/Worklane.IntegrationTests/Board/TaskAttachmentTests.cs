@@ -85,8 +85,11 @@ public class TaskAttachmentTests : IClassFixture<WorklaneWebApplicationFactory>
             .StatusCode.Should().Be(HttpStatusCode.UnsupportedMediaType);
         (await UploadAsync(board.Client, task.Id, SampleFiles.Png, "image/png", "photo.jpg"))
             .StatusCode.Should().Be(HttpStatusCode.UnsupportedMediaType);
-        (await UploadAsync(board.Client, task.Id, [], "image/png", "empty.png"))
-            .StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var empty = await UploadAsync(board.Client, task.Id, [], "image/png", "empty.png");
+        empty.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var emptyBody = await empty.Content.ReadFromJsonAsync<JsonElement>(TestAuthHelper.JsonOptions);
+        emptyBody.GetProperty("code").GetString().Should().Be("file_empty");
+        emptyBody.GetProperty("detail").GetString().Should().Be("A non-empty file is required.");
 
         var tooBig = new byte[WorklaneWebApplicationFactory.TestMaxUploadBytes + 1];
         var tooBigResponse = await UploadAsync(board.Client, task.Id, tooBig, "image/png", "big.png");

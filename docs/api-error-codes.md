@@ -11,6 +11,7 @@ Reserved names are not overwritten by exception parameters, compared without reg
 | code | status | extensions |
 | --- | --- | --- |
 | `bad_request` | 400 | |
+| `file_empty` | 400 | |
 | `invalid_request_body` | 400 | |
 | `invalid_route_id` | 400 | |
 | `validation_failed` | 400 | `errors`, `fieldCodes` |
@@ -26,4 +27,4 @@ Reserved names are not overwritten by exception parameters, compared without reg
 | `rate_limited` | 429 | |
 | `internal_error` | 500 | `traceId` |
 
-`request_too_large` is a body over the server limit, rejected before the body is read. `file_too_large` is one attachment over the per-file limit. `fieldCodes` values are per-field snake_case codes, not response codes.
+`file_empty` is a 0-byte upload. `request_too_large` is a body over the server limit, rejected before the body is read. `file_too_large` is one attachment over the per-file limit. `fieldCodes` values are per-field snake_case codes, not response codes.

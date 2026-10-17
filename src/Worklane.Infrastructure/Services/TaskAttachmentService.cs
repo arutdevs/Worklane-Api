@@ -91,7 +91,7 @@ public class TaskAttachmentService : ITaskAttachmentService
         }
 
         if (headerRead <= 0)
-            throw new BadRequestException("A non-empty file is required.");
+            throw new BadRequestException("file_empty", "A non-empty file is required.");
 
         if (headerRead == headerCapacity && headerCapacity == _settings.MaxBytes)
         {
@@ -126,7 +126,7 @@ public class TaskAttachmentService : ITaskAttachmentService
         if (size <= 0)
         {
             await _storage.DeleteAsync(attachment.StorageKey, cancellationToken);
-            throw new BadRequestException("A non-empty file is required.");
+            throw new BadRequestException("file_empty", "A non-empty file is required.");
         }
 
         if (used + size > _settings.WorkspaceQuotaBytes)
