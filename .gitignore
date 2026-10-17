@@ -13,6 +13,9 @@ obj/
 # Local attachment storage (see FileStorage:LocalPath)
 data/
 
+# Local secrets. Copy .env.example and fill in real values. Never commit .env.
+.env
+
 # OS
 .DS_Store
 Thumbs.db

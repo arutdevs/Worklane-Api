@@ -14,26 +14,38 @@ a Kanban board with drag-and-drop, and a dashboard that measures effort per pers
 - **Frontend:** Angular 22 (standalone components) + Bootstrap 5 + ng-bootstrap
 - **i18n:** ngx-translate, English (`en`, default) and Thai (`th`)
 - **Realtime:** SignalR hub at `/hubs/notifications`. Clients join a project group and receive board, comment, attachment, and presence events (see below)
-- **Containers:** Docker Compose — `api`, `web`, `postgres`
+- **Containers:** Docker Compose — `api`, `web`, `postgres`, and local S3-compatible storage (`s3`)
 
 ## Run everything
 
 ```bash
+cp .env.example .env
+# Fill S3_ROOT_USER, S3_ROOT_PASSWORD, WL_S3_ACCESS_KEY, and WL_S3_SECRET_KEY.
+# Example: openssl rand -hex 24
 docker compose up
 ```
 
-This builds and starts all three services:
+This builds and starts the stack:
 
 | Service    | URL                                   |
 |------------|----------------------------------------|
 | Web (Angular, served by nginx) | http://localhost:4200        |
 | API (Swagger UI in Development) | http://localhost:5000/swagger |
 | Postgres   | localhost:5432 (user/pass/db: `worklane`) |
+| Object storage (S3 API, localhost only) | http://localhost:9000 |
 
 EF Core migrations are applied automatically on API startup in the `Development` environment
 (the default in `docker-compose.yml`), and a demo user/workspace/project are seeded on first run.
 
 **Demo login:** `demo@worklane.app` / `Demo123!`
+
+## Local object storage
+
+Compose runs RustFS as `s3` (S3 API published on `127.0.0.1:9000` only) and a one-shot `s3-init` container. `s3-init` creates the private bucket `worklane-dev-files`, lifecycle rules for `quarantine/` (1 day) and `exports/` (7 days), and a least-privilege app user whose policy allows object operations on that bucket plus `s3:ListBucketMultipartUploads`. Every credential is read from `.env`.
+
+`WL_S3_VERSIONING` defaults to `off`, matching Cloudflare R2 (the beta store). Set it to `on` in `.env` before the first `s3-init` run to exercise the DigitalOcean Spaces path: bucket versioning and a 30-day noncurrent-version expiry. Application code must not rely on versioning or bucket policy, because R2 provides neither. If versioning was enabled on the `s3data` volume, switching the flag to `off` leaves it in place; reset with `docker compose down -v`.
+
+The API still stores attachments on the `attachments` volume. `FileStorage__S3__ServiceUrl` is `http://s3:9000` (and the other `FileStorage__S3__*` keys from the storage spec are set), but `FileStorageSettings` does not bind those keys yet, so `FileStorage__Provider` is left unset and the process keeps the local-disk provider. Images are pinned by digest in `docker-compose.yml`; changing a digest is a reviewed edit. RustFS is not used in CI.
 
 ## Golden path
 
@@ -167,3 +179,5 @@ Components do **not** carry their own stylesheets — the single theme definitio
 `appsettings.Development.json` and `docker-compose.yml` ship a **development-only** JWT signing
 secret for convenience. Replace `Jwt__Secret` with a real secret (e.g. via environment variable or
 a secrets manager) before deploying anywhere real.
+
+Object-storage credentials (`S3_ROOT_USER`, `S3_ROOT_PASSWORD`, `WL_S3_ACCESS_KEY`, `WL_S3_SECRET_KEY`) are not in the repo. Copy `.env.example` to `.env` and generate them locally. `.env` is git-ignored.
