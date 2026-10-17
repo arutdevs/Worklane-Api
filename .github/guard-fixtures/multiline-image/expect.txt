@@ -1,2 +1,3 @@
 web image=${X:-busybox}
 Deploy compose service image contains a dollar sign.
+::error file=docker-compose.yml::Deploy compose service image contains a dollar sign.

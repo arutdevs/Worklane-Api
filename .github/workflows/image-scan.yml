@@ -21,6 +21,8 @@ jobs:
 
       # Fixtures are pruned out of the scan above. expect.txt of PASS must exit 0.
       # Any other expect.txt must exit 1 and the guard output must contain each line.
+      # At least one of those lines must exactly equal a full guard ::error line.
+      # config failed / could not read in the output always fail, even if expect.txt lists them.
       - name: Guard fixtures match expect.txt
         run: |
           set -euo pipefail
@@ -63,16 +65,29 @@ jobs:
                 echo "::error::${d} expected exit 1, got ${code}"
                 bad=1
               fi
+              exact_guard=0
               while IFS= read -r expected || [ -n "$expected" ]; do
+                expected="${expected%$'\r'}"
                 [ -z "$expected" ] && continue
-                if ! grep -q -F "$expected" "$out"; then
+                if ! grep -q -F -e "$expected" -- "$out"; then
                   echo "::error::${d} output missing expected text: ${expected}"
                   bad=1
                 fi
+                case "$expected" in
+                  '::error file='*)
+                    if grep -q -x -F -e "$expected" -- "$out"; then
+                      exact_guard=1
+                    fi
+                    ;;
+                esac
               done < "$d/expect.txt"
-              for needle in "config failed" "could not read"; do
-                if grep -q -F "$needle" "$out" && ! grep -q -F "$needle" "$d/expect.txt"; then
-                  echo "::error::${d} output contains unexpected: ${needle}"
+              if [ "$exact_guard" -eq 0 ]; then
+                echo "::error::${d} expect.txt has no line that exactly equals a full guard error message"
+                bad=1
+              fi
+              for expected in "config failed" "could not read"; do
+                if grep -q -F -e "$expected" -- "$out"; then
+                  echo "::error::${d} output contains unexpected: ${expected}"
                   bad=1
                 fi
               done
