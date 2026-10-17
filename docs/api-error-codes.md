@@ -8,6 +8,8 @@ Reserved names are not overwritten by exception parameters, compared without reg
 
 `unsupported_media_type`, `not_found`, and `unauthorized` are generic for now. Later cards rename them to `unsupported_file_type`, `<entity>_not_found`, and `invalid_credentials` / `refresh_token_invalid` (WL-64).
 
+`RequireWorkspaceRoleAttribute`: a non-member gets 404 `not_found` with the same body as a non-existent id. 403 `workspace_access_denied` is only for a member whose role is too low. That filter change ships in WL-88. Until then, a non-member still gets 403 `workspace_access_denied`.
+
 | code | status | extensions |
 | --- | --- | --- |
 | `bad_request` | 400 | |
@@ -17,7 +19,7 @@ Reserved names are not overwritten by exception parameters, compared without reg
 | `validation_failed` | 400 | `errors`, `fieldCodes` |
 | `unauthorized` | 401 | |
 | `forbidden` | 403 | |
-| `workspace_access_denied` | 403 | |
+| `workspace_access_denied` | 403 | member whose role is too low. A non-member is 404 `not_found`, same body as a missing id, once WL-88 lands. Until then a non-member still gets this 403. |
 | `not_found` | 404 | |
 | `conflict` | 409 | |
 | `quota_exceeded` | 409 | `usedBytes`, `quotaBytes`, `fileBytes` when the size is known |
