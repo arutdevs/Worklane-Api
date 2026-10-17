@@ -29,7 +29,7 @@ docker compose -f docker-compose.yml -f compose.dev.yml up
 
 ห้าม deploy จนกว่า WL-63 (${JWT_SIGNING_KEY:?}) และ WL-71 จะเสร็จ
 
-The deploy compose guard only selects files by name (`*compose*` and `*stack*`). A file named `prod.yml` would slip through. A symlinked `docker-compose.yml` also slips through, because the scan uses `find -type f` and does not follow symlinks. The real control is C7 in WL-71. Security reviews fixture changes under `.github/guard-fixtures/`.
+The deploy compose guard only selects files by name (`*compose*` and `*stack*`). A file named `prod.yml` would slip through. A symlinked `docker-compose.yml` also slips through, because the scan uses `find -type f` and does not follow symlinks. The real control is C7 in WL-71. Fixture changes under `.github/guard-fixtures/` go through Security review as a process. `.github/CODEOWNERS` names @arutdevs, the same account that opens every pull request, and code-owner review is not enforced, so that entry enforces nothing. Enforcing that review is อรุษ's ruleset decision.
 
 The dev command above also starts local object storage. This builds and starts the stack:
 
