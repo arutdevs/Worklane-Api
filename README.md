@@ -27,6 +27,8 @@ docker compose -f docker-compose.yml -f compose.dev.yml up
 
 `docker compose up` without `compose.dev.yml` starts the API, web, and Postgres only. That is the file a staging or prod deploy should use. RustFS is not in it, and it does not start.
 
+ห้าม deploy จนกว่า WL-63 (${JWT_SIGNING_KEY:?}) และ WL-71 จะเสร็จ
+
 The dev command above also starts local object storage. This builds and starts the stack:
 
 | Service    | URL                                   |
