@@ -56,26 +56,36 @@ wl63="$(deploy_dir)/WL63_DONE"
 wl63_created=0
 wl63_stash=""
 dirty_probe="$(repo_root)/.check-compose-dirty-probe"
-# Move a real marker aside so this run can recreate it, then put it back.
-# Delete WL63_DONE only when this run created the file.
-if [[ -e "$wl63" || -L "$wl63" ]]; then
-  wl63_stash="$workdir/wl63.stash"
-  mv "$wl63" "$wl63_stash"
-fi
+lab_probe="$(repo_root)/src/Worklane.WebApi/LabProbe.cs"
+lab_probe_created=0
+env_probe=""
+env_probe_created=0
+commit_probe_image=""
+worktree_probe_image=""
 cleanup() {
   rm -f "$dirty_probe"
+  if [[ "$lab_probe_created" == "1" ]]; then
+    rm -f "$lab_probe"
+  fi
+  if [[ "$env_probe_created" == "1" ]]; then
+    rm -f "$env_probe"
+  fi
   if [[ "$wl63_created" == "1" ]]; then
     rm -f "$wl63"
   fi
   if [[ -n "$wl63_stash" && -e "$wl63_stash" ]]; then
     mv "$wl63_stash" "$wl63"
   fi
+  if [[ -n "$commit_probe_image" ]]; then
+    docker image rm -f "$commit_probe_image" "$worktree_probe_image" >/dev/null 2>&1 || true
+  fi
   rm -rf "$workdir"
 }
 trap cleanup EXIT
 
 # Outside CI, do nothing else if a live beta project is present. `docker compose
-# down` on worklane-prod would remove that lab's containers.
+# down` on worklane-prod would remove that lab's containers. This runs before
+# WL63_DONE is moved, so a refusal leaves that file where it was.
 refuse_if_live_beta() {
   if [[ -n "${CI:-}" || -n "${GITHUB_ACTIONS:-}" ]]; then
     return 0
@@ -93,6 +103,13 @@ refuse_if_live_beta() {
   fi
 }
 refuse_if_live_beta
+
+# Move a real marker aside so this run can recreate it, then put it back.
+# Delete WL63_DONE only when this run created the file.
+if [[ -e "$wl63" || -L "$wl63" ]]; then
+  wl63_stash="$workdir/wl63.stash"
+  mv "$wl63" "$wl63_stash"
+fi
 envfile="$workdir/env"
 cat >"$envfile" <<EOF
 COMPOSE_PROJECT_NAME=worklane-prod
@@ -179,9 +196,6 @@ fi
 if grep -nE '^[[:space:]]*image:[[:space:]]*.*:beta[[:space:]]*$' "$compose_path"; then
   die "beta compose must not use :beta image tags"
 fi
-if grep -nE '^[[:space:]]*build:' "$compose_path"; then
-  die "beta compose must not build api, web, or migrator (that would tag the sentinel)"
-fi
 if grep -nE '^[[:space:]]*actions:[[:space:]]*write' .github/workflows/docker-image.yml; then
   die "docker-image.yml must not grant actions: write"
 fi
@@ -219,6 +233,7 @@ fi
 rendered="$workdir/compose.json"
 docker compose --env-file "$envfile" -f "$compose_path" config --format json >"$rendered"
 docker compose --env-file "$envfile" -f "$compose_path" --profile migrate --profile tools config --format json >"$workdir/migrate.json"
+docker compose --env-file "$envfile" -f "$compose_path" --profile '*' config --no-interpolate --format json >"$workdir/nointerp.json"
 
 python3 - "$rendered" "$example" "$workdir/migrate.json" <<'PY'
 import json, sys
@@ -354,21 +369,54 @@ assert api_env["ASPNETCORE_ENVIRONMENT"] == "Production"
 print("compose config ok")
 PY
 
-# No host bind of any path. Named volumes without bind driver_opts are allowed.
-# Also rejects docker.sock, secrets/configs file:, and volume driver_opts binds.
+# Allowlist on rendered compose JSON. Top-level volumes may not set driver,
+# driver_opts, or external (that is what lets a local overlay lowerdir= or an
+# ext4 device: through). Services may not set devices, privileged, any "* : host"
+# (pid, ipc, network_mode, userns_mode, or any other top-level string "host"),
+# volumes_from, env_file, or build (context, additional_contexts, ssh).
+# Service mounts must be type volume. docker.sock and secrets/configs file: stay out.
 assert_no_host_mounts() {
   python3 - "$1" <<'PY'
 import json, sys
 doc = json.load(open(sys.argv[1]))
 bad = []
+host_keys = ("pid", "ipc", "network_mode", "userns_mode", "cgroup", "cgroupns", "pid_mode")
 
 def sock(label, blob):
     if "docker.sock" in blob:
         bad.append(f"{label} docker.sock")
 
+def is_host(value):
+    return isinstance(value, str) and value.strip().lower() == "host"
+
 for name, service in (doc.get("services") or {}).items():
     if not isinstance(service, dict):
         continue
+    if service.get("privileged") is True:
+        bad.append(f"{name} privileged")
+    if service.get("devices"):
+        bad.append(f"{name} devices")
+    for key, value in service.items():
+        if key in host_keys and is_host(value):
+            bad.append(f"{name} {key} host")
+        elif key not in host_keys and is_host(value):
+            bad.append(f"{name} {key} host")
+    if service.get("volumes_from"):
+        bad.append(f"{name} volumes_from")
+    if service.get("env_file"):
+        bad.append(f"{name} env_file")
+    if "build" in service and service.get("build") not in (None, False, ""):
+        build = service.get("build")
+        bad.append(f"{name} build")
+        if isinstance(build, str) and build:
+            bad.append(f"{name} build context")
+        elif isinstance(build, dict):
+            if build.get("context"):
+                bad.append(f"{name} build context")
+            if build.get("additional_contexts"):
+                bad.append(f"{name} build additional_contexts")
+            if build.get("ssh"):
+                bad.append(f"{name} build ssh")
     for mount in service.get("volumes") or []:
         if isinstance(mount, str):
             sock(name, mount)
@@ -377,7 +425,7 @@ for name, service in (doc.get("services") or {}).items():
             continue
         if not isinstance(mount, dict):
             continue
-        if mount.get("type") == "bind":
+        if mount.get("type") != "volume":
             bad.append(f"{name} bind {mount.get('source')}")
         sock(name, json.dumps(mount))
     sock(name, json.dumps(service.get("secrets") or ""))
@@ -386,11 +434,18 @@ for name, service in (doc.get("services") or {}).items():
 for name, vol in (doc.get("volumes") or {}).items():
     if not isinstance(vol, dict):
         continue
-    opts = vol.get("driver_opts") or {}
-    typ = str(opts.get("type") or "")
-    flag = str(opts.get("o") or "")
-    if typ == "bind" or "bind" in flag.split(",") or (opts.get("device") and typ in {"none", "bind"}):
-        bad.append(f"volume {name} bind driver_opts")
+    if "driver" in vol:
+        bad.append(f"volume {name} bare-driver")
+    opts = vol.get("driver_opts")
+    if "driver_opts" in vol:
+        bad.append(f"volume {name} driver_opts")
+        blob = json.dumps(opts).lower() if opts is not None else ""
+        if "lowerdir" in blob:
+            bad.append(f"volume {name} lowerdir")
+        if "ext4" in blob:
+            bad.append(f"volume {name} ext4-device")
+    if "external" in vol and vol.get("external") not in (False, None, "false"):
+        bad.append(f"volume {name} external")
     sock(f"volume {name}", json.dumps(vol))
 
 for section in ("secrets", "configs"):
@@ -407,6 +462,7 @@ PY
 
 assert_no_host_mounts "$rendered"
 assert_no_host_mounts "$workdir/migrate.json"
+assert_no_host_mounts "$workdir/nointerp.json"
 
 # Control: a named volume is not a bind.
 python3 - "$rendered" "$workdir/ok-volume.json" <<'PY'
@@ -420,14 +476,15 @@ PY
 assert_no_host_mounts "$workdir/ok-volume.json"
 
 expect_host_mount_forbidden() {
-  local label=$1
+  local label=$1 bind_out bind_status
   set +e
   bind_out=$(assert_no_host_mounts "$workdir/bad-mount.json" 2>&1)
   bind_status=$?
   set -e
-  [[ "$bind_status" -ne 0 ]]
-  printf '%s\n' "$bind_out" | grep -q 'host mount forbidden'
-  printf '%s\n' "$bind_out" | grep -q "$label"
+  if [[ "$bind_status" -eq 0 ]] || ! printf '%s\n' "$bind_out" | grep -q 'host mount forbidden' || ! printf '%s\n' "$bind_out" | grep -q -- "$label"; then
+    printf '%s\n' "$bind_out" >&2
+    die "expected host mount forbidden ($label)"
+  fi
 }
 
 # Negative: any bind, including paths the old repo-root rule missed.
@@ -503,6 +560,162 @@ services:
 EOF
 docker compose --env-file "$envfile" -f "$compose_path" -f "$bad_override" --profile migrate config --format json >"$workdir/bad-mount.json"
 expect_host_mount_forbidden "migrator"
+
+# Each forbidden key through compose config, so YAML style does not matter.
+# --no-interpolate keeps env_file; interpolated config folds it into environment.
+render_forbidden() {
+  cat >"$workdir/bad-override.yml"
+  docker compose --env-file "$envfile" -f "$compose_path" -f "$workdir/bad-override.yml" \
+    --profile '*' config --no-interpolate --format json >"$workdir/bad-mount.json"
+}
+
+render_forbidden <<'EOF'
+volumes:
+  sneak:
+    driver: local
+services:
+  api:
+    volumes:
+      - sneak:/mnt/sneak
+EOF
+expect_host_mount_forbidden "bare-driver"
+
+render_forbidden <<'EOF'
+volumes:
+  sneak:
+    driver: local
+    driver_opts:
+      type: local
+      o: lowerdir=/opt/worklane,upperdir=/tmp/wl-upper,workdir=/tmp/wl-work
+      device: overlay
+services:
+  api:
+    volumes:
+      - sneak:/mnt/sneak
+EOF
+expect_host_mount_forbidden "lowerdir"
+
+render_forbidden <<'EOF'
+volumes:
+  sneak:
+    driver: local
+    driver_opts:
+      type: ext4
+      device: /dev/sdb1
+services:
+  api:
+    volumes:
+      - sneak:/mnt/sneak
+EOF
+expect_host_mount_forbidden "ext4-device"
+
+render_forbidden <<'EOF'
+volumes:
+  extvol:
+    external: true
+    name: host_extvol
+services:
+  api:
+    volumes:
+      - extvol:/mnt/ext
+EOF
+expect_host_mount_forbidden "external"
+
+render_forbidden <<'EOF'
+services:
+  api:
+    privileged: true
+EOF
+expect_host_mount_forbidden "privileged"
+
+render_forbidden <<'EOF'
+services:
+  api:
+    devices:
+      - /dev/sda:/dev/sda
+EOF
+expect_host_mount_forbidden "devices"
+
+render_forbidden <<'EOF'
+services:
+  api:
+    pid: host
+EOF
+expect_host_mount_forbidden "pid"
+
+render_forbidden <<'EOF'
+services:
+  api:
+    ipc: host
+EOF
+expect_host_mount_forbidden "ipc"
+
+render_forbidden <<'EOF'
+services:
+  api:
+    networks: !reset []
+    network_mode: host
+EOF
+expect_host_mount_forbidden "network_mode"
+
+render_forbidden <<'EOF'
+services:
+  api:
+    userns_mode: host
+EOF
+expect_host_mount_forbidden "userns_mode"
+
+render_forbidden <<'EOF'
+services:
+  api:
+    volumes_from:
+      - postgres
+EOF
+expect_host_mount_forbidden "volumes_from"
+
+printf 'FOO=from-env-file\n' >"$workdir/extra.env"
+cat >"$workdir/bad-override.yml" <<EOF
+services:
+  api:
+    env_file:
+      - $workdir/extra.env
+EOF
+docker compose --env-file "$envfile" -f "$compose_path" -f "$workdir/bad-override.yml" \
+  --profile '*' config --no-interpolate --format json >"$workdir/bad-mount.json"
+expect_host_mount_forbidden "env_file"
+
+render_forbidden <<'EOF'
+services:
+  api:
+    build: .
+EOF
+expect_host_mount_forbidden "build context"
+
+render_forbidden <<'EOF'
+services:
+  api:
+    build:
+      context: .
+      additional_contexts:
+        extra: .
+EOF
+expect_host_mount_forbidden "additional_contexts"
+
+render_forbidden <<'EOF'
+services:
+  api:
+    build:
+      context: .
+      ssh:
+        - default
+EOF
+expect_host_mount_forbidden "build ssh"
+
+render_forbidden <<'EOF'
+services:
+  api: {build: {context: ., ssh: [default], additional_contexts: {extra: .}}}
+EOF
+expect_host_mount_forbidden "build ssh"
 
 # Generated override: literal name and images, no ${ in an image line.
 sha40=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
@@ -811,5 +1024,51 @@ loose_status=$?
 set -e
 [[ "$loose_status" -ne 0 ]]
 grep -q 'writable' "$workdir/loose.out"
+
+# An ignored .cs file and an ignored env file must not be in an image built from the commit.
+marker="LABPROBE_SHOULD_NOT_SHIP"
+printf 'namespace Worklane.WebApi;\npublic static class LabProbe { public const string Marker = "%s"; }\n' "$marker" >"$lab_probe"
+lab_probe_created=1
+exclude="$(repo_root)/.git/info/exclude"
+mkdir -p "$(dirname "$exclude")"
+if ! grep -qxF 'src/Worklane.WebApi/LabProbe.cs' "$exclude" 2>/dev/null; then
+  printf '%s\n' 'src/Worklane.WebApi/LabProbe.cs' >>"$exclude"
+fi
+git -C "$(repo_root)" check-ignore -q -- "$lab_probe"
+if [[ -e "$(repo_root)/.env.local" ]]; then
+  env_probe="$(repo_root)/.env.labprobe"
+else
+  env_probe="$(repo_root)/.env.local"
+fi
+printf 'ENV_LOCAL_SHOULD_NOT_SHIP=1\n' >"$env_probe"
+env_probe_created=1
+git -C "$(repo_root)" check-ignore -q -- "$env_probe"
+cat >"$workdir/Probe.Dockerfile" <<'EOF'
+FROM alpine:3.20
+COPY . /out/
+EOF
+commit_probe_image="wl-commit-probe-$$:test"
+worktree_probe_image="wl-worktree-probe-$$:test"
+docker_build_from_commit "$(git_head)" "$workdir/Probe.Dockerfile" --tag "$commit_probe_image"
+docker build --file "$workdir/Probe.Dockerfile" --tag "$worktree_probe_image" "$(repo_root)"
+set +e
+docker run --rm --entrypoint grep "$worktree_probe_image" -q "$marker" /out/src/Worklane.WebApi/LabProbe.cs
+worktree_cs=$?
+docker run --rm --entrypoint grep "$worktree_probe_image" -q ENV_LOCAL_SHOULD_NOT_SHIP "/out/$(basename "$env_probe")"
+worktree_env=$?
+docker run --rm --entrypoint grep "$commit_probe_image" -R -q "$marker" /out
+commit_cs=$?
+docker run --rm --entrypoint grep "$commit_probe_image" -R -q ENV_LOCAL_SHOULD_NOT_SHIP /out
+commit_env=$?
+set -e
+[[ "$worktree_cs" -eq 0 && "$worktree_env" -eq 0 ]]
+[[ "$commit_cs" -eq 1 && "$commit_env" -eq 1 ]]
+rm -f "$lab_probe" "$env_probe"
+lab_probe_created=0
+env_probe_created=0
+docker image rm -f "$commit_probe_image" "$worktree_probe_image" >/dev/null
+commit_probe_image=""
+worktree_probe_image=""
+printf 'ignored file stayed out of the commit image\n'
 
 printf 'check-compose.sh ok\n'

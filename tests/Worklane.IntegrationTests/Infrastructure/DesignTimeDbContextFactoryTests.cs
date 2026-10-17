@@ -4,6 +4,10 @@ using Worklane.Infrastructure.Persistence;
 
 namespace Worklane.IntegrationTests.Infrastructure;
 
+[CollectionDefinition("DesignTimeDbContextFactory", DisableParallelization = true)]
+public sealed class DesignTimeDbContextFactoryCollection;
+
+[Collection("DesignTimeDbContextFactory")]
 public class DesignTimeDbContextFactoryTests
 {
     [Fact]

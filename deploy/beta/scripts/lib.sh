@@ -334,6 +334,33 @@ require_clean_worktree() {
   fi
 }
 
+# Image context is the tree of sha, not the working directory. Ignored files
+# (src/**/LabProbe.cs, .env.local, and anything else git does not track) are
+# not in `git archive`, so they cannot be COPY'd into the image.
+# dockerfile is either a tracked path under the repo or a Dockerfile outside it.
+docker_build_from_commit() {
+  local sha=$1 dockerfile=$2
+  shift 2
+  local root ctx df status
+  root=$(repo_root)
+  ctx=$(mktemp -d)
+  if ! git -C "$root" archive "$sha" | tar -x -C "$ctx"; then
+    rm -rf "$ctx"
+    die "git archive $sha failed"
+  fi
+  if [[ "$dockerfile" == "$root/"* ]]; then
+    df="$ctx/${dockerfile#"$root"/}"
+  else
+    df=$dockerfile
+  fi
+  set +e
+  docker build --file "$df" "$@" "$ctx"
+  status=$?
+  set -e
+  rm -rf "$ctx"
+  return "$status"
+}
+
 verify_locked_image() {
   local kind=$1 image id actual sha slot image_kind revision
   image=$(require_lock "${kind}_IMAGE")
@@ -437,12 +464,10 @@ build_api_image() {
   require_clean_worktree
   platform=$(require_env DOCKER_PLATFORM)
   image="worklane-api:${slot}-${sha}"
-  docker build \
+  docker_build_from_commit "$sha" "$(repo_root)/src/Worklane.WebApi/Dockerfile" \
     --platform "$platform" \
     --label "org.opencontainers.image.revision=$sha" \
-    --tag "$image" \
-    --file "$(repo_root)/src/Worklane.WebApi/Dockerfile" \
-    "$(repo_root)"
+    --tag "$image"
   id=$(image_id_of "$image")
   lock_set API_COMMIT "$sha"
   lock_set API_IMAGE "$image"
@@ -461,12 +486,10 @@ build_migrator_image() {
   require_clean_worktree
   platform=$(require_env DOCKER_PLATFORM)
   image="worklane-migrator:${slot}-${sha}"
-  docker build \
+  docker_build_from_commit "$sha" "$(deploy_dir)/Dockerfile" \
     --platform "$platform" \
     --label "org.opencontainers.image.revision=$sha" \
-    --tag "$image" \
-    --file "$(deploy_dir)/Dockerfile" \
-    "$(repo_root)"
+    --tag "$image"
   id=$(image_id_of "$image")
   lock_set MIGRATOR_COMMIT "$sha"
   lock_set MIGRATOR_IMAGE "$image"
