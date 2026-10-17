@@ -76,7 +76,7 @@ services:
           rc bucket lifecycle rule remove "local/$$WL_S3_BUCKET" --all
         fi
         if [ "$$WL_S3_VERSIONING" = "on" ]; then
-          rc bucket lifecycle rule add "local/$$WL_S3_BUCKET" --noncurrent-expiry-days 30
+          rc bucket lifecycle rule add "local/$$WL_S3_BUCKET" --noncurrent-expiry-days 20
         fi
         rc bucket lifecycle rule add "local/$$WL_S3_BUCKET" --prefix "quarantine/" --expiry-days 1
         rc bucket lifecycle rule add "local/$$WL_S3_BUCKET" --prefix "exports/" --expiry-days 7
@@ -141,6 +141,7 @@ services:
 
   api:
     environment:
+      ASPNETCORE_ENVIRONMENT: Development
       FileStorage__S3__ServiceUrl: "http://s3:9000"
       FileStorage__S3__Region: "us-east-1"
       FileStorage__S3__Bucket: "worklane-dev-files"

@@ -3,8 +3,8 @@ name: Image scan
 on:
   push:
     branches: [main, develop]
+  # Any base branch, so a pull request stacked on another feature branch still runs this check.
   pull_request:
-    branches: [main, develop]
 
 concurrency:
   group: image-scan-${{ github.ref }}

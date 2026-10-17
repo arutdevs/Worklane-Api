@@ -36,8 +36,7 @@ The dev command above also starts local object storage. This builds and starts t
 | Postgres   | localhost:5432 (user/pass/db: `worklane`) |
 | Object storage (S3 API, localhost only) | http://localhost:9000 |
 
-EF Core migrations are applied automatically on API startup in the `Development` environment
-(the default in `docker-compose.yml`), and a demo user/workspace/project are seeded on first run.
+`compose.dev.yml` sets `ASPNETCORE_ENVIRONMENT=Development`. `docker-compose.yml` does not, so a deploy of that file keeps the ASP.NET Production default. In Development, EF Core migrations run on API startup and a demo user, workspace, and project are seeded on first run.
 
 **Demo login:** `demo@worklane.app` / `Demo123!`
 
@@ -45,9 +44,18 @@ EF Core migrations are applied automatically on API startup in the `Development`
 
 Dev compose runs RustFS as `s3` (S3 API published on `127.0.0.1:9000` only; the console port is not published) and a one-shot `s3-init` container. `s3-init` creates the private bucket `worklane-dev-files`, lifecycle rules for `quarantine/` (1 day) and `exports/` (7 days), and a least-privilege app user whose policy allows object operations on that bucket plus `s3:ListBucketMultipartUploads`. It checks each of those results and exits non-zero when a step fails. Every credential is read from `.env`. Compose has no default password: a missing value stops `docker compose` before the container starts. The built-in RustFS account name is rejected, and each password must be at least 16 characters.
 
-`WL_S3_VERSIONING` defaults to `off`, matching Cloudflare R2 (the beta store). Set it to `on` in `.env` before the first `s3-init` run to exercise the DigitalOcean Spaces path: bucket versioning and a 30-day noncurrent-version expiry. Application code must not rely on versioning or bucket policy, because R2 provides neither. If versioning was enabled on the `s3data` volume, switching the flag to `off` leaves it in place; reset with `docker compose -f docker-compose.yml -f compose.dev.yml down -v`.
+`WL_S3_VERSIONING` defaults to `off`, matching Cloudflare R2 (the beta store). Set it to `on` in `.env` before the first `s3-init` run to exercise the DigitalOcean Spaces path: bucket versioning and a 20-day noncurrent-version expiry. Application code must not rely on versioning or bucket policy, because R2 provides neither. If versioning was enabled on the `s3data` volume, switching the flag to `off` leaves it in place; reset with `docker compose -f docker-compose.yml -f compose.dev.yml down -v`.
 
-The API still stores attachments on the `attachments` volume. With the dev overlay, `FileStorage__S3__ServiceUrl` is `http://s3:9000` (and the other `FileStorage__S3__*` keys from the storage spec are set), but `FileStorageSettings` does not bind those keys yet, so `FileStorage__Provider` is left unset and the process keeps the local-disk provider. Images are pinned by digest in `compose.dev.yml`. Dependabot may open a pull request for a digest bump; those pulls are not automerged and need a manual review. CI scans the pinned images with Trivy and fails on a CRITICAL finding that has a fix. It does not run RustFS as the test storage.
+The API still stores attachments on the `attachments` volume. With the dev overlay, `FileStorage__S3__ServiceUrl` is `http://s3:9000` (and the other `FileStorage__S3__*` keys from the storage spec are set), but `FileStorageSettings` does not bind those keys yet, so `FileStorage__Provider` is left unset and the process keeps the local-disk provider. Images are pinned by digest in `compose.dev.yml`. Dependabot may open a pull request for a digest bump. Those pulls are not automerged. CI scans the pinned images with Trivy and fails on a CRITICAL finding that has a fix. It does not run RustFS as the test storage.
+
+### Digest bump checklist
+
+Keep the image as a literal `name:tag@sha256:…`. Do not wrap it in `${IMAGE:-…}`. A digest change is a reviewed edit, and it is not automerged. The pull request has to include:
+
+- `docker buildx imagetools inspect <image>:<tag>`, and the index digest that will be pinned
+- The provenance revision matches the git commit of that tag (`gh api repos/rustfs/rustfs/git/refs/tags/<tag>` for the server, `repos/rustfs/cli` for `rc`)
+- No new security advisory covers that version
+- The local smoke test still passes: `s3-init` exits 0, an anonymous object GET is 403, the app user is denied `CreateBucket`, and the app user can put, get, and delete an object
 
 ## Golden path
 
@@ -183,4 +191,4 @@ Components do **not** carry their own stylesheets — the single theme definitio
 secret for convenience. Replace `Jwt__Secret` with a real secret (e.g. via environment variable or
 a secrets manager) before deploying anywhere real.
 
-Object-storage credentials (`S3_ROOT_USER`, `S3_ROOT_PASSWORD`, `WL_S3_ACCESS_KEY`, `WL_S3_SECRET_KEY`) are not in the repo. Copy `.env.example` to `.env` and generate them locally. `.env` and `.env.*` are git-ignored; `.env.example` is the exception. Postgres and the API publish on `127.0.0.1` only.
+Object-storage credentials (`S3_ROOT_USER`, `S3_ROOT_PASSWORD`, `WL_S3_ACCESS_KEY`, `WL_S3_SECRET_KEY`) are not in the repo. Copy `.env.example` to `.env` and generate them locally. `.env` and `.env.*` are git-ignored; `.env.example` is the exception. Postgres, the API, and the web app publish on `127.0.0.1` only.

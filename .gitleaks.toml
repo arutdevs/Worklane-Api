@@ -1,17 +1,6 @@
 title = "Worklane secret scan"
 
-# The development JWT signing secret is already in git history (initial commit).
-# History is not rewritten. These two assignment lines are allowlisted so the
-# scan still fails on any other secret, including a new one in the same files.
-[[allowlists]]
-description = "Known development JWT signing secret in the initial commit"
-condition = "AND"
-regexTarget = "line"
-paths = [
-  '''(^|/)docker-compose\.yml$''',
-  '''(^|/)src/Worklane\.WebApi/appsettings\.Development\.json$''',
-]
-regexes = [
-  '''(?i)jwt__secret\s*:''',
-  '''(?i)"secret"\s*:''',
-]
+[extend]
+useDefault = true
+
+# Known findings are ignored by fingerprint in .gitleaksignore, not by line text.
