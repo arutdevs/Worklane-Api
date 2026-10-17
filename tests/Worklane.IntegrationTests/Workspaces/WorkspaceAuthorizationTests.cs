@@ -362,6 +362,153 @@ public class WorkspaceAuthorizationTests : IClassFixture<WorklaneWebApplicationF
         (await AuditTableCountAsync(db)).Should().Be(1);
     }
 
+    [Fact]
+    public async Task Invite_AsOwner_Is400()
+    {
+        var owner = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
+        var target = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
+
+        var response = await owner.Client.PostAsJsonAsync(
+            $"/api/workspaces/{owner.Workspace.Id}/invitations",
+            new InviteMemberRequest(target.Tokens.User.Email, WorkspaceRole.Owner));
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var body = await response.Content.ReadAsStringAsync();
+        body.Should().Contain("Cannot invite a member directly as Owner.");
+        await AssertRole(owner, owner.Workspace.Id, target.Tokens.User.Id, null);
+        (await EventCountAsync(owner.Workspace.Id)).Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Admin_InviteAdmin_Is403_AndDoesNotAddTheMember()
+    {
+        var (owner, admin, _) = await WorkspaceWithAdminAsync();
+        var added = await SingleEventAsync(owner.Workspace.Id, admin.Tokens.User.Id, WorkspaceMembershipAction.MemberAdded);
+        added.ActorUserId.Should().Be(owner.Tokens.User.Id);
+        added.OldRole.Should().BeNull();
+        added.NewRole.Should().Be(WorkspaceRole.Admin);
+
+        var before = await EventCountAsync(owner.Workspace.Id);
+        var existing = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
+        var existingResponse = await admin.Client.PostAsJsonAsync(
+            $"/api/workspaces/{owner.Workspace.Id}/invitations",
+            new InviteMemberRequest(existing.Tokens.User.Email, WorkspaceRole.Admin));
+
+        await AssertForbidden(existingResponse, "Admin");
+        await AssertRole(owner, owner.Workspace.Id, existing.Tokens.User.Id, null);
+
+        var pendingEmail = $"pending-{Guid.NewGuid():N}@example.com";
+        var pendingResponse = await admin.Client.PostAsJsonAsync(
+            $"/api/workspaces/{owner.Workspace.Id}/invitations",
+            new InviteMemberRequest(pendingEmail, WorkspaceRole.Admin));
+        await AssertForbidden(pendingResponse, "Admin");
+
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<WorklaneDbContext>();
+            var stored = await db.Invitations.IgnoreQueryFilters().AnyAsync(i => i.Email == pendingEmail);
+            stored.Should().BeFalse();
+        }
+
+        (await EventCountAsync(owner.Workspace.Id)).Should().Be(before);
+    }
+
+    [Fact]
+    public async Task AcceptInvitation_GrantsTheInvitedRole_AndRecordsTheMember()
+    {
+        var owner = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
+        var email = $"pending-{Guid.NewGuid():N}@example.com";
+        var token = await InvitePendingAsync(owner, email, WorkspaceRole.Admin);
+
+        var invitee = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), email);
+        var accept = await invitee.Client.PostAsJsonAsync(
+            "/api/invitations/accept",
+            new AcceptInvitationRequest(token));
+
+        accept.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        await AssertRole(owner, owner.Workspace.Id, invitee.Tokens.User.Id, WorkspaceRole.Admin);
+
+        var audit = await SingleEventAsync(owner.Workspace.Id, invitee.Tokens.User.Id, WorkspaceMembershipAction.MemberAdded);
+        audit.ActorUserId.Should().Be(owner.Tokens.User.Id);
+        audit.WorkspaceId.Should().Be(owner.Workspace.Id);
+        audit.OldRole.Should().BeNull();
+        audit.NewRole.Should().Be(WorkspaceRole.Admin);
+    }
+
+    [Fact]
+    public async Task AcceptInvitation_RevalidatesAgainstTheInvitersCurrentRole()
+    {
+        var owner = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
+        var second = await AddSecondOwnerAsync(owner);
+        var email = $"pending-{Guid.NewGuid():N}@example.com";
+        var token = await InvitePendingAsync(owner, email, WorkspaceRole.Admin);
+
+        var demote = await PatchRole(second, owner.Workspace.Id, owner.Tokens.User.Id, WorkspaceRole.Admin);
+        demote.StatusCode.Should().Be(HttpStatusCode.NoContent);
+
+        var invitee = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), email);
+        var accept = await invitee.Client.PostAsJsonAsync(
+            "/api/invitations/accept",
+            new AcceptInvitationRequest(token));
+
+        await AssertForbidden(accept, "Admin");
+        await AssertRole(second, owner.Workspace.Id, invitee.Tokens.User.Id, null);
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<WorklaneDbContext>();
+        var invitation = await db.Invitations.IgnoreQueryFilters().SingleAsync(i => i.Token == token);
+        invitation.AcceptedAt.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task TwoOwners_DemotingEachOtherConcurrently_LeavesAtLeastOneOwner()
+    {
+        var first = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
+        var second = await AddSecondOwnerAsync(first);
+        var workspaceId = first.Workspace.Id;
+
+        for (var round = 0; round < 12; round++)
+        {
+            var demoteFirst = PatchRole(second, workspaceId, first.Tokens.User.Id, WorkspaceRole.Member);
+            var demoteSecond = PatchRole(first, workspaceId, second.Tokens.User.Id, WorkspaceRole.Member);
+            var results = await Task.WhenAll(demoteFirst, demoteSecond);
+
+            foreach (var response in results)
+            {
+                if (response.StatusCode is not (HttpStatusCode.NoContent or HttpStatusCode.Forbidden or HttpStatusCode.Conflict))
+                {
+                    var body = await response.Content.ReadAsStringAsync();
+                    response.Dispose();
+                    throw new InvalidOperationException($"Unexpected {(int)response.StatusCode} on round {round}: {body}");
+                }
+
+                response.Dispose();
+            }
+
+            (await OwnerCountAsync(workspaceId)).Should().BeGreaterThan(0);
+            await RestoreOwnerAsync(first, second, workspaceId);
+            await RestoreOwnerAsync(second, first, workspaceId);
+        }
+    }
+
+    [Fact]
+    public async Task Owner_CanDemoteSelf_WhenAnotherOwnerExists()
+    {
+        var owner = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
+        var second = await AddSecondOwnerAsync(owner);
+
+        var response = await PatchRole(owner, owner.Workspace.Id, owner.Tokens.User.Id, WorkspaceRole.Member);
+
+        response.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        await AssertRole(second, owner.Workspace.Id, owner.Tokens.User.Id, WorkspaceRole.Member);
+        await AssertRole(second, owner.Workspace.Id, second.Tokens.User.Id, WorkspaceRole.Owner);
+
+        var audit = await SingleEventAsync(owner.Workspace.Id, owner.Tokens.User.Id, WorkspaceMembershipAction.RoleChanged);
+        audit.ActorUserId.Should().Be(owner.Tokens.User.Id);
+        audit.OldRole.Should().Be(WorkspaceRole.Owner);
+        audit.NewRole.Should().Be(WorkspaceRole.Member);
+    }
+
     private async Task<(RegisteredUser Owner, RegisteredUser Admin, RegisteredUser Member)> WorkspaceWithAdminAsync()
     {
         var owner = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
@@ -377,6 +524,56 @@ public class WorkspaceAuthorizationTests : IClassFixture<WorklaneWebApplicationF
         var response = await owner.Client.PostAsJsonAsync(
             $"/api/workspaces/{owner.Workspace.Id}/invitations",
             new InviteMemberRequest(user.Tokens.User.Email, role));
+        response.EnsureSuccessStatusCode();
+    }
+
+    private async Task<RegisteredUser> AddSecondOwnerAsync(RegisteredUser owner)
+    {
+        var second = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
+        await InviteAsync(owner, second, WorkspaceRole.Member);
+        var promote = await PatchRole(owner, owner.Workspace.Id, second.Tokens.User.Id, WorkspaceRole.Owner);
+        promote.EnsureSuccessStatusCode();
+        return second;
+    }
+
+    private static async Task<string> InvitePendingAsync(RegisteredUser owner, string email, WorkspaceRole role)
+    {
+        var response = await owner.Client.PostAsJsonAsync(
+            $"/api/workspaces/{owner.Workspace.Id}/invitations",
+            new InviteMemberRequest(email, role));
+        response.EnsureSuccessStatusCode();
+        var invitation = await response.Content.ReadFromJsonAsync<InvitationDto>(TestAuthHelper.JsonOptions);
+        var link = invitation!.InviteLink ?? throw new InvalidOperationException("Pending invite did not return a link.");
+        const string marker = "token=";
+        var start = link.IndexOf(marker, StringComparison.Ordinal);
+        if (start < 0)
+            throw new InvalidOperationException("Pending invite link has no token.");
+        return link[(start + marker.Length)..];
+    }
+
+    private async Task<int> OwnerCountAsync(Guid workspaceId)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<WorklaneDbContext>();
+        return await db.WorkspaceMembers
+            .IgnoreQueryFilters()
+            .CountAsync(m => m.WorkspaceId == workspaceId && m.Role == WorkspaceRole.Owner);
+    }
+
+    private async Task RestoreOwnerAsync(RegisteredUser candidate, RegisteredUser other, Guid workspaceId)
+    {
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<WorklaneDbContext>();
+        var role = await db.WorkspaceMembers
+            .IgnoreQueryFilters()
+            .Where(m => m.WorkspaceId == workspaceId && m.UserId == candidate.Tokens.User.Id)
+            .Select(m => (WorkspaceRole?)m.Role)
+            .SingleOrDefaultAsync();
+
+        if (role == WorkspaceRole.Owner)
+            return;
+
+        var response = await PatchRole(other, workspaceId, candidate.Tokens.User.Id, WorkspaceRole.Owner);
         response.EnsureSuccessStatusCode();
     }
 
@@ -471,6 +668,9 @@ public class WorkspaceMembershipPolicyTests
         // Granting Admin is the other switch. It is false today (stricter than AC #2).
         Expect(WorkspaceMembershipPolicy.AdminMayGrantAdmin, Admin, Member, Admin, isSelf: false);
         Expect(WorkspaceMembershipPolicy.AdminMayGrantAdmin, Admin, Viewer, Admin, isSelf: false);
+        ExpectInvite(WorkspaceMembershipPolicy.AdminMayGrantAdmin, Admin, Admin);
+        ExpectInvite(allowed: true, Owner, Admin);
+        ExpectInvite(allowed: false, Admin, Owner);
 
         Allow(Owner, Member, Owner, isSelf: false);
         Allow(Owner, Admin, Viewer, isSelf: false);
@@ -501,6 +701,15 @@ public class WorkspaceMembershipPolicyTests
     private static void Expect(bool allowed, WorkspaceRole actor, WorkspaceRole target, WorkspaceRole? newRole, bool isSelf)
     {
         var act = () => WorkspaceMembershipPolicy.EnsureCanManage(actor, target, newRole, isSelf);
+        if (allowed)
+            act.Should().NotThrow();
+        else
+            act.Should().Throw<ForbiddenAccessException>();
+    }
+
+    private static void ExpectInvite(bool allowed, WorkspaceRole actor, WorkspaceRole role)
+    {
+        var act = () => WorkspaceMembershipPolicy.EnsureCanInvite(actor, role);
         if (allowed)
             act.Should().NotThrow();
         else

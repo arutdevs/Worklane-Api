@@ -29,6 +29,15 @@ public static class WorkspaceMembershipPolicy
     public const bool AdminMayGrantAdmin = false;
 
     /// <summary>
+    /// Authorize adding someone who is not a member yet. They are treated as
+    /// <see cref="WorkspaceRole.Viewer"/>, so granting Admin or Owner follows the same
+    /// rules as promoting a Viewer. Call again when the invitation is accepted, with the
+    /// inviter's role loaded at that moment.
+    /// </summary>
+    public static void EnsureCanInvite(WorkspaceRole actorRole, WorkspaceRole role)
+        => EnsureCanManage(actorRole, WorkspaceRole.Viewer, role, isSelf: false);
+
+    /// <summary>
     /// Authorize a role change, or a removal when <paramref name="newRole"/> is null.
     /// Owners pass. The last-Owner guard is not applied here.
     /// </summary>

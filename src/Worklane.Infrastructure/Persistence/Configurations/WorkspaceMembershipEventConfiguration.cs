@@ -19,9 +19,10 @@ public class WorkspaceMembershipEventConfiguration : IEntityTypeConfiguration<Wo
             .HasMaxLength(32);
 
         builder.Property(e => e.OldRole)
-            .IsRequired()
-            .HasConversion<string>()
-            .HasMaxLength(16);
+            .HasMaxLength(16)
+            .HasConversion(
+                role => role.HasValue ? role.Value.ToString() : null,
+                value => string.IsNullOrEmpty(value) ? null : Enum.Parse<WorkspaceRole>(value));
 
         builder.Property(e => e.NewRole)
             .HasMaxLength(16)

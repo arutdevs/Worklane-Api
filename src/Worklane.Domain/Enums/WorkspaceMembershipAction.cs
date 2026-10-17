@@ -8,5 +8,6 @@ namespace Worklane.Domain.Enums;
 public enum WorkspaceMembershipAction
 {
     RoleChanged,
-    MemberRemoved
+    MemberRemoved,
+    MemberAdded
 }
