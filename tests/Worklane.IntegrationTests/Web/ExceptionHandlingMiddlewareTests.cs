@@ -159,6 +159,30 @@ public class ExceptionHandlingMiddlewareTests
     }
 
     [Fact]
+    public async Task ReservedParamNames_IgnoreCase()
+    {
+        var body = await Invoke(new ConflictException(
+            "column_delete_conflict",
+            "The column changed while it was being deleted. Reload the board and try again.",
+            ErrorParams.Of(("Code", "should-not-win"), ("TraceId", "also-not"))));
+
+        body.Json.GetProperty("code").GetString().Should().Be("column_delete_conflict");
+        body.Json.TryGetProperty("Code", out _).Should().BeFalse();
+        body.Json.TryGetProperty("TraceId", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task UnlistedAppException_UsesItsOwnStatusInsteadOf500()
+    {
+        var body = await Invoke(new TeapotException());
+
+        body.Status.Should().Be((HttpStatusCode)418);
+        body.Json.GetProperty("status").GetInt32().Should().Be(418);
+        body.Json.GetProperty("code").GetString().Should().Be("teapot");
+        body.Json.GetProperty("detail").GetString().Should().Be("The kettle is a client error.");
+    }
+
+    [Fact]
     public void InvalidModelState_StampsRequestTooLarge()
     {
         var http = new DefaultHttpContext();
@@ -209,6 +233,11 @@ public class ExceptionHandlingMiddlewareTests
     }
 
     private sealed class BoardColumnPlaceholder;
+
+    private sealed class TeapotException() : AppException("teapot", "The kettle is a client error.")
+    {
+        public override HttpStatusCode StatusCode => (HttpStatusCode)418;
+    }
 
     private sealed record LoggedException(LogLevel Level, Exception? Exception);
 

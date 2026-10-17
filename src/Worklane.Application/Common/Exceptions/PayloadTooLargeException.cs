@@ -1,7 +1,11 @@
+using System.Net;
+
 namespace Worklane.Application.Common.Exceptions;
 
 public class PayloadTooLargeException : AppException
 {
+    public override HttpStatusCode StatusCode => HttpStatusCode.RequestEntityTooLarge;
+
     public PayloadTooLargeException(long maxBytes)
         : base(
             "file_too_large",

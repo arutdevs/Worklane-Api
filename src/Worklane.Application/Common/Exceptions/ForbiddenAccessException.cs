@@ -1,7 +1,11 @@
+using System.Net;
+
 namespace Worklane.Application.Common.Exceptions;
 
 public class ForbiddenAccessException : AppException
 {
+    public override HttpStatusCode StatusCode => HttpStatusCode.Forbidden;
+
     public ForbiddenAccessException(string message = "You do not have permission to perform this action.")
         : base("forbidden", message) { }
 

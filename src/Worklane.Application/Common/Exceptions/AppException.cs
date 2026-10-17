@@ -1,8 +1,11 @@
+using System.Net;
+
 namespace Worklane.Application.Common.Exceptions;
 
 /// <summary>
 /// An error the API renders as an RFC 7807 problem. <see cref="Code"/> is the stable
-/// snake_case value the Web app translates. <see cref="Params"/> are copied onto the
+/// snake_case value the Web app translates. <see cref="StatusCode"/> is the HTTP status,
+/// so a new subclass cannot be reported as 500. <see cref="Params"/> are copied onto the
 /// problem document as top-level fields (for example <c>activeTaskCount</c>).
 /// </summary>
 public abstract class AppException : Exception
@@ -18,6 +21,8 @@ public abstract class AppException : Exception
     }
 
     public string Code { get; }
+
+    public abstract HttpStatusCode StatusCode { get; }
 
     public IReadOnlyDictionary<string, object?> Params { get; }
 }

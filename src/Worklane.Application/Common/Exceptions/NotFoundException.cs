@@ -1,7 +1,11 @@
+using System.Net;
+
 namespace Worklane.Application.Common.Exceptions;
 
 public class NotFoundException : AppException
 {
+    public override HttpStatusCode StatusCode => HttpStatusCode.NotFound;
+
     public NotFoundException(string message) : base("not_found", message) { }
 
     public NotFoundException(string entityName, object key)

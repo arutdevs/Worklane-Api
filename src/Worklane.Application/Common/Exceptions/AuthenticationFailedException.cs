@@ -1,7 +1,11 @@
+using System.Net;
+
 namespace Worklane.Application.Common.Exceptions;
 
 public class AuthenticationFailedException : AppException
 {
+    public override HttpStatusCode StatusCode => HttpStatusCode.Unauthorized;
+
     public AuthenticationFailedException(string message = "Invalid credentials.")
         : base("unauthorized", message) { }
 

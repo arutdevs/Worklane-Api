@@ -34,22 +34,15 @@ public class ExceptionHandlingMiddleware
 
     private async Task HandleAsync(HttpContext context, Exception exception)
     {
-        var (statusCode, title) = exception switch
+        var statusCode = exception switch
         {
-            ValidationException => (HttpStatusCode.BadRequest, "Validation Failed"),
-            BadRequestException => (HttpStatusCode.BadRequest, "Bad Request"),
-            NotFoundException => (HttpStatusCode.NotFound, "Not Found"),
-            ForbiddenAccessException => (HttpStatusCode.Forbidden, "Forbidden"),
-            AuthenticationFailedException => (HttpStatusCode.Unauthorized, "Unauthorized"),
-            ConflictException => (HttpStatusCode.Conflict, "Conflict"),
-            PayloadTooLargeException => (HttpStatusCode.RequestEntityTooLarge, "Payload Too Large"),
-            UnsupportedMediaTypeException => (HttpStatusCode.UnsupportedMediaType, "Unsupported Media Type"),
-            BadHttpRequestException bad => ((HttpStatusCode)bad.StatusCode,
-                bad.StatusCode == StatusCodes.Status413PayloadTooLarge ? "Payload Too Large" : "Bad Request"),
-            InvalidDataException { InnerException: BadHttpRequestException bad } => ((HttpStatusCode)bad.StatusCode,
-                bad.StatusCode == StatusCodes.Status413PayloadTooLarge ? "Payload Too Large" : "Bad Request"),
-            _ => (HttpStatusCode.InternalServerError, "Server Error")
+            AppException client => client.StatusCode,
+            ValidationException => HttpStatusCode.BadRequest,
+            BadHttpRequestException bad => (HttpStatusCode)bad.StatusCode,
+            InvalidDataException { InnerException: BadHttpRequestException bad } => (HttpStatusCode)bad.StatusCode,
+            _ => HttpStatusCode.InternalServerError
         };
+        var title = exception is ValidationException ? "Validation Failed" : TitleFor(statusCode);
 
         if (statusCode == HttpStatusCode.InternalServerError)
         {
@@ -74,9 +67,9 @@ public class ExceptionHandlingMiddleware
         if (statusCode == HttpStatusCode.InternalServerError)
             problemDetails.Extensions["traceId"] = Activity.Current?.Id ?? context.TraceIdentifier;
 
-        if (exception is AppException app)
+        if (exception is AppException clientError)
         {
-            foreach (var (key, value) in app.Params)
+            foreach (var (key, value) in clientError.Params)
             {
                 if (!ReservedExtensions.Contains(key))
                     problemDetails.Extensions[key] = value;
@@ -104,14 +97,20 @@ public class ExceptionHandlingMiddleware
     /// sentence for that status so internal text never leaves the process.
     /// </summary>
     private static bool IsClientMessage(Exception exception) =>
-        exception is ValidationException
-            or BadRequestException
-            or NotFoundException
-            or ForbiddenAccessException
-            or AuthenticationFailedException
-            or ConflictException
-            or PayloadTooLargeException
-            or UnsupportedMediaTypeException;
+        exception is AppException or ValidationException;
+
+    private static string TitleFor(HttpStatusCode statusCode) => statusCode switch
+    {
+        HttpStatusCode.BadRequest => "Bad Request",
+        HttpStatusCode.Unauthorized => "Unauthorized",
+        HttpStatusCode.Forbidden => "Forbidden",
+        HttpStatusCode.NotFound => "Not Found",
+        HttpStatusCode.Conflict => "Conflict",
+        HttpStatusCode.RequestEntityTooLarge => "Payload Too Large",
+        HttpStatusCode.UnsupportedMediaType => "Unsupported Media Type",
+        HttpStatusCode.TooManyRequests => "Too Many Requests",
+        _ => "Server Error"
+    };
 
     private static string ClientDetail(Exception exception, HttpStatusCode statusCode)
     {
@@ -132,7 +131,7 @@ public class ExceptionHandlingMiddleware
         };
     }
 
-    private static readonly HashSet<string> ReservedExtensions = new(StringComparer.Ordinal)
+    private static readonly HashSet<string> ReservedExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         "type", "title", "status", "detail", "instance", "code", "errors", "fieldCodes", "traceId"
     };
