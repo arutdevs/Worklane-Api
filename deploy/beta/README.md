@@ -282,12 +282,13 @@ Roles, created by `scripts/init-db-roles.sh`:
 | Role | Login | Used for |
 |---|---|---|
 | `worklane_admin` (`POSTGRES_USER`) | yes, superuser | creating roles only |
-| `worklane_owner` | no | group for ownership |
-| `worklane_migrator` | yes | the migrator image |
+| `worklane_migrator` | yes | the migrator image; owns the objects it creates |
 | `worklane_app` | yes | the API |
 | `worklane_readonly` | yes | `pg_dump` |
 
-`scripts/ef-migrate.sh /etc/worklane/prod.env --yes` waits for Postgres, creates roles, writes a `pre-migration/` dump, then builds `worklane-migrator:<slot>-<api sha>` from the same commit as the locked API image. It checks `docker image inspect` against the lock and runs that image. `compose run` is not given `--build`, so it does not rebuild the tag it just recorded. The container does not install `dotnet-ef`, has no JWT secret, and does not mount the repo. `Worklane.Migrator` calls `WorklaneDbContextFactory`, which reads `ConnectionStrings__Default`. The entry script does not pass `--connection`, so the migrator password is not placed in the process argv. With that variable unset, `WorklaneDbContextFactory` uses the dev connection string only when `ASPNETCORE_ENVIRONMENT=Development`. Any other environment, including an unset one, throws. A local `dotnet ef` command now needs `ASPNETCORE_ENVIRONMENT=Development` when `ConnectionStrings__Default` is unset.
+There is no `worklane_owner` role. `init-db-roles.sh` used to create that NOLOGIN role and grant it to the migrator, but it never ran `SET ROLE worklane_owner`. Default privileges are `FOR ROLE` the migrator, so new tables are owned by the migrator. Dropping the unused role is the simpler fix.
+
+`scripts/ef-migrate.sh /etc/worklane/prod.env --yes` waits for Postgres, creates roles, writes a `pre-migration/` dump, then builds `worklane-migrator:<slot>-<api sha>` from the same commit as the locked API image. It checks `docker image inspect` against the lock and runs that image. `compose run` is not given `--build`, so it does not rebuild the tag it just recorded. The container does not install `dotnet-ef`, has no JWT secret, and does not mount the repo. `Worklane.Migrator` calls `WorklaneDbContextFactory`, which reads `ConnectionStrings__Default`. The entry script does not pass `--connection`, so the migrator password is not placed in the process argv. Both beta connection strings set `GSS Encryption Mode=Disable`. Postgres on the internal network uses a password, not Kerberos, and the setting stops Npgsql from warning that `libgssapi_krb5` is missing. A migration failure prints the exception type and `SqlState` only, not the exception message, because that message can contain the connection string. With that variable unset, `WorklaneDbContextFactory` uses the dev connection string only when `ASPNETCORE_ENVIRONMENT=Development`. Any other environment, including an unset one, throws. A local `dotnet ef` command now needs `ASPNETCORE_ENVIRONMENT=Development` when `ConnectionStrings__Default` is unset.
 
 Run `ef-migrate.sh` on the VM and confirm a row in `__EFMigrationsHistory` before opening the tunnel. The retry here reached `tcp://postgres:5432` (the factory read `ConnectionStrings__Default`) and then timed out. It did not fall back to the dev `localhost` connection string, and it did not apply the migrations.
 

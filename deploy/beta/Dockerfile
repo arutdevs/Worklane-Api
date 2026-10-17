@@ -31,7 +31,11 @@ FROM mcr.microsoft.com/dotnet/aspnet:10.0@sha256:d5633778c754e89a386882eddf8dbee
 WORKDIR /opt/worklane
 COPY --from=build /out/ /opt/worklane/
 COPY deploy/beta/migrate.sh /opt/worklane/migrate.sh
-RUN chmod 0555 /opt/worklane/migrate.sh \
-    && chown -R "$APP_UID:$APP_UID" /opt/worklane
+# Root owns the files. a+rX keeps directories traversable and leaves
+# already-executable files executable; go-w stops the app user rewriting them.
+# migrate.sh is 0555. The process still runs as APP_UID.
+RUN chmod -R a+rX,go-w /opt/worklane \
+    && chmod 0555 /opt/worklane/migrate.sh \
+    && chown -R root:root /opt/worklane
 USER $APP_UID
 ENTRYPOINT ["/opt/worklane/migrate.sh"]

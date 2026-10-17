@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Create owner / migrator / app / readonly roles. Idempotent. Passwords come from the env file.
+# Create migrator / app / readonly roles. Idempotent. Passwords come from the env file.
+# The migrator role owns objects it creates. There is no worklane_owner role:
+# nothing called SET ROLE, so a NOLOGIN group never became the owner.
 #   init-db-roles.sh /etc/worklane/<slot>.env
 set -euo pipefail
 
@@ -29,14 +31,6 @@ umask 077
 sql=$(mktemp)
 trap 'rm -f "$sql"' EXIT
 cat >"$sql" <<SQL
-DO \$do\$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'worklane_owner') THEN
-    CREATE ROLE worklane_owner NOLOGIN;
-  END IF;
-END
-\$do\$;
-
 DO \$do\$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '$(sql_quote "$migrator")') THEN
@@ -70,7 +64,6 @@ END
 GRANT CONNECT ON DATABASE ${db} TO ${migrator}, ${app}, ${readonly_role};
 GRANT CREATE, USAGE ON SCHEMA public TO ${migrator};
 GRANT USAGE ON SCHEMA public TO ${app}, ${readonly_role};
-GRANT worklane_owner TO ${migrator};
 
 ALTER DEFAULT PRIVILEGES FOR ROLE ${migrator} IN SCHEMA public
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${app};

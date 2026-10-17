@@ -82,6 +82,8 @@ env_probe=""
 env_probe_created=0
 commit_probe_image=""
 worktree_probe_image=""
+exclude=""
+exclude_appended=0
 cleanup() {
   rm -f "$dirty_probe"
   if [[ "$lab_probe_created" == "1" ]]; then
@@ -89,6 +91,11 @@ cleanup() {
   fi
   if [[ "$env_probe_created" == "1" ]]; then
     rm -f "$env_probe"
+  fi
+  if [[ "$exclude_appended" == "1" && -n "$exclude" && -f "$exclude" ]]; then
+    local filtered="$workdir/exclude.filtered"
+    grep -vxF 'src/Worklane.WebApi/LabProbe.cs' "$exclude" >"$filtered"
+    mv "$filtered" "$exclude"
   fi
   if [[ "$wl63_created" == "1" ]]; then
     rm -f "$wl63"
@@ -233,6 +240,15 @@ if grep -nE '^[^#]*dotnet ef ' deploy/beta/Dockerfile; then
 fi
 if ! grep -q 'exec dotnet /opt/worklane/Worklane.Migrator.dll' deploy/beta/migrate.sh; then
   die "migrate.sh must run the published migrator assembly"
+fi
+if grep -n 'APP_UID' deploy/beta/Dockerfile | grep -q 'chown'; then
+  die "migrator Dockerfile must not chown application files to APP_UID"
+fi
+if ! grep -q 'chmod -R a+rX,go-w /opt/worklane' deploy/beta/Dockerfile; then
+  die "migrator Dockerfile must keep root-owned files readable and not group-writable"
+fi
+if ! grep -q 'chmod 0555 /opt/worklane/migrate.sh' deploy/beta/Dockerfile; then
+  die "migrate.sh must be mode 0555"
 fi
 if grep -nE '^[[:space:]]*[^#].*--connection' deploy/beta/migrate.sh; then
   die "migrate.sh must not pass --connection"
@@ -398,44 +414,123 @@ assert api_env["ASPNETCORE_ENVIRONMENT"] == "Production"
 print("compose config ok")
 PY
 
-# Allowlist on rendered compose JSON. Top-level volumes may not set driver,
-# driver_opts, or external (that is what lets a local overlay lowerdir= or an
-# ext4 device: through). Services may not set devices, privileged, any "* : host"
-# (pid, ipc, network_mode, userns_mode, or any other top-level string "host"),
-# volumes_from, env_file, or build (context, additional_contexts, ssh).
-# Service mounts must be type volume. docker.sock and secrets/configs file: stay out.
+# Allowlist on rendered compose JSON, both interpolated and --no-interpolate.
+# A service key that is not listed for that service is rejected. Values are
+# pinned for security_opt, user, cap_add, ipc, pid, extra_hosts, and tmpfs.
+# cgroup_parent, sysctls, and device_cgroup_rules are not listed, so they fail.
+# Top-level volumes may not set driver, driver_opts, or external. Secrets and
+# configs are not expected: file, environment, and content all fail.
+# Service mounts must be type volume. docker.sock stays out.
 assert_no_host_mounts() {
   python3 - "$1" <<'PY'
 import json, sys
 doc = json.load(open(sys.argv[1]))
 bad = []
-host_keys = ("pid", "ipc", "network_mode", "userns_mode", "cgroup", "cgroupns", "pid_mode")
+
+# Union of keys compose emits for this file, interpolated and --no-interpolate.
+allowed = {
+    "postgres": {
+        "cap_add", "cap_drop", "command", "cpus", "entrypoint", "environment",
+        "healthcheck", "image", "logging", "mem_limit", "networks", "pids_limit",
+        "platform", "read_only", "restart", "security_opt", "shm_size",
+        "stop_grace_period", "tmpfs", "volumes",
+    },
+    "api": {
+        "cap_drop", "command", "cpus", "depends_on", "entrypoint", "environment",
+        "healthcheck", "image", "logging", "mem_limit", "networks", "pids_limit",
+        "platform", "pull_policy", "read_only", "restart", "security_opt",
+        "stop_grace_period", "tmpfs", "volumes",
+    },
+    "web": {
+        "cap_drop", "command", "cpus", "depends_on", "entrypoint", "healthcheck",
+        "image", "logging", "mem_limit", "networks", "pids_limit", "platform",
+        "pull_policy", "read_only", "restart", "security_opt", "tmpfs",
+    },
+    "cloudflared": {
+        "cap_drop", "command", "cpus", "depends_on", "entrypoint", "environment",
+        "healthcheck", "image", "logging", "mem_limit", "networks", "pids_limit",
+        "platform", "read_only", "restart", "security_opt", "tmpfs",
+    },
+    "migrator": {
+        "cap_drop", "command", "cpus", "depends_on", "entrypoint", "environment",
+        "image", "logging", "mem_limit", "networks", "pids_limit", "platform",
+        "profiles", "pull_policy", "read_only", "restart", "security_opt",
+        "tmpfs", "working_dir",
+    },
+    "awscli": {
+        "cap_drop", "command", "entrypoint", "image", "network_mode", "pids_limit",
+        "platform", "profiles", "read_only", "restart", "security_opt", "tmpfs",
+    },
+}
+postgres_caps = {"CHOWN", "SETUID", "SETGID", "FOWNER", "DAC_OVERRIDE"}
+root_users = {"0", "root", "0:0", "0:root", "root:0", "root:root"}
 
 def sock(label, blob):
     if "docker.sock" in blob:
         bad.append(f"{label} docker.sock")
 
-def is_host(value):
-    return isinstance(value, str) and value.strip().lower() == "host"
+def tmpfs_has_noexec(item):
+    if isinstance(item, str):
+        if ":" not in item:
+            return False
+        flags = {part.strip().lower() for part in item.split(":", 1)[1].split(",")}
+        return "noexec" in flags
+    if isinstance(item, dict):
+        return "noexec" in json.dumps(item).lower()
+    return False
+
+def namespace_label(value):
+    text = str(value or "").strip().lower()
+    if text == "host":
+        return "host"
+    if text == "shareable":
+        return "shareable"
+    if text.startswith("service:"):
+        return "service"
+    return ""
 
 for name, service in (doc.get("services") or {}).items():
     if not isinstance(service, dict):
         continue
-    if service.get("privileged") is True:
-        bad.append(f"{name} privileged")
-    if service.get("devices"):
-        bad.append(f"{name} devices")
-    for key, value in service.items():
-        if key in host_keys and is_host(value):
-            bad.append(f"{name} {key} host")
-        elif key not in host_keys and is_host(value):
-            bad.append(f"{name} {key} host")
-    if service.get("volumes_from"):
-        bad.append(f"{name} volumes_from")
-    if service.get("env_file"):
-        bad.append(f"{name} env_file")
-    if "build" in service and service.get("build") not in (None, False, ""):
-        build = service.get("build")
+    keys = allowed.get(name)
+    if keys is None:
+        bad.append(f"{name} unknown-service")
+        keys = set()
+    for key in service:
+        if key not in keys:
+            bad.append(f"{name} {key}")
+    opts = [str(item).strip().lower() for item in (service.get("security_opt") or [])]
+    if opts != ["no-new-privileges:true"]:
+        bad.append(f"{name} security_opt")
+    for item in opts:
+        if "unconfined" in item or "seccomp" in item or "apparmor" in item:
+            bad.append(f"{name} security_opt")
+    if "user" in service:
+        raw = str(service.get("user") or "").strip().lower()
+        bad.append(f"{name} user")
+        if raw in root_users:
+            bad.append(f"{name} user root")
+    caps = set(service.get("cap_add") or [])
+    if name == "postgres":
+        if caps != postgres_caps:
+            bad.append(f"{name} cap_add")
+    elif caps:
+        bad.append(f"{name} cap_add")
+    for key in ("pid", "ipc"):
+        if key in service:
+            label = namespace_label(service.get(key))
+            bad.append(f"{name} {key} {label}".rstrip())
+    if service.get("network_mode") not in (None, "", "none"):
+        mode = str(service.get("network_mode")).strip().lower()
+        if mode == "host" or mode.startswith("service:"):
+            bad.append(f"{name} network_mode {namespace_label(mode) or mode}")
+    if "extra_hosts" in service:
+        bad.append(f"{name} extra_hosts")
+    mounts = service.get("tmpfs") or []
+    if not mounts or not all(tmpfs_has_noexec(item) for item in mounts):
+        bad.append(f"{name} tmpfs")
+    build = service.get("build")
+    if build not in (None, False, ""):
         bad.append(f"{name} build")
         if isinstance(build, str) and build:
             bad.append(f"{name} build context")
@@ -477,11 +572,17 @@ for name, vol in (doc.get("volumes") or {}).items():
         bad.append(f"volume {name} external")
     sock(f"volume {name}", json.dumps(vol))
 
+# Nothing in this file uses secrets or configs. name is what compose adds;
+# file, environment, and content are the ways to point at host data.
 for section in ("secrets", "configs"):
-    for name, item in (doc.get(section) or {}).items():
-        if isinstance(item, dict) and "file" in item:
-            bad.append(f"{section} {name} file")
-        sock(f"{section} {name}", json.dumps(item))
+    for item_name, item in (doc.get(section) or {}).items():
+        if not isinstance(item, dict):
+            bad.append(f"{section} {item_name}")
+            sock(f"{section} {item_name}", json.dumps(item))
+            continue
+        for key in item:
+            bad.append(f"{section} {item_name} {key}")
+        sock(f"{section} {item_name}", json.dumps(item))
 
 if bad:
     print("host mount forbidden: " + "; ".join(bad), file=sys.stderr)
@@ -745,6 +846,140 @@ services:
   api: {build: {context: ., ssh: [default], additional_contexts: {extra: .}}}
 EOF
 expect_host_mount_forbidden "build ssh"
+
+render_forbidden <<'EOF'
+services:
+  api:
+    security_opt:
+      - seccomp:unconfined
+EOF
+expect_host_mount_forbidden "security_opt"
+
+render_forbidden <<'EOF'
+services:
+  api:
+    security_opt:
+      - apparmor:unconfined
+EOF
+expect_host_mount_forbidden "security_opt"
+
+render_forbidden <<'EOF'
+services:
+  api:
+    user: "0"
+EOF
+expect_host_mount_forbidden "user"
+
+render_forbidden <<'EOF'
+services:
+  api:
+    user: root
+EOF
+expect_host_mount_forbidden "user"
+
+render_forbidden <<'EOF'
+services:
+  api:
+    user: "0:0"
+EOF
+expect_host_mount_forbidden "user"
+
+render_forbidden <<'EOF'
+services:
+  api:
+    cap_add:
+      - SYS_ADMIN
+EOF
+expect_host_mount_forbidden "cap_add"
+
+render_forbidden <<'EOF'
+services:
+  postgres:
+    cap_add:
+      - SYS_ADMIN
+EOF
+expect_host_mount_forbidden "cap_add"
+
+render_forbidden <<'EOF'
+services:
+  api:
+    pid: shareable
+EOF
+expect_host_mount_forbidden "shareable"
+
+render_forbidden <<'EOF'
+services:
+  api:
+    pid: "service:postgres"
+EOF
+expect_host_mount_forbidden "service"
+
+render_forbidden <<'EOF'
+services:
+  api:
+    ipc: shareable
+EOF
+expect_host_mount_forbidden "shareable"
+
+render_forbidden <<'EOF'
+services:
+  api:
+    ipc: "service:postgres"
+EOF
+expect_host_mount_forbidden "service"
+
+render_forbidden <<'EOF'
+services:
+  api:
+    extra_hosts:
+      - "evil:127.0.0.1"
+EOF
+expect_host_mount_forbidden "extra_hosts"
+
+render_forbidden <<'EOF'
+services:
+  api:
+    tmpfs:
+      - /var/tmp
+EOF
+expect_host_mount_forbidden "tmpfs"
+
+render_forbidden <<'EOF'
+services:
+  api:
+    cgroup_parent: /docker
+EOF
+expect_host_mount_forbidden "cgroup_parent"
+
+render_forbidden <<'EOF'
+services:
+  api:
+    sysctls:
+      net.ipv4.ip_forward: "1"
+EOF
+expect_host_mount_forbidden "sysctls"
+
+render_forbidden <<'EOF'
+services:
+  api:
+    device_cgroup_rules:
+      - "c 1:3 rwm"
+EOF
+expect_host_mount_forbidden "device_cgroup_rules"
+
+render_forbidden <<'EOF'
+secrets:
+  dbpass:
+    environment: POSTGRES_PASSWORD
+EOF
+expect_host_mount_forbidden "environment"
+
+render_forbidden <<'EOF'
+configs:
+  nginx:
+    content: hello
+EOF
+expect_host_mount_forbidden "content"
 
 # Generated override: literal name and images, no ${ in an image line.
 sha40=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
@@ -1065,12 +1300,18 @@ if git -C "$(repo_root)" grep -q -F -e "$marker" -e "$env_marker" HEAD -- .; the
 fi
 printf 'namespace Worklane.WebApi;\npublic static class LabProbe { public const string Marker = "%s"; }\n' "$marker" >"$lab_probe"
 lab_probe_created=1
-exclude="$(repo_root)/.git/info/exclude"
+# --git-path follows a worktree. A linked worktree's .git is a file, so
+# .git/info/exclude next to the checkout is the wrong path.
+exclude=$(git -C "$(repo_root)" rev-parse --git-path info/exclude)
+if [[ "$exclude" != /* ]]; then
+  exclude="$(repo_root)/$exclude"
+fi
 mkdir -p "$(dirname "$exclude")"
 # The stock exclude file often has no trailing newline, so a bare append
 # glues the pattern onto the last comment and it never matches.
 if ! grep -qxF 'src/Worklane.WebApi/LabProbe.cs' "$exclude" 2>/dev/null; then
   printf '\n%s\n' 'src/Worklane.WebApi/LabProbe.cs' >>"$exclude"
+  exclude_appended=1
 fi
 if ! git -C "$(repo_root)" check-ignore -q -- "$lab_probe"; then
   git -C "$(repo_root)" check-ignore -v -- "$lab_probe" >&2 || true

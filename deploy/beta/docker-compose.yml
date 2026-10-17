@@ -69,8 +69,8 @@ services:
     shm_size: 256mb
     read_only: true
     tmpfs:
-      - /tmp
-      - /var/run/postgresql
+      - /tmp:noexec,nosuid,nodev
+      - /var/run/postgresql:noexec,nosuid,nodev
     cap_drop: [ALL]
     cap_add: [CHOWN, SETUID, SETGID, FOWNER, DAC_OVERRIDE]
     security_opt: ["no-new-privileges:true"]
@@ -101,7 +101,7 @@ services:
       DOTNET_EnableDiagnostics: "0"
       AllowedHosts: ${ALLOWED_HOSTS:?}
       # Single quotes around the password: base64 secrets contain '='. Npgsql accepts that.
-      ConnectionStrings__Default: "Host=postgres;Port=5432;Database=${POSTGRES_DB:?};Username=${POSTGRES_APP_USER:?};Password='${POSTGRES_APP_PASSWORD:?}';Maximum Pool Size=20"
+      ConnectionStrings__Default: "Host=postgres;Port=5432;Database=${POSTGRES_DB:?};Username=${POSTGRES_APP_USER:?};Password='${POSTGRES_APP_PASSWORD:?}';Maximum Pool Size=20;GSS Encryption Mode=Disable"
       Jwt__Secret: "${JWT_SECRET:?}"
       Jwt__Issuer: ${JWT_ISSUER:-Worklane}
       Jwt__Audience: ${JWT_AUDIENCE:-WorklaneClient}
@@ -122,7 +122,7 @@ services:
       - dpkeys:/var/lib/worklane/dataprotection-keys
     read_only: true
     tmpfs:
-      - /tmp
+      - /tmp:noexec,nosuid,nodev
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     pids_limit: 256
@@ -155,9 +155,9 @@ services:
     networks: [edge, app]
     read_only: true
     tmpfs:
-      - /tmp
-      - /var/cache/nginx
-      - /var/run
+      - /tmp:noexec,nosuid,nodev
+      - /var/cache/nginx:noexec,nosuid,nodev
+      - /var/run:noexec,nosuid,nodev
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     pids_limit: 64
@@ -185,7 +185,7 @@ services:
       TUNNEL_TOKEN: "${CLOUDFLARE_TUNNEL_TOKEN:?}"
     read_only: true
     tmpfs:
-      - /tmp
+      - /tmp:noexec,nosuid,nodev
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     pids_limit: 64
@@ -218,13 +218,13 @@ services:
     working_dir: /tmp
     environment:
       ASPNETCORE_ENVIRONMENT: Production
-      ConnectionStrings__Default: "Host=postgres;Port=5432;Database=${POSTGRES_DB:?};Username=${POSTGRES_MIGRATOR_USER:?};Password='${POSTGRES_MIGRATOR_PASSWORD:?}'"
+      ConnectionStrings__Default: "Host=postgres;Port=5432;Database=${POSTGRES_DB:?};Username=${POSTGRES_MIGRATOR_USER:?};Password='${POSTGRES_MIGRATOR_PASSWORD:?}';GSS Encryption Mode=Disable"
       DOTNET_CLI_TELEMETRY_OPTOUT: "1"
       DOTNET_NOLOGO: "1"
       DOTNET_EnableDiagnostics: "0"
     read_only: true
     tmpfs:
-      - /tmp
+      - /tmp:noexec,nosuid,nodev
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     pids_limit: 256
@@ -243,7 +243,7 @@ services:
     restart: "no"
     read_only: true
     tmpfs:
-      - /tmp
+      - /tmp:noexec,nosuid,nodev
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
     pids_limit: 64
