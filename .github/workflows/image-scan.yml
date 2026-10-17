@@ -16,21 +16,56 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Deploy compose files do not mention RustFS or SeaweedFS
+      - name: Rendered deploy compose has no dev S3
         run: |
+          set -euo pipefail
+
+          # image: ${S3_IMAGE} renders as an empty name when the variable is unset.
+          # The canary is substituted instead, and the rendered-config grep rejects it.
+          export S3_IMAGE='rustfs/rustfs:bypass@sha256:9ca95595aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+
+          forbidden_re='rustfs|seaweedfs|9ca95595|ab024bfe|4e61d15f|http://s3:9000|RequireHttps.*false'
           fail=0
-          while IFS= read -r -d '' file; do
-            case "$(basename "$file")" in
-              compose.dev.yml|compose.dev.yaml) continue ;;
-            esac
-            if grep -E -i -n 'rustfs|seaweedfs' "$file"; then
-              echo "::error file=${file#./}::Deploy compose must not mention rustfs or seaweedfs. Keep the dev store in compose.dev.yml."
+
+          check_rendered() {
+            local file="$1"
+            local rendered hits
+            if ! rendered="$(docker compose -f "$file" config)"; then
+              echo "::error file=${file}::docker compose config failed"
+              fail=1
+              return
+            fi
+            hits="$(printf '%s\n' "$rendered" | grep -E -i -n "$forbidden_re" || true)"
+            if [ -n "$hits" ]; then
+              printf '%s\n' "$hits"
+              echo "::error file=${file}::Rendered compose contains a dev S3 image, digest, endpoint, or RequireHttps false."
               fail=1
             fi
+          }
+
+          check_rendered docker-compose.yml
+
+          # Only the repo-root dev overlay may carry RustFS. A compose.dev.yml in a
+          # subdirectory is not that file. prod.compose.yml and deploy/stack.yml are
+          # compose files too. include: and extends: are rejected in every non-dev file
+          # so a second file cannot smuggle the dev store into the render.
+          while IFS= read -r -d '' file; do
+            rel="${file#./}"
+            case "$rel" in
+              compose.dev.yml|compose.dev.yaml) continue ;;
+            esac
+            if grep -E -n '^[[:space:]]*(include|extends):' "$rel"; then
+              echo "::error file=${rel}::Non-dev compose file must not use include: or extends:."
+              fail=1
+            fi
+            if [ "$rel" != "docker-compose.yml" ]; then
+              check_rendered "$rel"
+            fi
           done < <(find . -type f \
-            \( -name 'docker-compose*.yml' -o -name 'docker-compose*.yaml' \
-               -o -name 'compose*.yml' -o -name 'compose*.yaml' \) \
+            \( -name '*compose*.yml' -o -name '*compose*.yaml' \
+               -o -name '*stack*.yml' -o -name '*stack*.yaml' \) \
             -not -path './.git/*' -print0)
+
           exit "$fail"
 
   trivy:

@@ -4,6 +4,7 @@ updates:
   # Nothing in this repo automerges those pulls. A digest change stays a reviewed edit.
   - package-ecosystem: docker-compose
     directory: /
+    target-branch: develop
     schedule:
       interval: weekly
     open-pull-requests-limit: 2

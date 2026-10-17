@@ -52,10 +52,10 @@ The API still stores attachments on the `attachments` volume. With the dev overl
 
 Keep the image as a literal `name:tag@sha256:…`. Do not wrap it in `${IMAGE:-…}`. A digest change is a reviewed edit, and it is not automerged. The pull request has to include:
 
-- `docker buildx imagetools inspect <image>:<tag>`, and the index digest that will be pinned
-- The provenance revision matches the git commit of that tag (`gh api repos/rustfs/rustfs/git/refs/tags/<tag>` for the server, `repos/rustfs/cli` for `rc`)
-- No new security advisory covers that version
-- The local smoke test still passes: `s3-init` exits 0, an anonymous object GET is 403, the app user is denied `CreateBucket`, and the app user can put, get, and delete an object
+- **Verify digest.** `docker buildx imagetools inspect <image>:<tag>`, and the index digest that will be pinned matches the digest in the compose file.
+- **Provenance.** The provenance revision matches the git commit of that tag (`gh api repos/rustfs/rustfs/git/refs/tags/<tag>` for the server, `repos/rustfs/cli` for `rc`).
+- **Advisories.** No new security advisory covers that version.
+- **Smoke test.** `s3-init` exits 0, an anonymous object GET is 403, the app user is denied `CreateBucket`, and the app user can put, get, and delete an object.
 
 ## Golden path
 
