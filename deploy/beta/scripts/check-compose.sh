@@ -1,12 +1,32 @@
 #!/usr/bin/env bash
 # Render the beta compose file with throwaway secrets and assert the safety properties.
 # Also proves preflight rejects the leaked dev JWT without printing it.
-set -euo pipefail
+set -eEuo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=lib.sh
 source "$SCRIPT_DIR/lib.sh"
 cd "$(repo_root)"
+
+# lib.sh die prints "error:" only. This script also emits a GitHub annotation
+# on stdout (workflow commands are ignored on stderr). The ERR trap covers any
+# command that still exits under set -e without calling die, including [[ ]].
+# Expected failures run under set +e; the trap still fires, and $- has no e
+# then, so those stay quiet.
+die() {
+  printf '::error file=deploy/beta/scripts/check-compose.sh::%s\n' "$1"
+  printf 'error: %s\n' "$1" >&2
+  exit 1
+}
+on_err() {
+  case $- in
+    *e*)
+      printf '::error file=deploy/beta/scripts/check-compose.sh,line=%s::command failed (exit %s): %s\n' "$1" "$2" "$3"
+      exit "$2"
+      ;;
+  esac
+}
+trap 'on_err "$LINENO" "$?" "$BASH_COMMAND"' ERR
 
 compose_path=$(compose_file)
 example="$(deploy_dir)/.env.example"
@@ -20,7 +40,7 @@ for key in "${referenced[@]}"; do
     missing=1
   fi
 done
-[[ "$missing" -eq 0 ]] || exit 1
+[[ "$missing" -eq 0 ]] || die "docker-compose.yml uses variables that are missing from .env.example"
 
 extra_keys=(
   POSTGRES_READONLY_USER
@@ -44,7 +64,7 @@ for key in "${extra_keys[@]}"; do
     missing=1
   fi
 done
-[[ "$missing" -eq 0 ]] || exit 1
+[[ "$missing" -eq 0 ]] || die ".env.example is missing backup or database keys"
 
 rand() {
   openssl rand -base64 48 | tr -d '\n'
@@ -204,6 +224,15 @@ if grep -nE 'uses:[[:space:]]+[^#[:space:]]+@(v[0-9]|main|master)' .github/workf
 fi
 if grep -nE 'dotnet tool install|dotnet ef ' deploy/beta/scripts/ef-migrate.sh; then
   die "ef-migrate.sh must not install dotnet-ef at runtime"
+fi
+if ! grep -qF 'FROM --platform=$BUILDPLATFORM' deploy/beta/Dockerfile; then
+  die "migrator Dockerfile must publish on BUILDPLATFORM so the arm64 leg does not emulate the SDK"
+fi
+if grep -nE '^[^#]*dotnet ef ' deploy/beta/Dockerfile; then
+  die "migrator Dockerfile must not run dotnet ef; an amd64 SDK cannot load an arm64 bundle"
+fi
+if ! grep -q 'exec dotnet /opt/worklane/Worklane.Migrator.dll' deploy/beta/migrate.sh; then
+  die "migrate.sh must run the published migrator assembly"
 fi
 if grep -nE '^[[:space:]]*[^#].*--connection' deploy/beta/migrate.sh; then
   die "migrate.sh must not pass --connection"
@@ -1025,24 +1054,46 @@ set -e
 [[ "$loose_status" -ne 0 ]]
 grep -q 'writable' "$workdir/loose.out"
 
-# An ignored .cs file and an ignored env file must not be in an image built from the commit.
-marker="LABPROBE_SHOULD_NOT_SHIP"
+# An ignored .cs file and an ignored env file must not be in an image built from
+# the commit. The markers are random so they cannot already occur in this
+# script: `git archive HEAD` includes check-compose.sh, and a fixed marker
+# string in that file made the commit image look tainted on CI.
+marker="WLCS$(openssl rand -hex 16)"
+env_marker="WLENV$(openssl rand -hex 16)"
+if git -C "$(repo_root)" grep -q -F -e "$marker" -e "$env_marker" HEAD -- .; then
+  die "probe marker collided with a file already in HEAD"
+fi
 printf 'namespace Worklane.WebApi;\npublic static class LabProbe { public const string Marker = "%s"; }\n' "$marker" >"$lab_probe"
 lab_probe_created=1
 exclude="$(repo_root)/.git/info/exclude"
 mkdir -p "$(dirname "$exclude")"
+# The stock exclude file often has no trailing newline, so a bare append
+# glues the pattern onto the last comment and it never matches.
 if ! grep -qxF 'src/Worklane.WebApi/LabProbe.cs' "$exclude" 2>/dev/null; then
-  printf '%s\n' 'src/Worklane.WebApi/LabProbe.cs' >>"$exclude"
+  printf '\n%s\n' 'src/Worklane.WebApi/LabProbe.cs' >>"$exclude"
 fi
-git -C "$(repo_root)" check-ignore -q -- "$lab_probe"
+if ! git -C "$(repo_root)" check-ignore -q -- "$lab_probe"; then
+  git -C "$(repo_root)" check-ignore -v -- "$lab_probe" >&2 || true
+  git -C "$(repo_root)" status --ignored --porcelain -- "$lab_probe" >&2 || true
+  die "LabProbe.cs is not ignored, so this probe does not test the git-archive hole"
+fi
 if [[ -e "$(repo_root)/.env.local" ]]; then
   env_probe="$(repo_root)/.env.labprobe"
 else
   env_probe="$(repo_root)/.env.local"
 fi
-printf 'ENV_LOCAL_SHOULD_NOT_SHIP=1\n' >"$env_probe"
+printf '%s=1\n' "$env_marker" >"$env_probe"
 env_probe_created=1
-git -C "$(repo_root)" check-ignore -q -- "$env_probe"
+if ! git -C "$(repo_root)" check-ignore -q -- "$env_probe"; then
+  git -C "$(repo_root)" check-ignore -v -- "$env_probe" >&2 || true
+  die "$(basename "$env_probe") is not ignored, so this probe does not test the git-archive hole"
+fi
+# Ignored files stay out of `git status` as well, which is why a clean-tree
+# check cannot see them. Require that before trusting the archive result.
+if git -C "$(repo_root)" status --porcelain --untracked-files=all -- "$lab_probe" "$env_probe" | grep -q .; then
+  git -C "$(repo_root)" status --porcelain --untracked-files=all -- "$lab_probe" "$env_probe" >&2 || true
+  die "ignored probe files showed up in git status --porcelain"
+fi
 cat >"$workdir/Probe.Dockerfile" <<'EOF'
 FROM alpine:3.20
 COPY . /out/
@@ -1054,15 +1105,19 @@ docker build --file "$workdir/Probe.Dockerfile" --tag "$worktree_probe_image" "$
 set +e
 docker run --rm --entrypoint grep "$worktree_probe_image" -q "$marker" /out/src/Worklane.WebApi/LabProbe.cs
 worktree_cs=$?
-docker run --rm --entrypoint grep "$worktree_probe_image" -q ENV_LOCAL_SHOULD_NOT_SHIP "/out/$(basename "$env_probe")"
+docker run --rm --entrypoint grep "$worktree_probe_image" -q "$env_marker" "/out/$(basename "$env_probe")"
 worktree_env=$?
 docker run --rm --entrypoint grep "$commit_probe_image" -R -q "$marker" /out
 commit_cs=$?
-docker run --rm --entrypoint grep "$commit_probe_image" -R -q ENV_LOCAL_SHOULD_NOT_SHIP /out
+docker run --rm --entrypoint grep "$commit_probe_image" -R -q "$env_marker" /out
 commit_env=$?
 set -e
-[[ "$worktree_cs" -eq 0 && "$worktree_env" -eq 0 ]]
-[[ "$commit_cs" -eq 1 && "$commit_env" -eq 1 ]]
+if [[ "$worktree_cs" -ne 0 || "$worktree_env" -ne 0 ]]; then
+  die "working-tree image is missing the ignored probe (LabProbe exit ${worktree_cs}, env exit ${worktree_env}). The control build must contain those files."
+fi
+if [[ "$commit_cs" -ne 1 || "$commit_env" -ne 1 ]]; then
+  die "image built from git archive of HEAD contains an ignored file (LabProbe exit ${commit_cs}, env exit ${commit_env}). Expected grep exit 1."
+fi
 rm -f "$lab_probe" "$env_probe"
 lab_probe_created=0
 env_probe_created=0

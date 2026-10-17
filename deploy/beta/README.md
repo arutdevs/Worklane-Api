@@ -63,7 +63,7 @@ deploy/beta/
     check-env-isolation.sh
     check-compose.sh          CI and local render check
     init-db-roles.sh
-    ef-migrate.sh             pre-migration dump, then the migrations bundle
+    ef-migrate.sh             pre-migration dump, then the migrator image
     pg-dump-to-r2.sh
     restore-from-r2.sh
     sync-attachments-to-r2.sh stopgap volume mirror until B-18
@@ -283,11 +283,11 @@ Roles, created by `scripts/init-db-roles.sh`:
 |---|---|---|
 | `worklane_admin` (`POSTGRES_USER`) | yes, superuser | creating roles only |
 | `worklane_owner` | no | group for ownership |
-| `worklane_migrator` | yes | the migrations bundle |
+| `worklane_migrator` | yes | the migrator image |
 | `worklane_app` | yes | the API |
 | `worklane_readonly` | yes | `pg_dump` |
 
-`scripts/ef-migrate.sh /etc/worklane/prod.env --yes` waits for Postgres, creates roles, writes a `pre-migration/` dump, then builds `worklane-migrator:<slot>-<api sha>` from the same commit as the locked API image. It checks `docker image inspect` against the lock and runs that image. `compose run` is not given `--build`, so it does not rebuild the tag it just recorded. The container does not install `dotnet-ef`, has no JWT secret, and does not mount the repo. The bundle calls `WorklaneDbContextFactory`, which reads `ConnectionStrings__Default`. The entry script does not pass `--connection`, so the migrator password is not placed in the process argv. With that variable unset, `WorklaneDbContextFactory` uses the dev connection string only when `ASPNETCORE_ENVIRONMENT=Development`. Any other environment, including an unset one, throws. A local `dotnet ef` command now needs `ASPNETCORE_ENVIRONMENT=Development` when `ConnectionStrings__Default` is unset.
+`scripts/ef-migrate.sh /etc/worklane/prod.env --yes` waits for Postgres, creates roles, writes a `pre-migration/` dump, then builds `worklane-migrator:<slot>-<api sha>` from the same commit as the locked API image. It checks `docker image inspect` against the lock and runs that image. `compose run` is not given `--build`, so it does not rebuild the tag it just recorded. The container does not install `dotnet-ef`, has no JWT secret, and does not mount the repo. `Worklane.Migrator` calls `WorklaneDbContextFactory`, which reads `ConnectionStrings__Default`. The entry script does not pass `--connection`, so the migrator password is not placed in the process argv. With that variable unset, `WorklaneDbContextFactory` uses the dev connection string only when `ASPNETCORE_ENVIRONMENT=Development`. Any other environment, including an unset one, throws. A local `dotnet ef` command now needs `ASPNETCORE_ENVIRONMENT=Development` when `ConnectionStrings__Default` is unset.
 
 Run `ef-migrate.sh` on the VM and confirm a row in `__EFMigrationsHistory` before opening the tunnel. The retry here reached `tcp://postgres:5432` (the factory read `ConnectionStrings__Default`) and then timed out. It did not fall back to the dev `localhost` connection string, and it did not apply the migrations.
 
@@ -443,7 +443,7 @@ Render Free (Singapore) plus Neon Free (Singapore) plus R2 is the documented fal
 | Image registry | CI builds the API image and the migrator Dockerfile for `linux/amd64` and `linux/arm64` and does not push either. The droplet builds locally. |
 | Web nginx | Worklane-Web is a separate repo. Build it FROM `nginxinc/nginx-unprivileged` (digest in the compose comment), listen 8080, and record that commit's image id with `record-web-image.sh`. Confirm `/hubs` upgrade headers there. |
 | DataProtection keys in the API (WL-63a) | The volume, mount, and `DataProtection__KeysPath` are already here. WL-63a must read that path, call `SetApplicationName` separately per slot, choose `ProtectKeysWithCertificate` or record the accepted risk, and never back the dpkeys volume up to R2 unencrypted. Until then a restart still mints an ephemeral key. |
-| Apply migrations on the VM | Retried once here with no `--connection` argument. The bundle used `tcp://postgres:5432` and timed out to the container address. `pg_isready -h 127.0.0.1` inside Postgres succeeded. `ef-migrate.sh` on the Oracle VM must show a row in `__EFMigrationsHistory`. |
+| Apply migrations on the VM | Retried once here with no `--connection` argument. The migrator used `tcp://postgres:5432` and timed out to the container address. `pg_isready -h 127.0.0.1` inside Postgres succeeded. `ef-migrate.sh` on the Oracle VM must show a row in `__EFMigrationsHistory`. |
 | Weekly restore automation | Script is manual. Drill once before users, then decide if cron is safe. |
 | Render + Neon | Not wired. |
 | R2 token scope and bucket versioning | Not confirmed. Bucket lock is the control to turn on by hand. |
@@ -458,4 +458,4 @@ docker buildx build --platform linux/arm64,linux/amd64 \
 
 `check-compose.sh` renders both project names, asserts nothing publishes a port, asserts memory limits and log rotation, rejects the burned JWT without printing it, and checks `up.sh` stops on the WL-63 file. It does not create accounts. The fail-closed `up` uses a temp env file and project `wl-closed-check-<pid>`, then `down -v` only that project. Outside CI it stops before doing anything else, including moving `deploy/beta/WL63_DONE`, if a `worklane-prod` or `worklane-staging` container exists. It deletes `deploy/beta/WL63_DONE` only when this run created that file. The rendered compose (interpolated and `--no-interpolate`) must keep named volumes free of `driver`, `driver_opts`, and `external`, and must not set `devices`, `privileged`, a `host` pid/ipc/network/userns mode, `volumes_from`, `env_file`, or `build`.
 
-The API image publishes on the builder's native architecture (`BUILDPLATFORM`) because the output is framework-dependent IL. The runtime image is the target architecture. That is what keeps the arm64 CI build from emulating the SDK.
+The API image and the migrator image both publish on the builder's native architecture (`BUILDPLATFORM`) because the output is framework-dependent IL. The runtime image is the target architecture. That is what keeps the arm64 builds from emulating the SDK. `Worklane.Migrator` calls `WorklaneDbContextFactory` and `Database.Migrate()`. The image does not run `dotnet ef migrations bundle`: that command loads the startup assembly for the bundle's RID, and an amd64 SDK cannot load an arm64 bundle.

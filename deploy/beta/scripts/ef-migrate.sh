@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Pre-migration dump, then the migrations bundle as the migrator role.
+# Pre-migration dump, then the migrator image as the migrator role.
 # Builds the migrator from the same commit as the locked API image and checks
 # the image id before running it. No --connection argument (see migrate.sh).
 #   ef-migrate.sh /etc/worklane/prod.env --yes

@@ -8,7 +8,7 @@ namespace Worklane.Infrastructure.Persistence;
 /// Lets <c>dotnet ef</c> build the DbContext without spinning up the full WebApi host
 /// (which otherwise fails validating unrelated Identity/DataProtection services at design time).
 /// <c>ConnectionStrings__Default</c> wins when it is set, so the beta migrator role is used
-/// on the VM. The migrations bundle calls this factory and must not be passed
+/// on the VM. The beta migrator calls this factory and must not be passed
 /// <c>--connection</c>, which would put the password in the process argv.
 /// The dev connection string is used only when that variable is unset and
 /// <c>ASPNETCORE_ENVIRONMENT</c> is <c>Development</c>. Any other environment throws.
