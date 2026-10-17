@@ -1,2 +1,3 @@
 image: rustfs/rustfs:1.0.3
 Rendered compose contains a dev S3 image, digest, endpoint, or RequireHttps false.
+Non-dev compose file must not use include: or extends:.

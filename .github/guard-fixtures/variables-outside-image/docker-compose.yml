@@ -1,7 +1,17 @@
-name: ${COMPOSE_PROJECT_NAME:-guard-positive}
+name: ${COMPOSE_PROJECT_NAME:?set worklane-prod or worklane-staging}
+
+networks:
+  default:
+    name: ${COMPOSE_PROJECT_NAME:?set worklane-prod or worklane-staging}-net
+
 services:
   web:
     image: nginx:alpine
+    platform: ${DOCKER_PLATFORM:-linux/amd64}
+    mem_limit: ${MEM_LIMIT:-128m}
+    cpus: ${CPUS:-0.10}
+    pids_limit: ${PIDS_LIMIT:-64}
     environment:
       APP_MODE: ${APP_MODE:-production}
       GREETING: ${GREETING:-hello}
+      REQUIRED: ${X:?}

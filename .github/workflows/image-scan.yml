@@ -42,7 +42,15 @@ jobs:
             code=$?
             set -e
             cat "$out"
-            if grep -qx 'PASS' "$d/expect.txt"; then
+            if ! grep -q '[^[:space:]]' "$d/expect.txt"; then
+              echo "::error::${d} expect.txt has no non-blank line"
+              status=1
+              rm -f "$out"
+              continue
+            fi
+            # PASS counts only when it is the entire file, not one line among others.
+            expect_body=$(tr -d '\r' < "$d/expect.txt")
+            if [ "$expect_body" = "PASS" ]; then
               if [ "$code" -ne 0 ]; then
                 echo "::error::${d} expected exit 0, got ${code}"
                 status=1
@@ -62,6 +70,12 @@ jobs:
                   bad=1
                 fi
               done < "$d/expect.txt"
+              for needle in "config failed" "could not read"; do
+                if grep -q -F "$needle" "$out" && ! grep -q -F "$needle" "$d/expect.txt"; then
+                  echo "::error::${d} output contains unexpected: ${needle}"
+                  bad=1
+                fi
+              done
               if [ "$bad" -eq 0 ]; then
                 echo "expected exit 1: ${d}"
               else
