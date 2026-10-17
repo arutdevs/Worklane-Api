@@ -5,10 +5,15 @@
 # Postgres, the API, and nginx are not published on the host. cloudflared
 # dials out. Dev docker-compose.yml at the repo root is a different stack.
 #
+# Networks: edge (cloudflared, web), app (web, api), db (api, postgres, migrator).
+# db is internal, so Postgres has no route to the internet. The tunnel's
+# public hostname must be only http://web:80.
+#
 # Security: do not set ASPNETCORE_ENVIRONMENT=Development. Do not write a JWT
 # or password value in this file (Jwt__Secret is only ${JWT_SECRET} from the
 # git-ignored env file). Do not add a host port except 127.0.0.1:port:container.
-# Postgres stays unpublished. No rustfs or seaweedfs.
+# Postgres stays unpublished. Do not add an object-storage container.
+# Attachments stay on the local volume until B-18.
 
 name: ${COMPOSE_PROJECT_NAME:?set worklane-prod or worklane-staging}
 
@@ -19,8 +24,13 @@ x-logging: &default-logging
     max-file: "3"
 
 networks:
-  default:
-    name: ${COMPOSE_PROJECT_NAME:?set worklane-prod or worklane-staging}-net
+  edge:
+    name: ${COMPOSE_PROJECT_NAME:?set worklane-prod or worklane-staging}-edge
+  app:
+    name: ${COMPOSE_PROJECT_NAME:?set worklane-prod or worklane-staging}-app
+  db:
+    name: ${COMPOSE_PROJECT_NAME:?set worklane-prod or worklane-staging}-db
+    internal: true
 
 volumes:
   pgdata:
@@ -28,9 +38,10 @@ volumes:
 
 services:
   postgres:
-    image: postgres:16
+    image: postgres:16@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d
     platform: ${DOCKER_PLATFORM:-linux/arm64}
     restart: unless-stopped
+    networks: [db]
     environment:
       POSTGRES_DB: ${POSTGRES_DB:?}
       POSTGRES_USER: ${POSTGRES_USER:?}
@@ -44,6 +55,14 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     shm_size: 256mb
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/run/postgresql
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, FOWNER, DAC_OVERRIDE]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
     mem_limit: ${POSTGRES_MEM_LIMIT:-2g}
     cpus: ${POSTGRES_CPUS:-0.60}
     logging: *default-logging
@@ -56,16 +75,19 @@ services:
       start_period: 20s
 
   api:
-    image: ${API_IMAGE:-worklane-api:beta}
+    # Built on the VM and tagged locally. pull_policy never: Compose will not pull this name.
+    image: worklane-api:beta
     platform: ${DOCKER_PLATFORM:-linux/arm64}
-    pull_policy: ${API_PULL_POLICY:-never}
+    pull_policy: never
     build:
       context: ../..
       dockerfile: src/Worklane.WebApi/Dockerfile
     restart: unless-stopped
+    networks: [app, db]
     environment:
       ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:?Production or Staging}
       ASPNETCORE_URLS: http://+:8080
+      DOTNET_EnableDiagnostics: "0"
       AllowedHosts: ${ALLOWED_HOSTS:?}
       # Single quotes around the password: base64 secrets contain '='. Npgsql accepts that.
       ConnectionStrings__Default: "Host=postgres;Port=5432;Database=${POSTGRES_DB:?};Username=${POSTGRES_APP_USER:?};Password='${POSTGRES_APP_PASSWORD:?}';Maximum Pool Size=20"
@@ -84,6 +106,12 @@ services:
       Email__FromName: ${SMTP_FROM_NAME:-Worklane}
     volumes:
       - attachments:/var/worklane/attachments
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
     mem_limit: ${API_MEM_LIMIT:-1536m}
     cpus: ${API_CPUS:-0.70}
     logging: *default-logging
@@ -101,11 +129,20 @@ services:
       start_period: 40s
 
   web:
-    # Built from the Worklane-Web repo (nginx SPA + /api and /hubs proxy). Not built here.
-    image: ${WEB_IMAGE:?}
+    # Built from the Worklane-Web repo on the VM and tagged locally. Not built by this file.
+    image: worklane-web:beta
     platform: ${DOCKER_PLATFORM:-linux/arm64}
-    pull_policy: ${WEB_PULL_POLICY:-never}
+    pull_policy: never
     restart: unless-stopped
+    networks: [edge, app]
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx
+      - /var/run
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 64
     mem_limit: ${WEB_MEM_LIMIT:-128m}
     cpus: ${WEB_CPUS:-0.10}
     logging: *default-logging
@@ -120,13 +157,20 @@ services:
       start_period: 10s
 
   cloudflared:
-    image: cloudflare/cloudflared:${CLOUDFLARED_VERSION:-2026.10.1}
+    image: cloudflare/cloudflared:2026.10.1@sha256:a15a3b50b8dabd57ac2090e9484c0247dba9dfa1f0df4d298d4317f9d69eb2d5
     platform: ${DOCKER_PLATFORM:-linux/arm64}
     restart: unless-stopped
+    networks: [edge]
     # Image entrypoint is already `cloudflared --no-autoupdate` (pinned 2026.10.1).
     command: tunnel run
     environment:
       TUNNEL_TOKEN: "${CLOUDFLARE_TUNNEL_TOKEN:?}"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 64
     mem_limit: ${CLOUDFLARED_MEM_LIMIT:-128m}
     cpus: ${CLOUDFLARED_CPUS:-0.10}
     logging: *default-logging
@@ -142,30 +186,57 @@ services:
       retries: 3
       start_period: 15s
 
-  # One-off EF migrator. Not started by `up`. See scripts/ef-migrate.sh.
+  # One-off EF migrator. Not started by `up`. The image already contains the
+  # migrations bundle. See scripts/ef-migrate.sh.
   migrator:
     profiles: ["migrate"]
-    image: mcr.microsoft.com/dotnet/sdk:10.0
+    image: worklane-migrator:beta
     platform: ${DOCKER_PLATFORM:-linux/arm64}
+    pull_policy: never
+    build:
+      context: ../..
+      dockerfile: deploy/beta/Dockerfile
     restart: "no"
-    working_dir: /src
+    networks: [db]
+    working_dir: /tmp
     volumes:
-      - ../..:/src
+      - type: bind
+        source: ../..
+        target: /src
+        read_only: true
     environment:
       ASPNETCORE_ENVIRONMENT: Production
       ConnectionStrings__Default: "Host=postgres;Port=5432;Database=${POSTGRES_DB:?};Username=${POSTGRES_MIGRATOR_USER:?};Password='${POSTGRES_MIGRATOR_PASSWORD:?}'"
-      Jwt__Secret: "${JWT_SECRET:?}"
-      Jwt__Issuer: ${JWT_ISSUER:-Worklane}
-      Jwt__Audience: ${JWT_AUDIENCE:-WorklaneClient}
       DOTNET_CLI_TELEMETRY_OPTOUT: "1"
       DOTNET_NOLOGO: "1"
-      # Skip CRL checks. Package download still happens. A blocked CRL endpoint
-      # otherwise leaves `dotnet tool install` sitting on a socket with no output.
-      NUGET_CERT_REVOCATION_MODE: offline
-    entrypoint: ["bash", "-lc"]
+      DOTNET_EnableDiagnostics: "0"
+      # Single-file bundle extracts native files. /home/app is read-only.
+      DOTNET_BUNDLE_EXTRACT_BASE_DIR: /tmp/bundle-extract
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
     mem_limit: ${MIGRATOR_MEM_LIMIT:-2g}
     cpus: ${MIGRATOR_CPUS:-1.0}
     logging: *default-logging
     depends_on:
       postgres:
         condition: service_healthy
+
+  # Pinned AWS CLI for the backup scripts. Not started by `up`.
+  awscli:
+    profiles: ["tools"]
+    image: amazon/aws-cli:2.38.1@sha256:733d5be1015825e4038c6016f3fa9954868ddee1f611b73be795a9cc2e706bfd
+    platform: ${DOCKER_PLATFORM:-linux/arm64}
+    restart: "no"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 64
+    network_mode: none
+    entrypoint: ["aws"]
+    command: ["--version"]

@@ -20,19 +20,27 @@ Security constraints for this change:
 - Beta compose never sets `ASPNETCORE_ENVIRONMENT=Development`. Prod is `Production`. Staging is `Staging`.
 - `Jwt__Secret` in the beta compose is only `${JWT_SECRET}` from the git-ignored env file. The file has no secret value.
 - No service publishes a host port, so nothing listens on `0.0.0.0`. Postgres is not published. A future loopback mapping has to be `127.0.0.1:<port>:<container>`.
-- The stack does not reference rustfs or seaweedfs. Attachments stay on a local volume until B-18.
+- Image names in this compose file are literals. `worklane-api:beta` and `worklane-web:beta` are built or loaded on the VM. Third-party images are `tag@sha256`. Nothing in an `image:` line is a variable.
+- Attachments stay on a local volume until B-18. Do not add an object-storage container to this file.
 
 ## WL-63 gate
 
-Do not start the tunnel, and do not put a public hostname on it, until WL-63 is actually done:
+Do not start the tunnel, and do not put a public hostname on it, until WL-63 is actually done in the API:
 
-1. The image you deploy rejects the JWT signing secret that is still in `docker-compose.yml` and `appsettings.Development.json`. That value is burned. It is in git history. Do not reuse it for dev, CI, staging, or prod.
-2. Staging and prod each have their own new secret (`openssl rand -base64 64 | tr -d '\n'`, at least 32 bytes after base64-decode).
-3. You have checked, on that image, that a token signed with the burned secret gets **401** on `/api/*` and on `/hubs/notifications`.
+1. The image you run rejects the burned signing key at startup. That key is still in `docker-compose.yml` and `appsettings.Development.json`. It is in git history. A token signed with it must get **401** on `/api/*` and on `/hubs/notifications`.
+2. Staging and prod each have their own new secret (`openssl rand -base64 64 | tr -d '\n'`, at least 32 bytes after base64-decode). Whitespace inside the value does not make it a new key.
 
-This PR does not implement that API behaviour. `scripts/preflight.sh` only refuses to boot when the env file still contains the burned value (compared by SHA-256 in `leaked-jwt-sha256.txt`). That is necessary and not sufficient.
+This PR does not implement that API behaviour. `scripts/preflight.sh` refuses an env file that still contains the burned key, compared as SHA-256 of the base64 text and SHA-256 of the decoded key bytes (`leaked-jwt-sha256.txt`). A tab in the value is the same key and is rejected.
 
-`scripts/up.sh` also requires a git-ignored file `deploy/beta/WL63_DONE` whose first word is `yes`, written by a person after the 401 check above. Example:
+`scripts/up.sh` also looks for a git-ignored file `deploy/beta/WL63_DONE` whose first word is `yes`. That file is a speed bump, not a control. It does not stop a person who runs Compose directly:
+
+```bash
+docker compose --env-file deploy/beta/.env.prod -f deploy/beta/docker-compose.yml up -d
+```
+
+That command never reads `WL63_DONE`. The control is the API rejecting the burned key at startup, plus a rotated secret in the env file. Do not treat the marker file as either of those.
+
+Example marker, after the 401 check on the image you are about to run:
 
 ```text
 yes 2026-10-18 leaked token returns 401 on /api and /hubs
@@ -53,7 +61,7 @@ deploy/beta/
     check-env-isolation.sh
     check-compose.sh          CI and local render check
     init-db-roles.sh
-    ef-migrate.sh             pre-migration dump, then dotnet ef
+    ef-migrate.sh             pre-migration dump, then the migrations bundle
     pg-dump-to-r2.sh
     restore-from-r2.sh
     sync-attachments-to-r2.sh stopgap volume mirror until B-18
@@ -79,7 +87,7 @@ Do this in the Oracle console. This repo cannot do it for you.
 3. Boot volume 50 GB plus a block volume (100 GB is enough). Attach the block volume.
 4. Put an SSH key on the instance. Prefer OCI Bastion so the subnet security list has **no** public ingress, including port 22.
 5. Security list and network security group: ingress empty. Egress allows outbound TCP 443 (the tunnel, R2, Resend, package mirrors). Do not open 80, 443, or 5432.
-6. On the VM, if you must keep SSH on a public IP for the first hour, `ufw default deny incoming`, `ufw default allow outgoing`, `ufw allow from <your-ip> to any port 22`, then `ufw enable`. Close 22 once Bastion works.
+6. On the VM, if you must keep SSH on a public IP for the first hour, `ufw default deny incoming`, `ufw default allow outgoing`, `ufw allow from <your-ip> to any port 22`, then `ufw enable`. Close 22 once Bastion works. Docker published ports bypass ufw. This compose file publishes none. If a port is added later, bind it in the OCI security list (or the DigitalOcean firewall) and in the iptables `DOCKER-USER` chain. Do not rely on ufw for a Docker port.
 
 On the VM:
 
@@ -98,13 +106,18 @@ uname -m   # aarch64
 
 Format the block volume only if it is empty, mount it at `/var/lib/docker`, and point Docker's data-root there so images and named volumes survive a boot-disk rebuild. Record the volume OCID.
 
-Clone this repo to `/opt/worklane` (no secrets in git). Clone `Worklane-Web` next to it or elsewhere. Build the web image on the VM:
+Clone this repo to `/opt/worklane` (no secrets in git). Clone `Worklane-Web` next to it or elsewhere. The compose file names images literally and sets `pull_policy: never`, so the VM must already have these tags. Compose will not pull them from a registry.
 
 ```bash
+# API. up.sh also builds this tag (--build). A saved tar is docker load, then the same tag.
+docker build --platform linux/arm64 -t worklane-api:beta -f src/Worklane.WebApi/Dockerfile .
+# Web. This repo does not build it. Tag the Worklane-Web nginx image exactly:
 docker build --platform linux/arm64 -t worklane-web:beta /path/to/Worklane-Web
 ```
 
-Confirm that image's nginx proxies `/api` and `/hubs` to `http://api:8080` and that `/hubs` sets `Upgrade` and `Connection "upgrade"`, with `proxy_buffering off` and a long read timeout. This repo does not contain that nginx config. A missing upgrade header breaks SignalR even when the tunnel is fine.
+`worklane-migrator:beta` is built from `deploy/beta/Dockerfile` when `scripts/ef-migrate.sh` runs. That image is a migrations bundle, not a `dotnet/sdk` container, and it does not install `dotnet-ef` on the VM.
+
+Confirm the web image's nginx proxies `/api` and `/hubs` to `http://api:8080` and that `/hubs` sets `Upgrade` and `Connection "upgrade"`, with `proxy_buffering off` and a long read timeout. Add these response headers in that nginx config: `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY` (or `Content-Security-Policy: frame-ancestors 'none'`), and a `Permissions-Policy`. This repo does not contain that nginx config. A missing upgrade header breaks SignalR even when the tunnel is fine.
 
 ## 2. Env files
 
@@ -123,15 +136,27 @@ Leave the files only on the VM (mode 600, owner root). A copy of the secrets bel
 
 ## 3. Cloudflare Tunnel and DNS
 
-One tunnel per environment, so each has its own token.
+Do this only after the "Before you open the tunnel" list below is true. One tunnel per environment, so each has its own token.
 
-1. Domain on Cloudflare DNS (the registrar can stay Porkbun; nameservers point at Cloudflare).
-2. Create a tunnel. Copy the token into `CLOUDFLARE_TUNNEL_TOKEN`. Do not commit it.
-3. Public hostname for prod: `app.<domain>` → `http://web:80`.
-4. Public hostname for staging: `staging.<domain>` → `http://web:80` on the **staging** tunnel.
-5. The hostname `web` is the Compose service. Each cloudflared container is on its own network (`worklane-prod-net`, `worklane-staging-net`), so `web` resolves to that project's nginx.
+1. Turn on Cloudflare 2FA for every member of the account before you create a tunnel token. This is mandatory. A token from an account without 2FA is not acceptable for this beta.
+2. Domain on Cloudflare DNS (the registrar can stay Porkbun; nameservers point at Cloudflare).
+3. Create a tunnel. Copy the token into `CLOUDFLARE_TUNNEL_TOKEN`. Do not commit it.
+4. Public hostname for prod: `app.<domain>` → `http://web:80`. That is the only origin. Do not add a public hostname to `http://api:8080`, `http://postgres:5432`, or any other service.
+5. Public hostname for staging: `staging.<domain>` → `http://web:80` on the **staging** tunnel. Same rule: only `http://web:80`.
+6. The hostname `web` is the Compose service. cloudflared is on the `edge` network only (`worklane-prod-edge`, `worklane-staging-edge`), which also has `web`. It cannot resolve `api` or `postgres`. `web` and `api` share `app`. `api`, `postgres`, and the migrator share `db`, and `db` is `internal: true` (no route from Postgres to the internet).
 
-The API is `https://app.<domain>/api` and SignalR is `wss://app.<domain>/hubs/notifications` on the same host. That matches the Angular app and avoids CORS. A separate `api.<domain>` pointed at `http://api:8080` is not wired: the API has no forwarded-headers setup and the web client is same-origin.
+### Before you open the tunnel
+
+All of these are true before a public hostname exists on the tunnel:
+
+1. WL-63 is done in the API you are about to run: startup rejects the burned key, and the env file has a new secret. The `WL63_DONE` file is not this check.
+2. Cloudflare 2FA is on for every account member.
+3. A Cloudflare rate-limiting rule matches `/api/auth/*` (login, register, refresh, and the other auth routes) and blocks or challenges excess requests per client IP. Attach it before the hostname, not after the first signup.
+4. The API build trusts forwarded headers from nginx only, and it takes the client IP from `CF-Connecting-IP`. That change belongs to the backend team. It is not in this PR. Do not point the tunnel at this API until that build is the one you are running. Nginx must pass `CF-Connecting-IP` and must be the only proxy the API trusts.
+5. The web nginx image sends the security headers listed in the VM section.
+6. Tunnel ingress is only `http://web:80`.
+
+The API is `https://app.<domain>/api` and SignalR is `wss://app.<domain>/hubs/notifications` on the same host. That matches the Angular app and avoids CORS. Do not add `api.<domain>`. cloudflared cannot reach the API container, and the client is same-origin.
 
 Cloudflare SSL mode **Full (strict)** once the edge certificate is active. Cache rule: bypass `/api/*` and `/hubs/*`. Hashed static files can cache. Do not cache `index.html`.
 
@@ -197,19 +222,19 @@ Schedule the heartbeat for a few minutes after `cron.example` (18:15 UTC). If th
 
 ## 6. First boot
 
-Build the web image first (`WEB_PULL_POLICY=never` will not pull Docker Hub). Then:
+Tag `worklane-web:beta` and `worklane-api:beta` first (see the VM section). `pull_policy: never` will not pull those names. Then:
 
 ```bash
 cd /opt/worklane
 deploy/beta/scripts/up.sh deploy/beta/.env.prod
 ```
 
-Repeat with `.env.staging` after `WL63_DONE` exists. `up.sh` runs preflight, checks the two env files do not share secrets, checks `WL63_DONE`, then `docker compose up -d --build --wait`.
+Repeat with `.env.staging` only after the API image rejects the burned key. `up.sh` runs preflight, checks the two env files do not share secrets, checks the `WL63_DONE` speed bump, then `docker compose up -d --build --wait`. `--build` rebuilds `worklane-api:beta` from this repo. It does not build `worklane-web:beta`.
 
-Confirm outbound TCP 443 works from a container on the project network (cloudflared, Resend, and the first `dotnet tool install` all need it). On a normal Docker install, custom bridges are masqueraded. If this fails, fix `ip_forward` and the iptables/nftables forwarding for Docker before debugging the tunnel:
+Confirm outbound TCP 443 from the `edge` network (cloudflared) and from the `app` network (the API sends mail). The `db` network is internal, so a check from Postgres must fail. On a normal Docker install, non-internal bridges are masqueraded. If the edge check fails, fix `ip_forward` and Docker's iptables/nftables forwarding before debugging the tunnel:
 
 ```bash
-docker run --rm --network worklane-prod-net postgres:16 \
+docker run --rm --network worklane-prod-edge postgres:16 \
   bash -c 'timeout 8 bash -c "echo >/dev/tcp/1.1.1.1/443" && echo ok'
 ```
 
@@ -232,13 +257,11 @@ Roles, created by `scripts/init-db-roles.sh`:
 |---|---|---|
 | `worklane_admin` (`POSTGRES_USER`) | yes, superuser | creating roles only |
 | `worklane_owner` | no | group for ownership |
-| `worklane_migrator` | yes | `dotnet ef database update` |
+| `worklane_migrator` | yes | the migrations bundle |
 | `worklane_app` | yes | the API |
 | `worklane_readonly` | yes | `pg_dump` |
 
-`scripts/ef-migrate.sh .env.prod --yes` waits for Postgres, creates roles, writes a `pre-migration/` dump, runs `dotnet ef` inside the `migrator` profile (SDK image, not the running API), then grants again.
-
-`dotnet ef` uses `WorklaneDbContextFactory`, which reads `ConnectionStrings__Default` when it is set. The migrator container sets that to the migrator role. With the variable unset, local `dotnet ef` still uses the dev connection string.
+`scripts/ef-migrate.sh .env.prod --yes` waits for Postgres, creates roles, writes a `pre-migration/` dump, then runs `worklane-migrator:beta`. That image is built from `deploy/beta/Dockerfile` and already contains the EF migrations bundle. The container does not install `dotnet-ef`, has no JWT secret, and mounts the repo read-only at `/src`. The bundle applies `ConnectionStrings__Default` as the migrator role. With that variable unset, local `dotnet ef` on a workstation still uses the dev connection string via `WorklaneDbContextFactory`.
 
 Run the same script for staging. Do not copy prod data into staging.
 
@@ -382,10 +405,10 @@ Render Free (Singapore) plus Neon Free (Singapore) plus R2 is the documented fal
 
 | Item | Why it is not in this PR |
 |---|---|
-| WL-63 in the API | No `kid`, no startup reject of the burned secret, dev compose still has the old value on purpose. The gate above is operational. |
+| WL-63 in the API | Prerequisite before the tunnel. Startup must reject the burned key. This PR only has the env-file denylist. `WL63_DONE` is a speed bump. |
 | B-18 R2 storage | `IFileStorage` is only `LocalFileStorage`. The sync script mirrors the volume. The app does not use it. |
 | `/health` | No health endpoint. Compose probes TCP on the API and wget/curl on nginx. Better Stack uses login 400 and negotiate 401 until `/health` exists. |
-| Forwarded headers | `UseForwardedHeaders` is not installed. `UseHttpsRedirection` does nothing while the API is HTTP-only inside the network. Keep `ASPNETCORE_URLS=http://+:8080`. |
+| Forwarded headers | Prerequisite before the tunnel, owned by the backend team. Trust nginx only. Read the client IP from `CF-Connecting-IP`. Not implemented here. Keep `ASPNETCORE_URLS=http://+:8080`. |
 | Email From address | `SmtpEmailService` uses the SMTP username as From. Resend's username is `resend`, so real mail will fail. OCI port 587 was not confirmed. |
 | WAL-G PITR | Dump script only. RPO is the last dump, not 5 minutes. |
 | Grafana Alloy, Sentry SDK | No exporter in the API. Env keys are comments. |

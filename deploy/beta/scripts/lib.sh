@@ -79,10 +79,65 @@ require_ident() {
 
 reject_unsafe_secret() {
   local key=$1 val=$2
-  # '$' and backticks would be expanded by the shell while building SQL or env files.
-  if [[ "$val" == *"'"* || "$val" == *";"* || "$val" == *$'\n'* || "$val" == *$'\r'* || "$val" == *" "* || "$val" == *'$'* || "$val" == *'`'* || "$val" == *'\'* ]]; then
-    die "$key must not contain spaces, quotes, dollar signs, backticks, backslashes, semicolons, or newlines"
+  # Whitespace includes tab. A tab is not a different secret: .NET's
+  # FromBase64String ignores it, and the SQL/env builders do not want it either.
+  if [[ "$val" =~ [[:space:]] ]]; then
+    die "$key must not contain whitespace"
   fi
+  # '$' and backticks would be expanded by the shell while building SQL or env files.
+  if [[ "$val" == *"'"* || "$val" == *";"* || "$val" == *'$'* || "$val" == *'`'* || "$val" == *'\'* ]]; then
+    die "$key must not contain quotes, dollar signs, backticks, backslashes, or semicolons"
+  fi
+}
+
+# First field of each non-comment line in the denylist file.
+denylist_has() {
+  local file=$1 hash=$2
+  grep -vE '^[[:space:]]*(#|$)' "$file" | awk 'NF {print $1}' | grep -qx "$hash"
+}
+
+# Reject the burned dev JWT. Compares SHA-256 of the base64 text and SHA-256 of
+# the decoded key bytes. Whitespace is stripped only for that comparison, because
+# FromBase64String ignores it; the value is still rejected if it contained any.
+reject_leaked_jwt() {
+  local key=$1 val=$2 denylist=$3
+  local comparable text_hash raw decoded_hash len
+  [[ -f "$denylist" ]] || die "missing $denylist"
+  if [[ "$val" == *"'"* || "$val" == *";"* || "$val" == *'$'* || "$val" == *'`'* || "$val" == *'\'* ]]; then
+    die "$key must not contain quotes, dollar signs, backticks, backslashes, or semicolons"
+  fi
+  comparable=$(printf '%s' "$val" | tr -d '[:space:]')
+  text_hash=$(sha256_text "$comparable")
+  raw=$(mktemp)
+  if ! printf '%s' "$comparable" | base64 -d >"$raw" 2>/dev/null; then
+    rm -f "$raw"
+    if [[ "$val" =~ [[:space:]] ]]; then
+      die "$key must not contain whitespace"
+    fi
+    die "$key is not valid base64"
+  fi
+  decoded_hash=$(sha256sum "$raw" | awk '{print $1}')
+  len=$(wc -c <"$raw")
+  rm -f "$raw"
+  if denylist_has "$denylist" "$text_hash" || denylist_has "$denylist" "$decoded_hash"; then
+    die "$key is the leaked dev signing secret (WL-63). Generate a new one. The old value stays burned."
+  fi
+  if [[ "$val" =~ [[:space:]] ]]; then
+    die "$key must not contain whitespace"
+  fi
+  [[ "$len" -ge 32 ]] || die "$key must decode to at least 32 bytes (use: openssl rand -base64 64 | tr -d '\\n')"
+}
+
+# Literal pin from the awscli service. Backup scripts docker-run this image.
+aws_cli_image() {
+  local image
+  image=$(awk '
+    $1 == "awscli:" { in_svc = 1; next }
+    in_svc && $0 ~ /^  [^[:space:]]/ { exit }
+    in_svc && $1 == "image:" { print $2; exit }
+  ' "$(compose_file)")
+  [[ "$image" == amazon/aws-cli:*@sha256:* ]] || die "aws-cli image in deploy/beta/docker-compose.yml must be pinned as amazon/aws-cli:<tag>@sha256:<digest>"
+  printf '%s' "$image"
 }
 
 sha256_text() {

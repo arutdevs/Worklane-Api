@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Pre-migration dump, then `dotnet ef database update` as the migrator role.
+# Pre-migration dump, then the migrations bundle as the migrator role.
 #   ef-migrate.sh <env-file> --yes
 set -euo pipefail
 
@@ -18,8 +18,8 @@ compose up -d --wait postgres
 "$SCRIPT_DIR/pg-dump-to-r2.sh" "$ENV_FILE" pre-migration
 
 printf 'applying EF migrations as %s\n' "$(require_ident POSTGRES_MIGRATOR_USER)"
-compose --profile migrate run --rm migrator \
-  'dotnet tool install --tool-path /tmp/tools dotnet-ef --version 10.0.13 && export PATH="/tmp/tools:$PATH" && dotnet ef database update --project src/Worklane.Infrastructure/Worklane.Infrastructure.csproj --startup-project src/Worklane.WebApi/Worklane.WebApi.csproj'
+# The migrator image already contains the bundle. Nothing is installed here.
+compose --profile migrate run --rm migrator
 
 "$SCRIPT_DIR/init-db-roles.sh" "$ENV_FILE"
 

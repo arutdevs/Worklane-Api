@@ -34,8 +34,7 @@ reject_unsafe_secret R2_ATTACHMENTS_SECRET_ACCESS_KEY "$secret"
 backup_bucket=$(optional_env R2_BACKUP_BUCKET)
 [[ -z "$backup_bucket" || "$backup_bucket" != "$bucket" ]] || die "attachment bucket must be different from the backup bucket"
 
-image=$(optional_env AWS_CLI_IMAGE)
-[[ -n "$image" ]] || image="amazon/aws-cli:2.38.1"
+image=$(aws_cli_image)
 endpoint="https://${account}.r2.cloudflarestorage.com"
 prefix="mirror/${project}"
 

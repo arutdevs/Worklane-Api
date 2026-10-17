@@ -69,27 +69,10 @@ if [[ "$mode" == "--up" ]]; then
 
   jwt=$(require_env JWT_SECRET)
   reject_placeholder JWT_SECRET "$jwt"
-  reject_unsafe_secret JWT_SECRET "$jwt"
-  jwt_hash=$(sha256_text "$jwt")
-  if grep -vE '^[[:space:]]*#' "$denylist" | awk 'NF {print $1}' | grep -qx "$jwt_hash"; then
-    die "JWT_SECRET is the leaked dev signing secret (WL-63). Generate a new one. The old value stays burned."
-  fi
-  umask 077
-  jwt_raw=$(mktemp)
-  if ! printf '%s' "$jwt" | tr -d '[:space:]' | base64 -d >"$jwt_raw" 2>/dev/null; then
-    rm -f "$jwt_raw"
-    die "JWT_SECRET is not valid base64"
-  fi
-  jwt_len=$(wc -c <"$jwt_raw")
-  rm -f "$jwt_raw"
-  [[ "$jwt_len" -ge 32 ]] || die "JWT_SECRET must decode to at least 32 bytes (use: openssl rand -base64 64 | tr -d '\\n')"
-
-  hashes+=("$jwt_hash")
+  reject_leaked_jwt JWT_SECRET "$jwt" "$denylist"
+  hashes+=("$(sha256_text "$jwt")")
   hashes+=("$(check_secret CLOUDFLARE_TUNNEL_TOKEN)")
   hashes+=("$(check_secret SMTP_PASSWORD)")
-
-  web_image=$(require_env WEB_IMAGE)
-  reject_placeholder WEB_IMAGE "$web_image"
 
   smtp_host=$(require_env SMTP_HOST)
   reject_placeholder SMTP_HOST "$smtp_host"
@@ -113,6 +96,7 @@ if [[ "$mode" == "--backup" ]]; then
   [[ "$bucket" =~ ^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$ ]] || die "R2_BACKUP_BUCKET is not a safe bucket name"
   check_secret R2_BACKUP_ACCESS_KEY_ID >/dev/null
   check_secret R2_BACKUP_SECRET_ACCESS_KEY >/dev/null
+  aws_cli_image >/dev/null
 
   heartbeat=$(require_env BETTERSTACK_HEARTBEAT_URL_BACKUP)
   [[ "$heartbeat" == https://* ]] || die "BETTERSTACK_HEARTBEAT_URL_BACKUP must be an https URL"

@@ -24,8 +24,7 @@ db=$(require_ident POSTGRES_DB)
 readonly_role=$(require_ident POSTGRES_READONLY_USER)
 account=$(require_env R2_ACCOUNT_ID)
 bucket=$(require_env R2_BACKUP_BUCKET)
-image=$(optional_env AWS_CLI_IMAGE)
-[[ -n "$image" ]] || image="amazon/aws-cli:2.38.1"
+image=$(aws_cli_image)
 endpoint="https://${account}.r2.cloudflarestorage.com"
 
 if [[ "$dump_mode" == "pre-migration" ]]; then

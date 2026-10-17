@@ -4,7 +4,7 @@
 # Oracle A1 VM, linux/amd64 elsewhere). Native dependencies would break this;
 # this project has none.
 
-FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0@sha256:0d99ebf1ccad15037b5c98c9fe8979d6b8dbac23812feae2277a0b277b5c5ffa AS build
 WORKDIR /src
 
 COPY src/Worklane.Domain/Worklane.Domain.csproj src/Worklane.Domain/
@@ -18,11 +18,17 @@ COPY src/ src/
 
 RUN dotnet publish src/Worklane.WebApi/Worklane.WebApi.csproj -c Release -o /app --no-restore
 
-FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
+FROM mcr.microsoft.com/dotnet/aspnet:10.0@sha256:d5633778c754e89a386882eddf8dbee6942447a8a4b8267c19cf1e1158d0b0ac AS runtime
 WORKDIR /app
 COPY --from=build /app .
+
+# Named volume at this path is seeded from the image, including ownership.
+# A fresh volume is therefore writable by the non-root user below.
+RUN mkdir -p /var/worklane/attachments \
+    && chown -R "$APP_UID:$APP_UID" /var/worklane/attachments
 
 ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080
 
+USER $APP_UID
 ENTRYPOINT ["dotnet", "Worklane.WebApi.dll"]
