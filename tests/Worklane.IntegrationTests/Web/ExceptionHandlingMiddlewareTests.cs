@@ -108,6 +108,7 @@ public class ExceptionHandlingMiddlewareTests
         await middleware.InvokeAsync(context);
 
         context.Response.StatusCode.Should().Be(StatusCodes.Status500InternalServerError);
+        context.Response.ContentType.Should().Be("application/problem+json");
         context.Response.Body.Position = 0;
         using var document = await JsonDocument.ParseAsync(context.Response.Body);
         var json = document.RootElement;
@@ -227,6 +228,7 @@ public class ExceptionHandlingMiddlewareTests
 
         await middleware.InvokeAsync(context);
 
+        context.Response.ContentType.Should().Be("application/problem+json");
         context.Response.Body.Position = 0;
         using var document = await JsonDocument.ParseAsync(context.Response.Body);
         return ((HttpStatusCode)context.Response.StatusCode, document.RootElement.Clone(), context.Response.ContentType);

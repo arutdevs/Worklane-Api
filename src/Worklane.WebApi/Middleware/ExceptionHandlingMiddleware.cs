@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using FluentValidation;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -86,9 +87,12 @@ public class ExceptionHandlingMiddleware
                 .ToDictionary(g => g.Key, g => g.Select(e => ToFieldCode(e.ErrorCode)).ToArray());
         }
 
-        context.Response.ContentType = "application/problem+json";
         context.Response.StatusCode = (int)statusCode;
-        await context.Response.WriteAsJsonAsync(problemDetails);
+        await context.Response.WriteAsJsonAsync(
+            problemDetails,
+            (JsonSerializerOptions?)null,
+            "application/problem+json",
+            context.RequestAborted);
     }
 
     /// <summary>
