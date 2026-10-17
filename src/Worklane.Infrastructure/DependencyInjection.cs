@@ -45,7 +45,10 @@ public static class DependencyInjection
                 settings.WorkspaceQuotaBytes = bound.WorkspaceQuotaBytes;
                 settings.AllowedContentTypes = bound.AllowedContentTypes;
                 settings.AllowedExtensions = bound.AllowedExtensions;
-            });
+            })
+            .Validate(static settings => settings.MaxBytes > 0, "FileStorage:MaxBytes must be greater than 0.")
+            .Validate(static settings => settings.WorkspaceQuotaBytes > 0, "FileStorage:WorkspaceQuotaBytes must be greater than 0.")
+            .ValidateOnStart();
 
         services.AddScoped<ICurrentTenantService, CurrentTenantService>();
         services.AddScoped<ITokenService, JwtTokenService>();

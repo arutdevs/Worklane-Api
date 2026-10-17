@@ -34,13 +34,16 @@ public class TaskAttachmentsController : ControllerBase
     }
 
     /// <summary>
-    /// Uploads a file (multipart field <c>file</c>). 413 when it exceeds the transport
-    /// or per-file cap, 409 when the workspace quota is full, 415 when the type is not allowed.
+    /// Uploads a file (multipart field <c>file</c>). The transport ceiling is
+    /// <see cref="FileStorageSettings.AttachmentRequestLimit"/> from configuration
+    /// (<c>FileStorage:MaxBytes</c> plus 1 MiB), not a fixed 11 MiB. 413 when the
+    /// body or the file exceeds its cap, 409 when the workspace quota is full,
+    /// 415 when the type is not allowed.
     /// </summary>
     [HttpPost("api/tasks/{taskId:guid}/attachments")]
     [Consumes("multipart/form-data")]
     [EnableRateLimiting("attachments")]
-    [RequestSizeLimit(FileStorageSettings.AttachmentRequestLimitBytes)]
+    [AttachmentUploadLimit]
     [RequireWorkspaceRole(WorkspaceRole.Member, WorkspaceResourceType.Task, "taskId")]
     public async Task<ActionResult<AttachmentDto>> Upload(Guid taskId, CancellationToken ct)
     {
