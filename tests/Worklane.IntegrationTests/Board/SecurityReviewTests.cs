@@ -26,6 +26,7 @@ using Worklane.Application.Common.Options;
 using Worklane.Domain.Enums;
 using Worklane.Infrastructure.Persistence;
 using Worklane.IntegrationTests.Infrastructure;
+using Worklane.WebApi.Filters;
 using Worklane.WebApi.Hubs;
 using Worklane.WebApi.Middleware;
 
@@ -98,6 +99,38 @@ public class SecurityReviewTests : IClassFixture<WorklaneWebApplicationFactory>
         activity.Should().NotContain("LeakProbeOtherWorkspace");
         activity.Should().NotContain(sameWorkspace.ToString());
         activity.Should().NotContain(otherColumn.Id.ToString());
+    }
+
+    [Fact]
+    public async Task DeleteColumn_RejectsTargetFromAnotherProjectOrWorkspace()
+    {
+        var board = await BoardTestSetup.CreateAsync(_factory, "delete-column-owner@test.com", "Owner");
+        var task = await BoardTestSetup.CreateTaskAsync(board, "Must stay");
+
+        var sameWorkspace = await CreateForeignColumn(board.Client, board.User.Workspace.Id, "DC", "ForeignSameWorkspace");
+        var outsider = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), "delete-column-other@test.com", "Outsider");
+        var otherProject = await outsider.Client.PostAsJsonAsync($"/api/workspaces/{outsider.Workspace.Id}/projects",
+            new { name = "Other", key = "DY" });
+        otherProject.EnsureSuccessStatusCode();
+        var other = (await otherProject.Content.ReadFromJsonAsync<Worklane.Application.Projects.Dtos.ProjectDto>(TestAuthHelper.JsonOptions))!;
+        var otherColumns = await (await outsider.Client.GetAsync($"/api/projects/{other.Id}/columns"))
+            .Content.ReadFromJsonAsync<List<BoardColumnDto>>(TestAuthHelper.JsonOptions);
+        var otherColumn = otherColumns!.Single(c => c.Name == "To Do");
+
+        foreach (var targetColumnId in new[] { sameWorkspace, otherColumn.Id })
+        {
+            var deleted = await board.Client.DeleteAsync(
+                $"/api/columns/{board.Todo.Id}?targetColumnId={targetColumnId}");
+            deleted.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        }
+
+        var reloaded = await (await board.Client.GetAsync($"/api/tasks/{task.Id}"))
+            .Content.ReadFromJsonAsync<TaskItemDto>(TestAuthHelper.JsonOptions);
+        reloaded!.ColumnId.Should().Be(board.Todo.Id);
+
+        var columns = await (await board.Client.GetAsync($"/api/projects/{board.Project.Id}/columns"))
+            .Content.ReadFromJsonAsync<List<BoardColumnDto>>(TestAuthHelper.JsonOptions);
+        columns!.Should().Contain(column => column.Id == board.Todo.Id);
     }
 
     [Fact]
@@ -587,12 +620,14 @@ public class KestrelUploadLimitTests : IClassFixture<KestrelUploadFactory>
         var task = await BoardTestSetup.CreateTaskAsync(board, "Big");
 
         var settings = _factory.Services.GetRequiredService<IOptions<FileStorageSettings>>().Value;
-        var transportLimit = settings.MaxBytes + FileStorageSettings.UploadEnvelopeBytes;
+        var transportLimit = settings.AttachmentRequestLimit;
         var dataSource = _factory.Services.GetRequiredService<EndpointDataSource>();
-        var uploadLimit = dataSource.Endpoints
-            .Select(endpoint => endpoint.Metadata.GetMetadata<IRequestSizeLimitMetadata>())
-            .FirstOrDefault(metadata => metadata?.MaxRequestBodySize == transportLimit);
+        var uploadEndpoint = dataSource.Endpoints
+            .FirstOrDefault(endpoint => endpoint.Metadata.GetMetadata<AttachmentUploadLimitAttribute>() is not null);
+        uploadEndpoint.Should().NotBeNull();
+        var uploadLimit = uploadEndpoint!.Metadata.GetMetadata<IRequestSizeLimitMetadata>();
         uploadLimit.Should().NotBeNull();
+        uploadLimit!.MaxRequestBodySize.Should().Be(settings.AttachmentRequestLimit);
         settings.MaxBytes.Should().Be(3 * 1024 * 1024);
         transportLimit.Should().Be(settings.MaxBytes + FileStorageSettings.UploadEnvelopeBytes);
         new FileStorageSettings().AttachmentRequestLimit.Should().Be(11 * 1024 * 1024);

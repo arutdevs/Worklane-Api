@@ -1,23 +1,58 @@
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.ApplicationModels;
+using Microsoft.AspNetCore.Mvc.Filters;
 using Microsoft.Extensions.Options;
 using Worklane.Application.Common.Options;
 
 namespace Worklane.WebApi.Filters;
 
 /// <summary>
-/// Marks the attachment upload action. The convention turns this into a
-/// <see cref="RequestSizeLimitAttribute"/> from <see cref="FileStorageSettings.MaxBytes"/>
-/// plus <see cref="FileStorageSettings.UploadEnvelopeBytes"/>, so the transport ceiling
-/// follows configuration instead of a fixed 11 MB.
+/// Marks the attachment upload action and applies
+/// <see cref="FileStorageSettings.AttachmentRequestLimit"/> (configured
+/// <see cref="FileStorageSettings.MaxBytes"/> plus one mebibyte). The limit is
+/// read from options for the request. It is not the 11 MiB constant.
 /// </summary>
 [AttributeUsage(AttributeTargets.Method)]
-public sealed class AttachmentUploadLimitAttribute : Attribute
+public sealed class AttachmentUploadLimitAttribute : Attribute, IFilterFactory, IOrderedFilter
 {
+    public bool IsReusable => false;
+
+    /// <summary>After <c>RequestSizeLimit</c> (order 900), so this request's options win.</summary>
+    public int Order => 1000;
+
+    public IFilterMetadata CreateInstance(IServiceProvider serviceProvider)
+    {
+        var settings = serviceProvider.GetRequiredService<IOptions<FileStorageSettings>>().Value;
+        return new AttachmentUploadLimitFilter(settings.AttachmentRequestLimit);
+    }
 }
 
 /// <summary>
-/// Applies the configured upload body ceiling when the application model is built.
+/// Raises Kestrel's per-request body ceiling to the configured attachment limit.
+/// </summary>
+public sealed class AttachmentUploadLimitFilter : IAsyncResourceFilter
+{
+    private readonly long _limit;
+
+    public AttachmentUploadLimitFilter(long limit)
+    {
+        _limit = limit;
+    }
+
+    public Task OnResourceExecutionAsync(ResourceExecutingContext context, ResourceExecutionDelegate next)
+    {
+        var feature = context.HttpContext.Features.Get<IHttpMaxRequestBodySizeFeature>();
+        if (feature is { IsReadOnly: false })
+            feature.MaxRequestBodySize = _limit;
+
+        return next();
+    }
+}
+
+/// <summary>
+/// Publishes the same configured ceiling as endpoint metadata so Content-Length
+/// checks and tests can see <see cref="FileStorageSettings.AttachmentRequestLimit"/>.
 /// </summary>
 public sealed class AttachmentUploadLimitConvention : IApplicationModelConvention
 {

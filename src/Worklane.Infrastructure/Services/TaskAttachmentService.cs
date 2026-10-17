@@ -104,6 +104,9 @@ public class TaskAttachmentService : ITaskAttachmentService
             throw new UnsupportedMediaTypeException(extension);
 
         var workspaceId = task.Project.WorkspaceId;
+        // Fast path only. This sum does not see uncommitted uploads, so it is not
+        // the quota decision. InsertWithinWorkspaceQuotaAsync holds
+        // pg_advisory_xact_lock for this workspace across the re-check and the insert.
         var used = await WorkspaceUsageAsync(workspaceId, cancellationToken);
         if (used >= _settings.WorkspaceQuotaBytes)
             throw new ConflictException("Workspace storage quota exceeded.");
@@ -134,31 +137,7 @@ public class TaskAttachmentService : ITaskAttachmentService
 
         try
         {
-            await using var transaction = await _db.Database.BeginTransactionAsync(cancellationToken);
-            await WorkspaceQuotaLock.AcquireAsync(_db.Database, workspaceId, cancellationToken);
-            var usedNow = await WorkspaceUsageAsync(workspaceId, cancellationToken);
-            if (usedNow + size > _settings.WorkspaceQuotaBytes)
-                throw new ConflictException("Workspace storage quota exceeded.");
-
-            attachment.SizeBytes = size;
-            _db.TaskAttachments.Add(attachment);
-            _db.TaskActivities.Add(new TaskActivity
-            {
-                Id = Guid.NewGuid(),
-                TaskId = task.Id,
-                Type = TaskActivityType.AttachmentAdded,
-                ActorUserId = userId,
-                CreatedAt = attachment.CreatedAt,
-                Details = ActivityJson.Of(new
-                {
-                    attachmentId = attachment.Id,
-                    fileName = attachment.FileName,
-                    contentType = attachment.ContentType,
-                    sizeBytes = attachment.SizeBytes
-                })
-            });
-            await _db.SaveChangesAsync(cancellationToken);
-            await transaction.CommitAsync(cancellationToken);
+            await InsertWithinWorkspaceQuotaAsync(attachment, task.Id, userId, size, workspaceId, cancellationToken);
         }
         catch
         {
@@ -174,6 +153,46 @@ public class TaskAttachmentService : ITaskAttachmentService
             await BroadcastTaskCountsAsync(task.Id, cancellationToken);
         }, cancellationToken);
         return dto;
+    }
+
+    /// <summary>
+    /// Authoritative quota check and insert. The advisory lock is held until the
+    /// transaction commits, so a second upload in this workspace cannot insert
+    /// against a sum that omits this file.
+    /// </summary>
+    private async Task InsertWithinWorkspaceQuotaAsync(
+        TaskAttachment attachment,
+        Guid taskId,
+        Guid userId,
+        long size,
+        Guid workspaceId,
+        CancellationToken cancellationToken)
+    {
+        await using var transaction = await _db.Database.BeginTransactionAsync(cancellationToken);
+        await WorkspaceQuotaLock.AcquireAsync(_db.Database, workspaceId, cancellationToken);
+        var usedNow = await WorkspaceUsageAsync(workspaceId, cancellationToken);
+        if (usedNow + size > _settings.WorkspaceQuotaBytes)
+            throw new ConflictException("Workspace storage quota exceeded.");
+
+        attachment.SizeBytes = size;
+        _db.TaskAttachments.Add(attachment);
+        _db.TaskActivities.Add(new TaskActivity
+        {
+            Id = Guid.NewGuid(),
+            TaskId = taskId,
+            Type = TaskActivityType.AttachmentAdded,
+            ActorUserId = userId,
+            CreatedAt = attachment.CreatedAt,
+            Details = ActivityJson.Of(new
+            {
+                attachmentId = attachment.Id,
+                fileName = attachment.FileName,
+                contentType = attachment.ContentType,
+                sizeBytes = attachment.SizeBytes
+            })
+        });
+        await _db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
     }
 
     public async Task<AttachmentContent> OpenAsync(Guid attachmentId, CancellationToken cancellationToken = default)

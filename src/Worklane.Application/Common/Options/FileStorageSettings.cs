@@ -15,9 +15,9 @@ public class FileStorageSettings
     public const long DefaultMaxBytes = 10 * 1024 * 1024;
 
     /// <summary>
-    /// Transport ceiling for attachment upload. <c>[RequestSizeLimit]</c> needs a constant,
-    /// so this is the default file cap plus the multipart envelope, not the configured
-    /// <see cref="MaxBytes"/>.
+    /// Transport ceiling when <see cref="MaxBytes"/> is left at <see cref="DefaultMaxBytes"/>
+    /// (11 MiB). The upload route does not use this constant. It reads
+    /// <see cref="AttachmentRequestLimit"/>, which follows the configured cap.
     /// </summary>
     public const long AttachmentRequestLimitBytes = DefaultMaxBytes + UploadEnvelopeBytes;
 
