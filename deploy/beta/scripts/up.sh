@@ -36,6 +36,11 @@ assert_locked_service_image "$rendered" migrator MIGRATOR
 rm -f "$rendered"
 trap - EXIT
 
+# A local sentinel tag lets `docker compose up` without the override start it.
+if docker image ls --format '{{.Repository}}:{{.Tag}}' | grep -Eq '^worklane-.+:unlocked-do-not-run$'; then
+  die "refusing to start: a worklane-*:unlocked-do-not-run image exists locally. Remove it, and remove any old worklane-*:beta tags."
+fi
+
 printf 'Starting %s with %s. This boots local containers only.\n' \
   "$(require_env COMPOSE_PROJECT_NAME)" "$(require_lock API_IMAGE)"
 compose up -d --no-build --wait --remove-orphans

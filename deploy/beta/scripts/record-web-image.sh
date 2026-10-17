@@ -18,6 +18,10 @@ require_full_sha "Worklane-Web commit" "$sha"
 slot=$(env_slot)
 image="worklane-web:${slot}-${sha}"
 id=$(image_id_of "$image")
+web_user=$(docker image inspect --format '{{.Config.User}}' "$image")
+[[ "$web_user" == "101" ]] || die "Worklane-Web image Config.User must be 101 (got ${web_user:-empty})"
+web_ports=$(docker image inspect --format '{{json .Config.ExposedPorts}}' "$image")
+[[ "$web_ports" == *'"8080/tcp"'* ]] || die "Worklane-Web image must expose 8080/tcp"
 lock_set WEB_COMMIT "$sha"
 lock_set WEB_IMAGE "$image"
 lock_set WEB_IMAGE_ID "$id"

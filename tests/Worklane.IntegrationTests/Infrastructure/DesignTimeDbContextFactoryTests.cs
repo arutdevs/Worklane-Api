@@ -25,10 +25,12 @@ public class DesignTimeDbContextFactoryTests
     }
 
     [Fact]
-    public void KeepsLocalDevConnectionStringWhenEnvironmentIsUnset()
+    public void UsesLocalDevConnectionStringOnlyInDevelopment()
     {
-        var previous = Environment.GetEnvironmentVariable("ConnectionStrings__Default");
+        var previousConn = Environment.GetEnvironmentVariable("ConnectionStrings__Default");
+        var previousEnv = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
         Environment.SetEnvironmentVariable("ConnectionStrings__Default", null);
+        Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", "Development");
         try
         {
             using var db = new WorklaneDbContextFactory().CreateDbContext([]);
@@ -36,7 +38,31 @@ public class DesignTimeDbContextFactoryTests
         }
         finally
         {
-            Environment.SetEnvironmentVariable("ConnectionStrings__Default", previous);
+            Environment.SetEnvironmentVariable("ConnectionStrings__Default", previousConn);
+            Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", previousEnv);
+        }
+    }
+
+    [Fact]
+    public void ThrowsWhenConnectionStringMissingOutsideDevelopment()
+    {
+        var previousConn = Environment.GetEnvironmentVariable("ConnectionStrings__Default");
+        var previousEnv = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
+        Environment.SetEnvironmentVariable("ConnectionStrings__Default", null);
+        try
+        {
+            Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", null);
+            var unset = () => new WorklaneDbContextFactory().CreateDbContext([]);
+            unset.Should().Throw<InvalidOperationException>();
+
+            Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", "Production");
+            var production = () => new WorklaneDbContextFactory().CreateDbContext([]);
+            production.Should().Throw<InvalidOperationException>();
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("ConnectionStrings__Default", previousConn);
+            Environment.SetEnvironmentVariable("ASPNETCORE_ENVIRONMENT", previousEnv);
         }
     }
 }

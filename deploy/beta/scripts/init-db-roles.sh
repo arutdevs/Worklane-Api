@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Create owner / migrator / app / readonly roles. Idempotent. Passwords come from the env file.
-#   init-db-roles.sh path/to/.env.prod
+#   init-db-roles.sh /etc/worklane/<slot>.env
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)

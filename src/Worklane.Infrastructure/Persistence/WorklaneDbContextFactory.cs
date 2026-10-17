@@ -10,7 +10,8 @@ namespace Worklane.Infrastructure.Persistence;
 /// <c>ConnectionStrings__Default</c> wins when it is set, so the beta migrator role is used
 /// on the VM. The migrations bundle calls this factory and must not be passed
 /// <c>--connection</c>, which would put the password in the process argv.
-/// With the variable unset, local <c>dotnet ef</c> keeps the dev connection string.
+/// The dev connection string is used only when that variable is unset and
+/// <c>ASPNETCORE_ENVIRONMENT</c> is <c>Development</c>. Any other environment throws.
 /// </summary>
 public class WorklaneDbContextFactory : IDesignTimeDbContextFactory<WorklaneDbContext>
 {
@@ -21,7 +22,16 @@ public class WorklaneDbContextFactory : IDesignTimeDbContextFactory<WorklaneDbCo
     {
         var connectionString = Environment.GetEnvironmentVariable("ConnectionStrings__Default");
         if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            var environment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
+            if (!string.Equals(environment, "Development", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    "ConnectionStrings__Default is required when ASPNETCORE_ENVIRONMENT is not Development.");
+            }
+
             connectionString = LocalDevConnectionString;
+        }
 
         var optionsBuilder = new DbContextOptionsBuilder<WorklaneDbContext>();
         optionsBuilder.UseNpgsql(connectionString);

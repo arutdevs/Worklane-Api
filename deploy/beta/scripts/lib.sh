@@ -147,7 +147,11 @@ sha256_text() {
 compose() {
   local override
   override=$(image_override_file)
+  if [[ -L "$override" ]]; then
+    die "refusing compose override symlink: $override"
+  fi
   if [[ -f "$override" ]]; then
+    assert_private_file "$override"
     docker compose --env-file "$ENV_FILE" -f "$(compose_file)" -f "$override" "$@"
   else
     docker compose --env-file "$ENV_FILE" -f "$(compose_file)" "$@"
@@ -228,10 +232,32 @@ image_override_file() {
   printf '%s/%s.compose.yml' "$(dirname "$ENV_FILE")" "$(env_slot)"
 }
 
+# Mode must not be group or world writable. Under /etc/worklane, root:root too.
+# Symlinks are refused so a later redirect cannot follow them.
+assert_private_file() {
+  local file=$1 mode owner bits
+  if [[ -L "$file" ]]; then
+    die "refusing $file: it is a symlink"
+  fi
+  [[ -f "$file" ]] || die "$file is not a regular file"
+  mode=$(stat -c '%a' "$file")
+  bits=$((8#$mode))
+  if (( (bits & 0022) != 0 )); then
+    die "$file must not be group or world writable (mode $mode)"
+  fi
+  case "$file" in
+    /etc/worklane/*)
+      owner=$(stat -c '%U:%G' "$file")
+      [[ "$owner" == "root:root" ]] || die "$file must be owned by root:root (got $owner)"
+      ;;
+  esac
+}
+
 read_lock() {
   local key=$1 file line val
   file=$(image_lock_file)
-  [[ -f "$file" ]] || die "image lock not found: $file. Run build-images.sh, then record-web-image.sh."
+  [[ -f "$file" || -L "$file" ]] || die "image lock not found: $file. Run build-images.sh, then record-web-image.sh."
+  assert_private_file "$file"
   line=$(grep -E "^${key}=" "$file" | tail -n 1 || true)
   [[ -n "$line" ]] || return 1
   val=${line#*=}
@@ -254,6 +280,9 @@ lock_set() {
   [[ "$key" =~ ^[A-Z0-9_]+$ ]] || die "refusing lock key $key"
   [[ "$val" != *$'\n'* && "$val" != *'$'* ]] || die "refusing unsafe lock value for $key"
   file=$(image_lock_file)
+  if [[ -L "$file" ]]; then
+    die "refusing to write lock through a symlink: $file"
+  fi
   umask 077
   tmp=$(mktemp)
   if [[ -f "$file" ]]; then
@@ -262,6 +291,7 @@ lock_set() {
   printf '%s=%s\n' "$key" "$val" >>"$tmp"
   mv "$tmp" "$file"
   chmod 600 "$file"
+  assert_private_file "$file"
 }
 
 git_head() {
@@ -287,13 +317,37 @@ assert_slot_image() {
   [[ "$image" != *'$'* && "$image" != *'${'* ]] || die "$kind image contains a variable"
 }
 
+# The tag suffix is that component's commit, not some other 40 hex characters.
+assert_image_matches_commit() {
+  local kind=$1 slot=$2 image=$3 sha=$4
+  local expect="worklane-${kind}:${slot}-${sha}"
+  assert_slot_image "$kind" "$image" "$slot"
+  [[ "$image" == "$expect" ]] || die "$kind image must be $expect"
+}
+
+require_clean_worktree() {
+  local dirty
+  dirty=$(git -C "$(repo_root)" status --porcelain --untracked-files=all)
+  if [[ -n "$dirty" ]]; then
+    printf '%s\n' "$dirty" >&2
+    die "refusing to build: git status is not clean"
+  fi
+}
+
 verify_locked_image() {
-  local kind=$1 image id actual
+  local kind=$1 image id actual sha slot image_kind revision
   image=$(require_lock "${kind}_IMAGE")
   id=$(require_lock "${kind}_IMAGE_ID")
+  sha=$(require_lock "${kind}_COMMIT")
+  require_full_sha "${kind}_COMMIT" "$sha"
+  slot=$(env_slot)
+  image_kind=$(printf '%s' "$kind" | tr '[:upper:]' '[:lower:]')
+  assert_image_matches_commit "$image_kind" "$slot" "$image" "$sha"
   [[ "$id" == sha256:* ]] || die "${kind}_IMAGE_ID is not a docker image id"
   actual=$(image_id_of "$image")
   [[ "$actual" == "$id" ]] || die "$image id is $actual but the lock has $id. Rebuild and record it again."
+  revision=$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$image")
+  [[ "$revision" == "$sha" ]] || die "$image label org.opencontainers.image.revision must be the locked commit"
 }
 
 # Literal name and image lines only. web may be empty when the caller has not
@@ -311,6 +365,9 @@ write_override_file() {
   if [[ -n "$web" ]]; then
     assert_slot_image web "$web" "$slot"
   fi
+  if [[ -L "$dest" ]]; then
+    die "refusing to write override through a symlink: $dest"
+  fi
   umask 077
   {
     printf '# Generated beside the env file. Literal images only. Do not commit.\n'
@@ -326,6 +383,7 @@ write_override_file() {
     fi
   } >"$dest"
   chmod 600 "$dest"
+  assert_private_file "$dest"
   if grep -nE '^[[:space:]]*image:[[:space:]]*.*\$' "$dest"; then
     die "generated override has a variable in an image line"
   fi
@@ -343,10 +401,12 @@ write_image_override() {
   api_sha=$(require_lock API_COMMIT)
   require_full_sha API_COMMIT "$api_sha"
   api_image=$(require_lock API_IMAGE)
+  assert_image_matches_commit api "$slot" "$api_image" "$api_sha"
   migrator_sha=$(require_lock MIGRATOR_COMMIT)
   require_full_sha MIGRATOR_COMMIT "$migrator_sha"
   [[ "$migrator_sha" == "$api_sha" ]] || die "MIGRATOR_COMMIT does not match API_COMMIT"
   migrator_image=$(require_lock MIGRATOR_IMAGE)
+  assert_image_matches_commit migrator "$slot" "$migrator_image" "$migrator_sha"
   verify_locked_image API
   verify_locked_image MIGRATOR
   web_image=""
@@ -354,12 +414,14 @@ write_image_override() {
     web_sha=$(require_lock WEB_COMMIT)
     require_full_sha WEB_COMMIT "$web_sha"
     web_image=$(require_lock WEB_IMAGE)
+    assert_image_matches_commit web "$slot" "$web_image" "$web_sha"
     verify_locked_image WEB
   else
     web_image=$(read_lock WEB_IMAGE || true)
     if [[ -n "$web_image" ]]; then
       web_sha=$(require_lock WEB_COMMIT)
       require_full_sha WEB_COMMIT "$web_sha"
+      assert_image_matches_commit web "$slot" "$web_image" "$web_sha"
       verify_locked_image WEB
     fi
   fi
@@ -372,10 +434,12 @@ build_api_image() {
   slot=$(env_slot)
   sha=$(git_head)
   require_full_sha HEAD "$sha"
+  require_clean_worktree
   platform=$(require_env DOCKER_PLATFORM)
   image="worklane-api:${slot}-${sha}"
   docker build \
     --platform "$platform" \
+    --label "org.opencontainers.image.revision=$sha" \
     --tag "$image" \
     --file "$(repo_root)/src/Worklane.WebApi/Dockerfile" \
     "$(repo_root)"
@@ -394,10 +458,12 @@ build_migrator_image() {
   require_full_sha HEAD "$sha"
   api_commit=$(require_lock API_COMMIT)
   [[ "$api_commit" == "$sha" ]] || die "HEAD is not the locked API commit. Run build-images.sh on that commit before migrating."
+  require_clean_worktree
   platform=$(require_env DOCKER_PLATFORM)
   image="worklane-migrator:${slot}-${sha}"
   docker build \
     --platform "$platform" \
+    --label "org.opencontainers.image.revision=$sha" \
     --tag "$image" \
     --file "$(deploy_dir)/Dockerfile" \
     "$(repo_root)"

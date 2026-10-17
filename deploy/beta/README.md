@@ -115,11 +115,23 @@ Clone this repo to `/opt/worklane` (no secrets in git). Clone `Worklane-Web` nex
 deploy/beta/scripts/build-images.sh /etc/worklane/prod.env
 # Web. This repo does not build it. Tag the reviewed Worklane-Web commit
 # (Worklane-Web PR #2 is the nginx change). <websha> is `git rev-parse HEAD` there.
-docker build --platform linux/arm64 -t "worklane-web:prod-<websha>" /path/to/Worklane-Web
+docker build --platform linux/arm64 \
+  --label "org.opencontainers.image.revision=<websha>" \
+  -t "worklane-web:prod-<websha>" /path/to/Worklane-Web
 deploy/beta/scripts/record-web-image.sh /etc/worklane/prod.env <websha>
 ```
 
-`record-web-image.sh` stores that SHA and `docker image inspect --format '{{.Id}}'` in `/etc/worklane/prod.images.lock`. `up.sh` refuses to start if the local id does not match the lock. Worklane-Web is a private repo; this checkout cannot look the SHA up for you.
+`record-web-image.sh` stores that SHA and `docker image inspect --format '{{.Id}}'` in `/etc/worklane/prod.images.lock`. The image must run as uid 101 and expose `8080/tcp`. `up.sh` refuses to start if the local id, the tag, or the `org.opencontainers.image.revision` label does not match the lock. It also refuses to start if a local `worklane-*:unlocked-do-not-run` image exists. Worklane-Web is a private repo; this checkout cannot look the SHA up for you.
+
+`build-images.sh` refuses a dirty worktree (`git status --porcelain --untracked-files=all`) and labels the API and migrator images with the same revision. On a VM that already ran an older compose file, remove the shared tags and any local sentinel so a plain `docker compose up` cannot find them:
+
+```bash
+docker image ls --format '{{.Repository}}:{{.Tag}}' | grep -E '^worklane-.+:(beta|unlocked-do-not-run)$' || true
+docker image rm worklane-api:beta worklane-web:beta worklane-migrator:beta \
+  worklane-api:unlocked-do-not-run worklane-web:unlocked-do-not-run worklane-migrator:unlocked-do-not-run
+```
+
+`docker image rm` exits non-zero for a name that is not present. Remove only the names the `ls` line printed.
 
 The web image must be built `FROM nginxinc/nginx-unprivileged:1.29-alpine@sha256:0c79d56aee561a1d81c63f00eee5fb5fe29279560cdc55e91425133104c7fbe6` (or the same digest), listen on 8080, and run as uid 101. That stock image was started here with `read_only`, `cap_drop: [ALL]`, no `cap_add`, `no-new-privileges`, `pids_limit: 64`, and tmpfs on `/tmp`, `/var/cache/nginx`, and `/var/run`. It stayed up, listened on 8080, and `wget http://127.0.0.1:8080/` returned 200. The entrypoint logged that it could not rewrite `default.conf` on a read-only root; the stock config already listens on 8080, so the process still started. Do not add `NET_BIND_SERVICE` to bind port 80.
 
@@ -141,7 +153,7 @@ Edit both as root. Staging changes are the commented block at the bottom of `.en
 
 `scripts/check-env-isolation.sh /etc/worklane/prod.env /etc/worklane/staging.env` checks that. `scripts/preflight.sh --up /etc/worklane/prod.env` checks placeholders, password shape, the burned JWT, and that a file under `/etc/worklane/` is mode 600 and owned by root. Scripts still accept another path, so a test can use a temp file. Do not put `prod.env` or `.env.prod` inside the checkout.
 
-A copy of the secrets belongs in the password manager, not in git and not in a GitHub issue. The image lock (`/etc/worklane/prod.images.lock`) and the generated compose override (`/etc/worklane/prod.compose.yml`) sit next to the env file, mode 600. They are not committed.
+A copy of the secrets belongs in the password manager, not in git and not in a GitHub issue. The image lock (`/etc/worklane/prod.images.lock`) and the generated compose override (`/etc/worklane/prod.compose.yml`) sit next to the env file, root:root, mode 600, and must be regular files. The scripts refuse a symlink and refuse a group-writable or world-writable mode. They are not committed.
 
 ## 3. Cloudflare Tunnel and DNS
 
@@ -166,7 +178,7 @@ All of these are true before a public hostname exists on the tunnel:
 6. Tunnel ingress is only `http://web:8080`.
 7. Migrations have been applied on the VM: `ef-migrate.sh` finished and `__EFMigrationsHistory` has a row. A retry on the machine that prepared this PR is not that proof. The bundle, with no `--connection` argument, reported `tcp://postgres:5432` and then timed out to the Postgres container address. `pg_isready -h 127.0.0.1` inside the Postgres container succeeded, so Postgres was listening. Container-to-container TCP on this machine's Compose bridges does not work. Run the script on the Oracle VM.
 8. Nginx has been started with `cap_drop: [ALL]` and no capabilities added back, listening on 8080. Stock `nginxinc/nginx-unprivileged:1.29-alpine@sha256:0c79d56aee561a1d81c63f00eee5fb5fe29279560cdc55e91425133104c7fbe6` did that here (HTTP 200 from inside the container, uid 101, no host port). Worklane-Web still has to be built FROM that image at the commit you record.
-9. DataProtection keys are on the named volume `worklane-prod-dpkeys` or `worklane-staging-dpkeys`, mounted at `/var/lib/worklane/dataprotection-keys`, with `DataProtection__KeysPath` set to that path. The API image creates the directory as uid 1654, mode 700, and the container root filesystem stays read-only. The API does not read that path until WL-63a. Do not treat this volume as proof that keys survive a restart until that API change is the build you are running.
+9. DataProtection keys are on the named volume `worklane-prod-dpkeys` or `worklane-staging-dpkeys`, mounted at `/var/lib/worklane/dataprotection-keys`, with `DataProtection__KeysPath` set to that path. The API image creates the directory as uid 1654, mode 700, and the container root filesystem stays read-only. WL-63a is the API change that reads that path. It must call `SetApplicationName` separately for prod and staging, choose `ProtectKeysWithCertificate` or record the accepted risk of an unencrypted key ring, and never upload the dpkeys volume to R2 without age. The attachment sync must not include it. Until that build is the one you run, a restart still mints an ephemeral in-memory key.
 
 The API is `https://app.<domain>/api` and SignalR is `wss://app.<domain>/hubs/notifications` on the same host. That matches the Angular app and avoids CORS. Do not add `api.<domain>`. cloudflared cannot reach the API container, and the client is same-origin.
 
@@ -275,7 +287,7 @@ Roles, created by `scripts/init-db-roles.sh`:
 | `worklane_app` | yes | the API |
 | `worklane_readonly` | yes | `pg_dump` |
 
-`scripts/ef-migrate.sh /etc/worklane/prod.env --yes` waits for Postgres, creates roles, writes a `pre-migration/` dump, then builds `worklane-migrator:<slot>-<api sha>` from the same commit as the locked API image. It checks `docker image inspect` against the lock and runs that image. `compose run` is not given `--build`, so it does not rebuild the tag it just recorded. The container does not install `dotnet-ef`, has no JWT secret, and does not mount the repo. The bundle calls `WorklaneDbContextFactory`, which reads `ConnectionStrings__Default`. The entry script does not pass `--connection`, so the migrator password is not placed in the process argv. With that variable unset, local `dotnet ef` on a workstation still uses the dev connection string via `WorklaneDbContextFactory`.
+`scripts/ef-migrate.sh /etc/worklane/prod.env --yes` waits for Postgres, creates roles, writes a `pre-migration/` dump, then builds `worklane-migrator:<slot>-<api sha>` from the same commit as the locked API image. It checks `docker image inspect` against the lock and runs that image. `compose run` is not given `--build`, so it does not rebuild the tag it just recorded. The container does not install `dotnet-ef`, has no JWT secret, and does not mount the repo. The bundle calls `WorklaneDbContextFactory`, which reads `ConnectionStrings__Default`. The entry script does not pass `--connection`, so the migrator password is not placed in the process argv. With that variable unset, `WorklaneDbContextFactory` uses the dev connection string only when `ASPNETCORE_ENVIRONMENT=Development`. Any other environment, including an unset one, throws.
 
 Run `ef-migrate.sh` on the VM and confirm a row in `__EFMigrationsHistory` before opening the tunnel. The retry here reached `tcp://postgres:5432` (the factory read `ConnectionStrings__Default`) and then timed out. It did not fall back to the dev `localhost` connection string, and it did not apply the migrations.
 
@@ -430,7 +442,7 @@ Render Free (Singapore) plus Neon Free (Singapore) plus R2 is the documented fal
 | Grafana Alloy, Sentry SDK | No exporter in the API. Env keys are comments. |
 | Image registry | CI builds `linux/amd64` and `linux/arm64` and does not push. The droplet builds locally. |
 | Web nginx | Worklane-Web is a separate repo. Build it FROM `nginxinc/nginx-unprivileged` (digest in the compose comment), listen 8080, and record that commit's image id with `record-web-image.sh`. Confirm `/hubs` upgrade headers there. |
-| DataProtection keys in the API | The volume, mount, and `DataProtection__KeysPath` are in this compose file. The API still ignores that path until WL-63a. Until then a restart still mints an ephemeral in-memory key. |
+| DataProtection keys in the API (WL-63a) | The volume, mount, and `DataProtection__KeysPath` are already here. WL-63a must read that path, call `SetApplicationName` separately per slot, choose `ProtectKeysWithCertificate` or record the accepted risk, and never back the dpkeys volume up to R2 unencrypted. Until then a restart still mints an ephemeral key. |
 | Apply migrations on the VM | Retried once here with no `--connection` argument. The bundle used `tcp://postgres:5432` and timed out to the container address. `pg_isready -h 127.0.0.1` inside Postgres succeeded. `ef-migrate.sh` on the Oracle VM must show a row in `__EFMigrationsHistory`. |
 | Weekly restore automation | Script is manual. Drill once before users, then decide if cron is safe. |
 | Render + Neon | Not wired. |
@@ -444,6 +456,6 @@ docker buildx build --platform linux/arm64,linux/amd64 \
   -f src/Worklane.WebApi/Dockerfile --pull=false .
 ```
 
-`check-compose.sh` renders both project names, asserts nothing publishes a port, asserts memory limits and log rotation, rejects the burned JWT without printing it, and checks `up.sh` stops on the WL-63 file. It does not create accounts or start the stack.
+`check-compose.sh` renders both project names, asserts nothing publishes a port, asserts memory limits and log rotation, rejects the burned JWT without printing it, and checks `up.sh` stops on the WL-63 file. It does not create accounts. The fail-closed `up` uses a temp env file and project `wl-closed-check-<pid>`, then `down -v` only that project. Outside CI it stops before doing anything else if a `worklane-prod` or `worklane-staging` container exists. It deletes `deploy/beta/WL63_DONE` only when this run created that file.
 
 The API image publishes on the builder's native architecture (`BUILDPLATFORM`) because the output is framework-dependent IL. The runtime image is the target architecture. That is what keeps the arm64 CI build from emulating the SDK.

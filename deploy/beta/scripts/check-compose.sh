@@ -52,7 +52,47 @@ rand() {
 
 umask 077
 workdir=$(mktemp -d)
-trap 'rm -rf "$workdir"; rm -f "$(deploy_dir)/WL63_DONE"' EXIT
+wl63="$(deploy_dir)/WL63_DONE"
+wl63_created=0
+wl63_stash=""
+dirty_probe="$(repo_root)/.check-compose-dirty-probe"
+# Move a real marker aside so this run can recreate it, then put it back.
+# Delete WL63_DONE only when this run created the file.
+if [[ -e "$wl63" || -L "$wl63" ]]; then
+  wl63_stash="$workdir/wl63.stash"
+  mv "$wl63" "$wl63_stash"
+fi
+cleanup() {
+  rm -f "$dirty_probe"
+  if [[ "$wl63_created" == "1" ]]; then
+    rm -f "$wl63"
+  fi
+  if [[ -n "$wl63_stash" && -e "$wl63_stash" ]]; then
+    mv "$wl63_stash" "$wl63"
+  fi
+  rm -rf "$workdir"
+}
+trap cleanup EXIT
+
+# Outside CI, do nothing else if a live beta project is present. `docker compose
+# down` on worklane-prod would remove that lab's containers.
+refuse_if_live_beta() {
+  if [[ -n "${CI:-}" || -n "${GITHUB_ACTIONS:-}" ]]; then
+    return 0
+  fi
+  local names labeled
+  names=$(docker ps -a --format '{{.Names}}' | grep -E '^(worklane-prod|worklane-staging)(-|$)' || true)
+  labeled=$(
+    docker ps -aq --filter label=com.docker.compose.project=worklane-prod
+    docker ps -aq --filter label=com.docker.compose.project=worklane-staging
+  )
+  labeled=${labeled//$'\n'/}
+  if [[ -n "$names" || -n "$labeled" ]]; then
+    printf '%s\n' "$names" >&2
+    die "refusing to run while a worklane-prod or worklane-staging container exists. This check does not touch a live beta project."
+  fi
+}
+refuse_if_live_beta
 envfile="$workdir/env"
 cat >"$envfile" <<EOF
 COMPOSE_PROJECT_NAME=worklane-prod
@@ -314,52 +354,94 @@ assert api_env["ASPNETCORE_ENVIRONMENT"] == "Production"
 print("compose config ok")
 PY
 
-# Fail when a beta service bind-mounts the repo root or anything under deploy/beta.
-# Named volumes are ignored. A bind of some other path is allowed.
-assert_no_repo_bind() {
-  python3 - "$1" "$(repo_root)" <<'PY'
-import json, os, sys
+# No host bind of any path. Named volumes without bind driver_opts are allowed.
+# Also rejects docker.sock, secrets/configs file:, and volume driver_opts binds.
+assert_no_host_mounts() {
+  python3 - "$1" <<'PY'
+import json, sys
 doc = json.load(open(sys.argv[1]))
-repo = os.path.realpath(sys.argv[2])
 bad = []
-for name, service in doc.get("services", {}).items():
+
+def sock(label, blob):
+    if "docker.sock" in blob:
+        bad.append(f"{label} docker.sock")
+
+for name, service in (doc.get("services") or {}).items():
+    if not isinstance(service, dict):
+        continue
     for mount in service.get("volumes") or []:
-        if not isinstance(mount, dict) or mount.get("type") != "bind":
+        if isinstance(mount, str):
+            sock(name, mount)
+            if mount.startswith("/") or mount.startswith(".") or ":/" in mount:
+                bad.append(f"{name} bind {mount}")
             continue
-        source = mount.get("source") or ""
-        norm = os.path.realpath(source)
-        parts = norm.split(os.sep)
-        contains_beta = any(
-            parts[i] == "deploy" and parts[i + 1] == "beta"
-            for i in range(len(parts) - 1)
-        )
-        if norm == repo or contains_beta:
-            bad.append(f"{name}:{source}")
+        if not isinstance(mount, dict):
+            continue
+        if mount.get("type") == "bind":
+            bad.append(f"{name} bind {mount.get('source')}")
+        sock(name, json.dumps(mount))
+    sock(name, json.dumps(service.get("secrets") or ""))
+    sock(name, json.dumps(service.get("configs") or ""))
+
+for name, vol in (doc.get("volumes") or {}).items():
+    if not isinstance(vol, dict):
+        continue
+    opts = vol.get("driver_opts") or {}
+    typ = str(opts.get("type") or "")
+    flag = str(opts.get("o") or "")
+    if typ == "bind" or "bind" in flag.split(",") or (opts.get("device") and typ in {"none", "bind"}):
+        bad.append(f"volume {name} bind driver_opts")
+    sock(f"volume {name}", json.dumps(vol))
+
+for section in ("secrets", "configs"):
+    for name, item in (doc.get(section) or {}).items():
+        if isinstance(item, dict) and "file" in item:
+            bad.append(f"{section} {name} file")
+        sock(f"{section} {name}", json.dumps(item))
+
 if bad:
-    print("beta service bind-mounts the repo or deploy/beta: " + ", ".join(bad), file=sys.stderr)
+    print("host mount forbidden: " + "; ".join(bad), file=sys.stderr)
     sys.exit(1)
 PY
 }
 
-assert_no_repo_bind "$rendered"
-assert_no_repo_bind "$workdir/migrate.json"
+assert_no_host_mounts "$rendered"
+assert_no_host_mounts "$workdir/migrate.json"
 
-# Control: a named volume and a bind outside the repo are not flagged.
-python3 - "$rendered" "$workdir/ok-binds.json" "$(repo_root)" <<'PY'
+# Control: a named volume is not a bind.
+python3 - "$rendered" "$workdir/ok-volume.json" <<'PY'
 import json, sys
 doc = json.load(open(sys.argv[1]))
 doc["services"]["api"]["volumes"] = [
     {"type": "volume", "source": "worklane-prod_pgdata", "target": "/var/lib/postgresql/data"},
-    {"type": "bind", "source": "/var/lib/worklane-outside", "target": "/data"},
-    {"type": "bind", "source": sys.argv[3] + "/src", "target": "/just-src"},
 ]
 json.dump(doc, open(sys.argv[2], "w"))
 PY
-assert_no_repo_bind "$workdir/ok-binds.json"
+assert_no_host_mounts "$workdir/ok-volume.json"
 
-# Negative: repo root, and a path that contains deploy/beta.
-for source in "$(repo_root)" "$(repo_root)/deploy/beta" "$(repo_root)/deploy/beta/scripts"; do
-  python3 - "$rendered" "$workdir/bad-bind.json" "$source" <<'PY'
+expect_host_mount_forbidden() {
+  local label=$1
+  set +e
+  bind_out=$(assert_no_host_mounts "$workdir/bad-mount.json" 2>&1)
+  bind_status=$?
+  set -e
+  [[ "$bind_status" -ne 0 ]]
+  printf '%s\n' "$bind_out" | grep -q 'host mount forbidden'
+  printf '%s\n' "$bind_out" | grep -q "$label"
+}
+
+# Negative: any bind, including paths the old repo-root rule missed.
+for source in \
+  "$(repo_root)" \
+  "$(repo_root)/deploy/beta" \
+  "$(repo_root)/../deploy" \
+  "$(repo_root)/../.." \
+  /opt/worklane \
+  /etc/worklane \
+  / \
+  /var/run/docker.sock
+do
+  python3 - "$rendered" "$workdir/bad-mount.json" "$source" <<'PY'
 import json, sys
 doc = json.load(open(sys.argv[1]))
 doc["services"]["api"]["volumes"] = [
@@ -367,13 +449,46 @@ doc["services"]["api"]["volumes"] = [
 ]
 json.dump(doc, open(sys.argv[2], "w"))
 PY
-  set +e
-  bind_out=$(assert_no_repo_bind "$workdir/bad-bind.json" 2>&1)
-  bind_status=$?
-  set -e
-  [[ "$bind_status" -ne 0 ]]
-  printf '%s\n' "$bind_out" | grep -q 'bind-mounts the repo or deploy/beta'
+  expect_host_mount_forbidden "bind"
 done
+
+python3 - "$rendered" "$workdir/bad-mount.json" <<'PY'
+import json, sys
+doc = json.load(open(sys.argv[1]))
+doc["volumes"]["sneak"] = {
+    "name": "sneak",
+    "driver": "local",
+    "driver_opts": {"type": "none", "o": "bind", "device": "/etc/worklane"},
+}
+json.dump(doc, open(sys.argv[2], "w"))
+PY
+expect_host_mount_forbidden "driver_opts"
+
+python3 - "$rendered" "$workdir/bad-mount.json" <<'PY'
+import json, sys
+doc = json.load(open(sys.argv[1]))
+doc["secrets"] = {"dbpass": {"name": "dbpass", "file": "/etc/worklane/prod.env"}}
+json.dump(doc, open(sys.argv[2], "w"))
+PY
+expect_host_mount_forbidden "secrets"
+
+python3 - "$rendered" "$workdir/bad-mount.json" <<'PY'
+import json, sys
+doc = json.load(open(sys.argv[1]))
+doc["configs"] = {"nginx": {"name": "nginx", "file": "/opt/worklane/nginx.conf"}}
+json.dump(doc, open(sys.argv[2], "w"))
+PY
+expect_host_mount_forbidden "configs"
+
+python3 - "$rendered" "$workdir/bad-mount.json" <<'PY'
+import json, sys
+doc = json.load(open(sys.argv[1]))
+doc["services"]["api"]["volumes"] = [
+    {"type": "volume", "source": "sock", "target": "/var/run/docker.sock"},
+]
+json.dump(doc, open(sys.argv[2], "w"))
+PY
+expect_host_mount_forbidden "docker.sock"
 
 # Same check against a real compose render, not only a mutated document.
 bad_override="$workdir/bad-bind.yml"
@@ -386,13 +501,8 @@ services:
         target: /src
         read_only: true
 EOF
-docker compose --env-file "$envfile" -f "$compose_path" -f "$bad_override" --profile migrate config --format json >"$workdir/bad-render.json"
-set +e
-bind_out=$(assert_no_repo_bind "$workdir/bad-render.json" 2>&1)
-bind_status=$?
-set -e
-[[ "$bind_status" -ne 0 ]]
-printf '%s\n' "$bind_out" | grep -q 'migrator:'
+docker compose --env-file "$envfile" -f "$compose_path" -f "$bad_override" --profile migrate config --format json >"$workdir/bad-mount.json"
+expect_host_mount_forbidden "migrator"
 
 # Generated override: literal name and images, no ${ in an image line.
 sha40=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
@@ -437,12 +547,13 @@ printf '%s\n' "$up_out" | grep -q 'WL-63'
 printf '%s\n' "$up_out" | grep -q 'preflight --up ok'
 
 # After the gate, a missing image lock still refuses to build or start.
-printf 'yes\n' >"$(deploy_dir)/WL63_DONE"
+# This file is removed on exit only because this run created it.
+printf 'yes\n' >"$wl63"
+wl63_created=1
 set +e
 lock_out=$("$SCRIPT_DIR/up.sh" "$envfile" 2>&1)
 lock_status=$?
 set -e
-rm -f "$(deploy_dir)/WL63_DONE"
 [[ "$lock_status" -ne 0 ]]
 printf '%s\n' "$lock_out" | grep -q 'image lock'
 printf '%s\n' "$lock_out" | grep -q 'preflight --up ok'
@@ -628,19 +739,77 @@ PY
 # Same render PR #5's image-scan uses: sibling .env.example and every profile.
 docker compose --env-file "$(deploy_dir)/.env.example" -f "$compose_path" --profile '*' config >/dev/null
 
-# Direct compose up must fail closed. No dependency start, so Postgres stays down.
+# Direct compose up must fail closed. Isolated project only: never worklane-prod.
 # --build must also fail: there is no build: section to tag the sentinel.
+if docker image ls --format '{{.Repository}}:{{.Tag}}' | grep -Eq '^worklane-.+:unlocked-do-not-run$'; then
+  die "refusing fail-closed test: a local worklane-*:unlocked-do-not-run image would let compose up succeed"
+fi
+closed_project="wl-closed-check-$$"
+closed_env="$workdir/closed.env"
+cp "$envfile" "$closed_env"
+chmod 600 "$closed_env"
 for extra in --no-build --build; do
   set +e
-  closed_out=$(docker compose --env-file "$envfile" -f "$compose_path" up -d "$extra" --no-deps api 2>&1)
+  closed_out=$(docker compose --env-file "$closed_env" -f "$compose_path" -p "$closed_project" up -d "$extra" --no-deps api 2>&1)
   closed_status=$?
   set -e
   [[ "$closed_status" -ne 0 ]]
   printf '%s\n' "$closed_out" | grep -q 'unlocked-do-not-run'
 done
-docker compose --env-file "$envfile" -f "$compose_path" down --remove-orphans >/dev/null
-if docker ps -a --format '{{.Names}}' | grep -q 'worklane-prod'; then
-  die "direct compose up left a worklane-prod container"
+docker compose --env-file "$closed_env" -f "$compose_path" -p "$closed_project" down -v >/dev/null
+if docker ps -a --format '{{.Names}}' | grep -E -q "^(${closed_project}|worklane-prod|worklane-staging)(-|$)"; then
+  die "fail-closed test left a container behind"
 fi
 printf 'unlocked image refused\n'
+
+# Image tag must embed the locked commit. A different 40-hex suffix is refused.
+set +e
+(
+  assert_image_matches_commit api prod \
+    worklane-api:prod-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+    bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+) >"$workdir/mismatch.out" 2>&1
+mismatch_status=$?
+set -e
+[[ "$mismatch_status" -ne 0 ]]
+grep -q 'worklane-api:prod-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' "$workdir/mismatch.out"
+assert_image_matches_commit api prod \
+  worklane-api:prod-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+  aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+
+# A dirty worktree must not be built.
+touch "$dirty_probe"
+set +e
+(
+  require_clean_worktree
+) >"$workdir/dirty.out" 2>&1
+dirty_status=$?
+set -e
+rm -f "$dirty_probe"
+[[ "$dirty_status" -ne 0 ]]
+grep -q 'not clean' "$workdir/dirty.out"
+
+# Override writes refuse a symlink and a group-writable file.
+ln -s "$workdir/override-target.yml" "$workdir/override-link.yml"
+set +e
+(
+  write_override_file "$workdir/override-link.yml" worklane-prod \
+    "worklane-api:prod-${sha40}" \
+    "worklane-migrator:prod-${sha40}"
+) >"$workdir/symlink.out" 2>&1
+symlink_status=$?
+set -e
+[[ "$symlink_status" -ne 0 ]]
+grep -q 'symlink' "$workdir/symlink.out"
+printf 'mode\n' >"$workdir/loose.txt"
+chmod 666 "$workdir/loose.txt"
+set +e
+(
+  assert_private_file "$workdir/loose.txt"
+) >"$workdir/loose.out" 2>&1
+loose_status=$?
+set -e
+[[ "$loose_status" -ne 0 ]]
+grep -q 'writable' "$workdir/loose.out"
+
 printf 'check-compose.sh ok\n'
