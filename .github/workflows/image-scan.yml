@@ -1,0 +1,54 @@
+name: Image scan
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  group: image-scan-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  base-compose-has-no-dev-s3:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deploy compose files do not mention RustFS or SeaweedFS
+        run: |
+          fail=0
+          while IFS= read -r -d '' file; do
+            case "$(basename "$file")" in
+              compose.dev.yml|compose.dev.yaml) continue ;;
+            esac
+            if grep -E -i -n 'rustfs|seaweedfs' "$file"; then
+              echo "::error file=${file#./}::Deploy compose must not mention rustfs or seaweedfs. Keep the dev store in compose.dev.yml."
+              fail=1
+            fi
+          done < <(find . -type f \
+            \( -name 'docker-compose*.yml' -o -name 'docker-compose*.yaml' \
+               -o -name 'compose*.yml' -o -name 'compose*.yaml' \) \
+            -not -path './.git/*' -print0)
+          exit "$fail"
+
+  trivy:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - rustfs/rustfs:1.0.3@sha256:9ca9559533b537d10482fe923288b676ad08f92a7069d9a17327fbae3cab688b
+          - rustfs/rc:v0.1.36@sha256:ab024bfebee49a750ce886b4c70963ccd9ddaa03f491704a90710641d7a26699
+    steps:
+      # Fail when Trivy finds a CRITICAL vulnerability that already has a fix.
+      # Unfixed CRITICAL findings do not fail the job: there is no image bump that clears them yet.
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ matrix.image }}
+          format: table
+          exit-code: "1"
+          severity: CRITICAL
+          ignore-unfixed: true
+          vuln-type: os,library

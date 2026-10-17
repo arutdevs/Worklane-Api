@@ -13,8 +13,10 @@ obj/
 # Local attachment storage (see FileStorage:LocalPath)
 data/
 
-# Local secrets. Copy .env.example and fill in real values. Never commit .env.
+# Local secrets. .env.example is the only env file that belongs in git.
 .env
+.env.*
+!.env.example
 
 # OS
 .DS_Store

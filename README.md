@@ -14,7 +14,7 @@ a Kanban board with drag-and-drop, and a dashboard that measures effort per pers
 - **Frontend:** Angular 22 (standalone components) + Bootstrap 5 + ng-bootstrap
 - **i18n:** ngx-translate, English (`en`, default) and Thai (`th`)
 - **Realtime:** SignalR hub at `/hubs/notifications`. Clients join a project group and receive board, comment, attachment, and presence events (see below)
-- **Containers:** Docker Compose — `api`, `web`, `postgres`, and local S3-compatible storage (`s3`)
+- **Containers:** Docker Compose — `api`, `web`, `postgres`. Local S3-compatible storage is a dev-only overlay (`compose.dev.yml`)
 
 ## Run everything
 
@@ -22,10 +22,12 @@ a Kanban board with drag-and-drop, and a dashboard that measures effort per pers
 cp .env.example .env
 # Fill S3_ROOT_USER, S3_ROOT_PASSWORD, WL_S3_ACCESS_KEY, and WL_S3_SECRET_KEY.
 # Example: openssl rand -hex 24
-docker compose up
+docker compose -f docker-compose.yml -f compose.dev.yml up
 ```
 
-This builds and starts the stack:
+`docker compose up` without `compose.dev.yml` starts the API, web, and Postgres only. That is the file a staging or prod deploy should use. RustFS is not in it, and it does not start.
+
+The dev command above also starts local object storage. This builds and starts the stack:
 
 | Service    | URL                                   |
 |------------|----------------------------------------|
@@ -41,11 +43,11 @@ EF Core migrations are applied automatically on API startup in the `Development`
 
 ## Local object storage
 
-Compose runs RustFS as `s3` (S3 API published on `127.0.0.1:9000` only) and a one-shot `s3-init` container. `s3-init` creates the private bucket `worklane-dev-files`, lifecycle rules for `quarantine/` (1 day) and `exports/` (7 days), and a least-privilege app user whose policy allows object operations on that bucket plus `s3:ListBucketMultipartUploads`. Every credential is read from `.env`.
+Dev compose runs RustFS as `s3` (S3 API published on `127.0.0.1:9000` only; the console port is not published) and a one-shot `s3-init` container. `s3-init` creates the private bucket `worklane-dev-files`, lifecycle rules for `quarantine/` (1 day) and `exports/` (7 days), and a least-privilege app user whose policy allows object operations on that bucket plus `s3:ListBucketMultipartUploads`. It checks each of those results and exits non-zero when a step fails. Every credential is read from `.env`. Compose has no default password: a missing value stops `docker compose` before the container starts. The built-in RustFS account name is rejected, and each password must be at least 16 characters.
 
-`WL_S3_VERSIONING` defaults to `off`, matching Cloudflare R2 (the beta store). Set it to `on` in `.env` before the first `s3-init` run to exercise the DigitalOcean Spaces path: bucket versioning and a 30-day noncurrent-version expiry. Application code must not rely on versioning or bucket policy, because R2 provides neither. If versioning was enabled on the `s3data` volume, switching the flag to `off` leaves it in place; reset with `docker compose down -v`.
+`WL_S3_VERSIONING` defaults to `off`, matching Cloudflare R2 (the beta store). Set it to `on` in `.env` before the first `s3-init` run to exercise the DigitalOcean Spaces path: bucket versioning and a 30-day noncurrent-version expiry. Application code must not rely on versioning or bucket policy, because R2 provides neither. If versioning was enabled on the `s3data` volume, switching the flag to `off` leaves it in place; reset with `docker compose -f docker-compose.yml -f compose.dev.yml down -v`.
 
-The API still stores attachments on the `attachments` volume. `FileStorage__S3__ServiceUrl` is `http://s3:9000` (and the other `FileStorage__S3__*` keys from the storage spec are set), but `FileStorageSettings` does not bind those keys yet, so `FileStorage__Provider` is left unset and the process keeps the local-disk provider. Images are pinned by digest in `docker-compose.yml`; changing a digest is a reviewed edit. RustFS is not used in CI.
+The API still stores attachments on the `attachments` volume. With the dev overlay, `FileStorage__S3__ServiceUrl` is `http://s3:9000` (and the other `FileStorage__S3__*` keys from the storage spec are set), but `FileStorageSettings` does not bind those keys yet, so `FileStorage__Provider` is left unset and the process keeps the local-disk provider. Images are pinned by digest in `compose.dev.yml`. Dependabot may open a pull request for a digest bump; those pulls are not automerged and need a manual review. CI scans the pinned images with Trivy and fails on a CRITICAL finding that has a fix. It does not run RustFS as the test storage.
 
 ## Golden path
 
@@ -161,6 +163,7 @@ worklane/
 │       ├── core/                # services, guards, interceptors, models
 │       ├── shell/               # navbar, sidenav, shell layout
 │       └── features/            # auth, workspaces, projects, board, dashboard
+├── compose.dev.yml              # local RustFS only; not used for staging/prod
 └── docker-compose.yml
 ```
 
@@ -180,4 +183,4 @@ Components do **not** carry their own stylesheets — the single theme definitio
 secret for convenience. Replace `Jwt__Secret` with a real secret (e.g. via environment variable or
 a secrets manager) before deploying anywhere real.
 
-Object-storage credentials (`S3_ROOT_USER`, `S3_ROOT_PASSWORD`, `WL_S3_ACCESS_KEY`, `WL_S3_SECRET_KEY`) are not in the repo. Copy `.env.example` to `.env` and generate them locally. `.env` is git-ignored.
+Object-storage credentials (`S3_ROOT_USER`, `S3_ROOT_PASSWORD`, `WL_S3_ACCESS_KEY`, `WL_S3_SECRET_KEY`) are not in the repo. Copy `.env.example` to `.env` and generate them locally. `.env` and `.env.*` are git-ignored; `.env.example` is the exception. Postgres and the API publish on `127.0.0.1` only.

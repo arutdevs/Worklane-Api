@@ -1,0 +1,9 @@
+version: 2
+updates:
+  # Opens pull requests for digest bumps in docker-compose.yml and compose.dev.yml.
+  # Nothing in this repo automerges those pulls. A digest change stays a reviewed edit.
+  - package-ecosystem: docker-compose
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 2
