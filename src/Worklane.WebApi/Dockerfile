@@ -22,10 +22,13 @@ FROM mcr.microsoft.com/dotnet/aspnet:10.0@sha256:d5633778c754e89a386882eddf8dbee
 WORKDIR /app
 COPY --from=build /app .
 
-# Named volume at this path is seeded from the image, including ownership.
-# A fresh volume is therefore writable by the non-root user below.
-RUN mkdir -p /var/worklane/attachments \
-    && chown -R "$APP_UID:$APP_UID" /var/worklane/attachments
+# Named volumes at these paths are seeded from the image, including ownership.
+# APP_UID in this aspnet image is 1654. A fresh volume is writable by that user.
+# The key ring is mode 700. The API process reads DataProtection__KeysPath
+# only after WL-63a; the directory is ready before that.
+RUN mkdir -p /var/worklane/attachments /var/lib/worklane/dataprotection-keys \
+    && chown -R "$APP_UID:$APP_UID" /var/worklane/attachments /var/lib/worklane/dataprotection-keys \
+    && chmod 700 /var/lib/worklane/dataprotection-keys
 
 ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080

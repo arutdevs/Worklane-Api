@@ -20,7 +20,7 @@ Security constraints for this change:
 - Beta compose never sets `ASPNETCORE_ENVIRONMENT=Development`. Prod is `Production`. Staging is `Staging`.
 - `Jwt__Secret` in the beta compose is only `${JWT_SECRET}` from the git-ignored env file. The file has no secret value.
 - No service publishes a host port, so nothing listens on `0.0.0.0`. Postgres is not published. A future loopback mapping has to be `127.0.0.1:<port>:<container>`.
-- Image names in this compose file are literals. The fallback tags `worklane-api:beta`, `worklane-web:beta`, and `worklane-migrator:beta` exist so the file renders. `up.sh` does not run them. It merges `/etc/worklane/prod.compose.yml` or `staging.compose.yml`, whose `image:` lines are literals such as `worklane-api:prod-<40 hex sha>`. Nothing in an `image:` line is a variable. Third-party images are `tag@sha256`.
+- Image names in this compose file are literals. `api`, `web`, and `migrator` are `worklane-*:unlocked-do-not-run` with `pull_policy: never` and no `build:` section. `docker compose up` without the generated override cannot pull or build them, so it fails instead of starting an unlocked image. `up.sh` merges `/etc/worklane/prod.compose.yml` or `staging.compose.yml`, whose `image:` lines are literals such as `worklane-api:prod-<40 hex sha>`. Nothing in an `image:` line is a variable. Third-party images are `tag@sha256`.
 - Attachments stay on a local volume until B-18. Do not add an object-storage container to this file.
 
 ## WL-63 gate
@@ -38,7 +38,7 @@ This PR does not implement that API behaviour. `scripts/preflight.sh` refuses an
 docker compose --env-file /etc/worklane/prod.env -f deploy/beta/docker-compose.yml up -d
 ```
 
-That command never reads `WL63_DONE`, and it never reads the image lock. It uses the fallback `:beta` tags. The control is the API rejecting the burned key at startup, plus a rotated secret in the env file. Do not treat the marker file as either of those.
+That command never reads `WL63_DONE`, and it never reads the image lock. It also fails closed: those services are tagged `worklane-*:unlocked-do-not-run`, Compose will not pull them, and this file does not build them. The control for the burned key is still the API rejecting it at startup, plus a rotated secret in the env file. Do not treat the marker file as either of those.
 
 Example marker, after the 401 check on the image you are about to run:
 
@@ -166,6 +166,7 @@ All of these are true before a public hostname exists on the tunnel:
 6. Tunnel ingress is only `http://web:8080`.
 7. Migrations have been applied on the VM: `ef-migrate.sh` finished and `__EFMigrationsHistory` has a row. A retry on the machine that prepared this PR is not that proof. The bundle, with no `--connection` argument, reported `tcp://postgres:5432` and then timed out to the Postgres container address. `pg_isready -h 127.0.0.1` inside the Postgres container succeeded, so Postgres was listening. Container-to-container TCP on this machine's Compose bridges does not work. Run the script on the Oracle VM.
 8. Nginx has been started with `cap_drop: [ALL]` and no capabilities added back, listening on 8080. Stock `nginxinc/nginx-unprivileged:1.29-alpine@sha256:0c79d56aee561a1d81c63f00eee5fb5fe29279560cdc55e91425133104c7fbe6` did that here (HTTP 200 from inside the container, uid 101, no host port). Worklane-Web still has to be built FROM that image at the commit you record.
+9. DataProtection keys are on the named volume `worklane-prod-dpkeys` or `worklane-staging-dpkeys`, mounted at `/var/lib/worklane/dataprotection-keys`, with `DataProtection__KeysPath` set to that path. The API image creates the directory as uid 1654, mode 700, and the container root filesystem stays read-only. The API does not read that path until WL-63a. Do not treat this volume as proof that keys survive a restart until that API change is the build you are running.
 
 The API is `https://app.<domain>/api` and SignalR is `wss://app.<domain>/hubs/notifications` on the same host. That matches the Angular app and avoids CORS. Do not add `api.<domain>`. cloudflared cannot reach the API container, and the client is same-origin.
 
@@ -240,9 +241,9 @@ cd /opt/worklane
 deploy/beta/scripts/up.sh /etc/worklane/prod.env
 ```
 
-Repeat with `/etc/worklane/staging.env` only after that staging API image rejects the burned key. `up.sh` runs preflight, checks the sibling env file does not share secrets, checks the `WL63_DONE` speed bump, requires the image lock, checks each `docker image inspect` id, writes `/etc/worklane/<slot>.compose.yml` with literal per-commit tags, then `docker compose up -d --no-build --wait`. It does not build, and it does not use the shared `:beta` tags. Building or starting staging does not replace the prod tags.
+Repeat with `/etc/worklane/staging.env` only after that staging API image rejects the burned key. `up.sh` runs preflight, checks the sibling env file does not share secrets, checks the `WL63_DONE` speed bump, requires the image lock, checks each `docker image inspect` id, writes `/etc/worklane/<slot>.compose.yml` with literal per-commit tags, then `docker compose up -d --no-build --wait`. It does not build. Building or starting staging does not replace the prod tags.
 
-`docker compose up` without `up.sh` skips both the marker file and the lock. Do not use `--build` on this file: that would rebuild the fallback `:beta` tags and ignore the lock.
+`docker compose up` without that generated file skips the marker and the lock, and it does not start `api`, `web`, or `migrator`: the compose file only names `worklane-*:unlocked-do-not-run`. Each slot also gets a DataProtection volume, `worklane-prod-dpkeys` or `worklane-staging-dpkeys`, mounted at `/var/lib/worklane/dataprotection-keys`. A new volume is seeded from the API image as uid 1654, mode 700. The API starts writing keys there in WL-63a.
 
 Confirm outbound TCP 443 from the `edge` network (cloudflared) and from the `app` network (the API sends mail). The `db` network is internal, so a check from Postgres must fail. On a normal Docker install, non-internal bridges are masqueraded. If the edge check fails, fix `ip_forward` and Docker's iptables/nftables forwarding before debugging the tunnel:
 
@@ -429,7 +430,7 @@ Render Free (Singapore) plus Neon Free (Singapore) plus R2 is the documented fal
 | Grafana Alloy, Sentry SDK | No exporter in the API. Env keys are comments. |
 | Image registry | CI builds `linux/amd64` and `linux/arm64` and does not push. The droplet builds locally. |
 | Web nginx | Worklane-Web is a separate repo. Build it FROM `nginxinc/nginx-unprivileged` (digest in the compose comment), listen 8080, and record that commit's image id with `record-web-image.sh`. Confirm `/hubs` upgrade headers there. |
-| DataProtection keys | The API has no env path for a key ring. With `read_only: true` it keeps an ephemeral in-memory key (seen in the API log on a local start). Persisting keys on a volume writable by uid 1654 waits on the backend. This PR does not add that volume. |
+| DataProtection keys in the API | The volume, mount, and `DataProtection__KeysPath` are in this compose file. The API still ignores that path until WL-63a. Until then a restart still mints an ephemeral in-memory key. |
 | Apply migrations on the VM | Retried once here with no `--connection` argument. The bundle used `tcp://postgres:5432` and timed out to the container address. `pg_isready -h 127.0.0.1` inside Postgres succeeded. `ef-migrate.sh` on the Oracle VM must show a row in `__EFMigrationsHistory`. |
 | Weekly restore automation | Script is manual. Drill once before users, then decide if cron is safe. |
 | Render + Neon | Not wired. |

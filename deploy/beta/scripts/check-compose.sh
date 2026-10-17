@@ -130,6 +130,18 @@ fi
 if ! grep -q '/var/worklane/attachments' src/Worklane.WebApi/Dockerfile; then
   die "API Dockerfile must prepare the attachments path"
 fi
+if ! grep -q '/var/lib/worklane/dataprotection-keys' src/Worklane.WebApi/Dockerfile; then
+  die "API Dockerfile must create the DataProtection key directory"
+fi
+if ! grep -q 'chmod 700 /var/lib/worklane/dataprotection-keys' src/Worklane.WebApi/Dockerfile; then
+  die "API Dockerfile must chmod 700 the DataProtection key directory"
+fi
+if grep -nE '^[[:space:]]*image:[[:space:]]*.*:beta[[:space:]]*$' "$compose_path"; then
+  die "beta compose must not use :beta image tags"
+fi
+if grep -nE '^[[:space:]]*build:' "$compose_path"; then
+  die "beta compose must not build api, web, or migrator (that would tag the sentinel)"
+fi
 if grep -nE '^[[:space:]]*actions:[[:space:]]*write' .github/workflows/docker-image.yml; then
   die "docker-image.yml must not grant actions: write"
 fi
@@ -238,10 +250,22 @@ for name in ("postgres", "api", "web", "cloudflared"):
     assert options.get("max-file") == "3", (name, logging)
     mem = service.get("mem_limit") or ((service.get("deploy") or {}).get("resources") or {}).get("limits", {}).get("memory")
     assert mem, f"{name} has no memory limit"
-assert services["api"]["image"] == "worklane-api:beta"
-assert services["web"]["image"] == "worklane-web:beta"
+sentinel = "unlocked-do-not-run"
+assert services["api"]["image"] == "worklane-api:" + sentinel
+assert services["web"]["image"] == "worklane-web:" + sentinel
 assert services["api"].get("pull_policy") == "never"
 assert services["web"].get("pull_policy") == "never"
+assert "build" not in services["api"]
+assert "build" not in services["web"]
+assert services["api"].get("read_only") is True
+assert services["api"]["environment"]["DataProtection__KeysPath"] == "/var/lib/worklane/dataprotection-keys"
+assert doc["volumes"]["dpkeys"]["name"] == "worklane-prod-dpkeys"
+api_vol_targets = {}
+for mount in services["api"].get("volumes") or []:
+    assert isinstance(mount, dict) and mount.get("type") == "volume", mount
+    api_vol_targets[mount.get("target")] = mount.get("source")
+assert api_vol_targets.get("/var/lib/worklane/dataprotection-keys") == "dpkeys", api_vol_targets
+assert "/var/worklane/attachments" in api_vol_targets
 assert "@sha256:" in services["postgres"]["image"]
 assert "@sha256:" in services["cloudflared"]["image"]
 pg_caps = set(services["postgres"].get("cap_add") or [])
@@ -255,7 +279,8 @@ assert_no_public_ports(migrate["services"])
 migrator = migrate["services"]["migrator"]
 assert_hardened("migrator", migrator)
 assert network_names(migrator) == {"db"}
-assert migrator["image"] == "worklane-migrator:beta"
+assert migrator["image"] == "worklane-migrator:" + sentinel
+assert "build" not in migrator
 assert migrator.get("pull_policy") == "never"
 assert migrator["restart"] == "no"
 assert not migrator.get("cap_add")
@@ -590,6 +615,7 @@ python3 - "$workdir/staging.json" <<'PY'
 import json, sys
 doc = json.load(open(sys.argv[1]))
 assert doc["name"] == "worklane-staging", doc.get("name")
+assert doc["volumes"]["dpkeys"]["name"] == "worklane-staging-dpkeys", doc["volumes"]["dpkeys"]
 assert doc["networks"]["edge"]["name"] == "worklane-staging-edge"
 assert doc["networks"]["app"]["name"] == "worklane-staging-app"
 assert doc["networks"]["db"]["name"] == "worklane-staging-db"
@@ -601,4 +627,20 @@ PY
 
 # Same render PR #5's image-scan uses: sibling .env.example and every profile.
 docker compose --env-file "$(deploy_dir)/.env.example" -f "$compose_path" --profile '*' config >/dev/null
+
+# Direct compose up must fail closed. No dependency start, so Postgres stays down.
+# --build must also fail: there is no build: section to tag the sentinel.
+for extra in --no-build --build; do
+  set +e
+  closed_out=$(docker compose --env-file "$envfile" -f "$compose_path" up -d "$extra" --no-deps api 2>&1)
+  closed_status=$?
+  set -e
+  [[ "$closed_status" -ne 0 ]]
+  printf '%s\n' "$closed_out" | grep -q 'unlocked-do-not-run'
+done
+docker compose --env-file "$envfile" -f "$compose_path" down --remove-orphans >/dev/null
+if docker ps -a --format '{{.Names}}' | grep -q 'worklane-prod'; then
+  die "direct compose up left a worklane-prod container"
+fi
+printf 'unlocked image refused\n'
 printf 'check-compose.sh ok\n'

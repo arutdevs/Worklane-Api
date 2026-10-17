@@ -10,12 +10,12 @@
 # db is internal, so Postgres has no route to the internet. The tunnel's
 # public hostname must be only http://web:8080 (unprivileged nginx).
 #
-# The worklane-*:beta image names below are fallbacks so this file renders
-# with no variable in any image: line. up.sh does not run them. It merges
-# /etc/worklane/<slot>.compose.yml, whose image: lines are literals
-# (worklane-api:prod-<sha>, and the staging equivalent). Do not
-# `docker compose up --build`: that rebuilds the shared :beta tags and
-# bypasses the image lock. up.sh uses `up -d --no-build`.
+# api, web, and migrator are tagged worklane-*:unlocked-do-not-run. Those
+# images are not published and this file has no build: section, so
+# `docker compose up` without /etc/worklane/<slot>.compose.yml fails closed.
+# up.sh merges that generated file, whose image: lines are literals
+# (worklane-api:prod-<sha>, and the staging equivalent). No image: line
+# in either file is a variable.
 #
 # Security: do not set ASPNETCORE_ENVIRONMENT=Development. Do not write a JWT
 # or password value in this file (Jwt__Secret is only ${JWT_SECRET} from the
@@ -44,6 +44,9 @@ networks:
 volumes:
   pgdata:
   attachments:
+  # One key ring per compose project: worklane-prod-dpkeys, worklane-staging-dpkeys.
+  dpkeys:
+    name: ${COMPOSE_PROJECT_NAME:?set worklane-prod or worklane-staging}-dpkeys
 
 services:
   postgres:
@@ -84,14 +87,12 @@ services:
       start_period: 20s
 
   api:
-    # Fallback tag only. build-images.sh tags worklane-api:<slot>-<commit> and
-    # up.sh overrides this line. pull_policy never: Compose will not pull this name.
-    image: worklane-api:beta
+    # Not a runnable tag. build-images.sh tags worklane-api:<slot>-<commit>.
+    # up.sh overrides this line. pull_policy never and no build: section:
+    # Compose cannot pull or build this name.
+    image: worklane-api:unlocked-do-not-run
     platform: ${DOCKER_PLATFORM:-linux/arm64}
     pull_policy: never
-    build:
-      context: ../..
-      dockerfile: src/Worklane.WebApi/Dockerfile
     restart: unless-stopped
     networks: [app, db]
     environment:
@@ -109,6 +110,8 @@ services:
       # Local disk until B-18. The volume is mirrored to R2 by scripts/sync-attachments-to-r2.sh.
       FileStorage__LocalPath: /var/worklane/attachments
       FileStorage__MaxBytes: ${FILE_MAX_BYTES:-10485760}
+      # WL-63a teaches the API to persist keys here. The volume is mounted now.
+      DataProtection__KeysPath: /var/lib/worklane/dataprotection-keys
       Email__SmtpHost: ${SMTP_HOST:-smtp.resend.com}
       Email__SmtpPort: ${SMTP_PORT:-587}
       Email__SmtpUsername: ${SMTP_USERNAME:-resend}
@@ -116,6 +119,7 @@ services:
       Email__FromName: ${SMTP_FROM_NAME:-Worklane}
     volumes:
       - attachments:/var/worklane/attachments
+      - dpkeys:/var/lib/worklane/dataprotection-keys
     read_only: true
     tmpfs:
       - /tmp
@@ -139,12 +143,12 @@ services:
       start_period: 40s
 
   web:
-    # Fallback tag only. Not built by this file. The operator builds Worklane-Web
+    # Not a runnable tag. Not built by this file. The operator builds Worklane-Web
     # FROM nginxinc/nginx-unprivileged:1.29-alpine@sha256:0c79d56aee561a1d81c63f00eee5fb5fe29279560cdc55e91425133104c7fbe6
     # at the reviewed Web commit, tags worklane-web:<slot>-<websha>, and
     # record-web-image.sh stores that SHA plus `docker image inspect` id.
-    # That image listens on 8080 as uid 101. pull_policy never.
-    image: worklane-web:beta
+    # That image listens on 8080 as uid 101. pull_policy never, no build: section.
+    image: worklane-web:unlocked-do-not-run
     platform: ${DOCKER_PLATFORM:-linux/arm64}
     pull_policy: never
     restart: unless-stopped
@@ -206,12 +210,9 @@ services:
   # repo bind mount). See scripts/ef-migrate.sh.
   migrator:
     profiles: ["migrate"]
-    image: worklane-migrator:beta
+    image: worklane-migrator:unlocked-do-not-run
     platform: ${DOCKER_PLATFORM:-linux/arm64}
     pull_policy: never
-    build:
-      context: ../..
-      dockerfile: deploy/beta/Dockerfile
     restart: "no"
     networks: [db]
     working_dir: /tmp
