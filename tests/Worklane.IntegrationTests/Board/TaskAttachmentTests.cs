@@ -82,12 +82,9 @@ public class TaskAttachmentTests : IClassFixture<WorklaneWebApplicationFactory>
         var board = await BoardTestSetup.CreateAsync(_factory, "files-reject@test.com");
         var task = await BoardTestSetup.CreateTaskAsync(board, "Gate");
 
-        (await UploadAsync(board.Client, task.Id, SampleFiles.Png, "image/png", "run.exe"))
-            .StatusCode.Should().Be(HttpStatusCode.UnsupportedMediaType);
-        (await UploadAsync(board.Client, task.Id, SampleFiles.Html, "image/png", "notes.png"))
-            .StatusCode.Should().Be(HttpStatusCode.UnsupportedMediaType);
-        (await UploadAsync(board.Client, task.Id, SampleFiles.Png, "image/png", "photo.jpg"))
-            .StatusCode.Should().Be(HttpStatusCode.UnsupportedMediaType);
+        await AssertUnsupportedFileType(await UploadAsync(board.Client, task.Id, SampleFiles.Png, "image/png", "run.exe"), ".exe");
+        await AssertUnsupportedFileType(await UploadAsync(board.Client, task.Id, SampleFiles.Html, "image/png", "notes.png"), ".png");
+        await AssertUnsupportedFileType(await UploadAsync(board.Client, task.Id, SampleFiles.Png, "image/png", "photo.jpg"), ".jpg");
         var empty = await UploadAsync(board.Client, task.Id, [], "image/png", "empty.png");
         empty.StatusCode.Should().Be(HttpStatusCode.BadRequest);
         var emptyBody = await empty.Content.ReadFromJsonAsync<JsonElement>(TestAuthHelper.JsonOptions);
@@ -190,8 +187,9 @@ public class TaskAttachmentTests : IClassFixture<WorklaneWebApplicationFactory>
             .StatusCode.Should().Be(HttpStatusCode.Created);
         (await UploadAsync(board.Client, task.Id, utf16.ToArray(), "text/html", "wide.csv"))
             .StatusCode.Should().Be(HttpStatusCode.Created);
-        (await UploadAsync(board.Client, task.Id, "<script>alert(1)</script>"u8.ToArray(), "text/csv", "bad.csv"))
-            .StatusCode.Should().Be(HttpStatusCode.UnsupportedMediaType);
+        await TaskAttachmentTests.AssertUnsupportedFileType(
+            await UploadAsync(board.Client, task.Id, "<script>alert(1)</script>"u8.ToArray(), "text/csv", "bad.csv"),
+            ".csv");
     }
 
     [Fact]
@@ -252,6 +250,16 @@ public class TaskAttachmentTests : IClassFixture<WorklaneWebApplicationFactory>
         content.Add(file, "file", fileName);
         return await client.PostAsync($"/api/tasks/{taskId}/attachments", content);
     }
+
+    internal static async Task AssertUnsupportedFileType(HttpResponseMessage response, string extension)
+    {
+        var body = await response.Content.ReadAsStringAsync();
+        response.StatusCode.Should().Be(HttpStatusCode.UnsupportedMediaType, body);
+        var problem = JsonDocument.Parse(body).RootElement;
+        problem.GetProperty("code").GetString().Should().Be("unsupported_file_type");
+        problem.GetProperty("extension").GetString().Should().Be(extension);
+        problem.GetProperty("detail").GetString().Should().Be("The file type is not allowed.");
+    }
 }
 
 public class LargeTextUploadTests : IClassFixture<LargeTextUploadFactory>
@@ -281,8 +289,9 @@ public class LargeTextUploadTests : IClassFixture<LargeTextUploadFactory>
         plain.AsSpan(0, FileSignature.HeaderLength).CopyTo(hidden);
         script.CopyTo(hidden.AsSpan(FileSignature.HeaderLength));
 
-        (await UploadAsync(board.Client, task.Id, hidden, "text/csv", "hidden.csv"))
-            .StatusCode.Should().Be(HttpStatusCode.UnsupportedMediaType);
+        await TaskAttachmentTests.AssertUnsupportedFileType(
+            await UploadAsync(board.Client, task.Id, hidden, "text/csv", "hidden.csv"),
+            ".csv");
     }
 
     private static async Task<HttpResponseMessage> UploadAsync(

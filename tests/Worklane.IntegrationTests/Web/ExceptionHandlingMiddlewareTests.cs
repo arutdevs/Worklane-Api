@@ -74,7 +74,19 @@ public class ExceptionHandlingMiddlewareTests
     {
         var body = await Invoke(new UnsupportedMediaTypeException(".exe"));
         body.Status.Should().Be(HttpStatusCode.UnsupportedMediaType);
-        body.Json.GetProperty("code").GetString().Should().Be("unsupported_media_type");
+        body.Json.GetProperty("code").GetString().Should().Be("unsupported_file_type");
+        body.Json.GetProperty("extension").GetString().Should().Be(".exe");
+        body.Json.GetProperty("detail").GetString().Should().Be("The file type is not allowed.");
+    }
+
+    [Fact]
+    public async Task UnsupportedMediaType_FrameworkFallback_UsesTheFileTypeCode()
+    {
+        var body = await Invoke(new BadHttpRequestException("raw framework text", StatusCodes.Status415UnsupportedMediaType));
+        body.Status.Should().Be(HttpStatusCode.UnsupportedMediaType);
+        body.Json.GetProperty("code").GetString().Should().Be("unsupported_file_type");
+        body.Json.GetProperty("detail").GetString().Should().Be("The file type is not allowed.");
+        body.Json.GetRawText().Should().NotContain("raw framework text");
     }
 
     [Fact]
