@@ -1,0 +1,4 @@
+# SHA-256 (hex, UTF-8) of JWT signing secrets that must never be deployed.
+# The plaintext was committed for local dev (docker-compose.yml and
+# appsettings.Development.json) and is in git history. Do not add plaintext here.
+bd3ad4473d8c29998cd25d9041bb61758a3de08da5430795688fb8b26e9e9e17

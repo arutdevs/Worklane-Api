@@ -16,3 +16,10 @@ data/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local secrets. Placeholder templates (*.env.example) stay tracked.
+.env
+.env.*
+!.env.example
+!**/.env.example
+deploy/beta/WL63_DONE

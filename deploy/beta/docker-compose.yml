@@ -1,0 +1,171 @@
+# Oracle Cloud Always Free Ampere A1 (linux/arm64, 2 OCPU / 12 GB).
+# Same file, two compose projects, two env files, on one VM:
+#   deploy/beta/scripts/up.sh deploy/beta/.env.prod
+#   deploy/beta/scripts/up.sh deploy/beta/.env.staging
+# Postgres, the API, and nginx are not published on the host. cloudflared
+# dials out. Dev docker-compose.yml at the repo root is a different stack.
+#
+# Security: do not set ASPNETCORE_ENVIRONMENT=Development. Do not write a JWT
+# or password value in this file (Jwt__Secret is only ${JWT_SECRET} from the
+# git-ignored env file). Do not add a host port except 127.0.0.1:port:container.
+# Postgres stays unpublished. No rustfs or seaweedfs.
+
+name: ${COMPOSE_PROJECT_NAME:?set worklane-prod or worklane-staging}
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+networks:
+  default:
+    name: ${COMPOSE_PROJECT_NAME:?set worklane-prod or worklane-staging}-net
+
+volumes:
+  pgdata:
+  attachments:
+
+services:
+  postgres:
+    image: postgres:16
+    platform: ${DOCKER_PLATFORM:-linux/arm64}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?}
+      POSTGRES_USER: ${POSTGRES_USER:?}
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?}"
+    command:
+      - postgres
+      - -c
+      - shared_buffers=${POSTGRES_SHARED_BUFFERS:-512MB}
+      - -c
+      - max_connections=${POSTGRES_MAX_CONNECTIONS:-40}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    shm_size: 256mb
+    mem_limit: ${POSTGRES_MEM_LIMIT:-2g}
+    cpus: ${POSTGRES_CPUS:-0.60}
+    logging: *default-logging
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  api:
+    image: ${API_IMAGE:-worklane-api:beta}
+    platform: ${DOCKER_PLATFORM:-linux/arm64}
+    pull_policy: ${API_PULL_POLICY:-never}
+    build:
+      context: ../..
+      dockerfile: src/Worklane.WebApi/Dockerfile
+    restart: unless-stopped
+    environment:
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:?Production or Staging}
+      ASPNETCORE_URLS: http://+:8080
+      AllowedHosts: ${ALLOWED_HOSTS:?}
+      # Single quotes around the password: base64 secrets contain '='. Npgsql accepts that.
+      ConnectionStrings__Default: "Host=postgres;Port=5432;Database=${POSTGRES_DB:?};Username=${POSTGRES_APP_USER:?};Password='${POSTGRES_APP_PASSWORD:?}';Maximum Pool Size=20"
+      Jwt__Secret: "${JWT_SECRET:?}"
+      Jwt__Issuer: ${JWT_ISSUER:-Worklane}
+      Jwt__Audience: ${JWT_AUDIENCE:-WorklaneClient}
+      Cors__AllowedOrigins__0: ${PUBLIC_ORIGIN:?}
+      Frontend__BaseUrl: ${PUBLIC_ORIGIN:?}
+      # Local disk until B-18. The volume is mirrored to R2 by scripts/sync-attachments-to-r2.sh.
+      FileStorage__LocalPath: /var/worklane/attachments
+      FileStorage__MaxBytes: ${FILE_MAX_BYTES:-10485760}
+      Email__SmtpHost: ${SMTP_HOST:-smtp.resend.com}
+      Email__SmtpPort: ${SMTP_PORT:-587}
+      Email__SmtpUsername: ${SMTP_USERNAME:-resend}
+      Email__SmtpPassword: "${SMTP_PASSWORD:?}"
+      Email__FromName: ${SMTP_FROM_NAME:-Worklane}
+    volumes:
+      - attachments:/var/worklane/attachments
+    mem_limit: ${API_MEM_LIMIT:-1536m}
+    cpus: ${API_CPUS:-0.70}
+    logging: *default-logging
+    stop_grace_period: 20s
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # No /health endpoint yet. Any HTTP response means Kestrel is listening.
+    # UseHttpsRedirection does nothing while ASPNETCORE_URLS is http-only.
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8080 && printf \"GET / HTTP/1.0\\r\\n\\r\\n\" >&3 && grep -q HTTP <&3'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+  web:
+    # Built from the Worklane-Web repo (nginx SPA + /api and /hubs proxy). Not built here.
+    image: ${WEB_IMAGE:?}
+    platform: ${DOCKER_PLATFORM:-linux/arm64}
+    pull_policy: ${WEB_PULL_POLICY:-never}
+    restart: unless-stopped
+    mem_limit: ${WEB_MEM_LIMIT:-128m}
+    cpus: ${WEB_CPUS:-0.10}
+    logging: *default-logging
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "if command -v wget >/dev/null 2>&1; then wget -q -O /dev/null http://127.0.0.1/; elif command -v curl >/dev/null 2>&1; then curl -fsS -o /dev/null http://127.0.0.1/; else exit 1; fi"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  cloudflared:
+    image: cloudflare/cloudflared:${CLOUDFLARED_VERSION:-2026.10.1}
+    platform: ${DOCKER_PLATFORM:-linux/arm64}
+    restart: unless-stopped
+    # Image entrypoint is already `cloudflared --no-autoupdate` (pinned 2026.10.1).
+    command: tunnel run
+    environment:
+      TUNNEL_TOKEN: "${CLOUDFLARE_TUNNEL_TOKEN:?}"
+    mem_limit: ${CLOUDFLARED_MEM_LIMIT:-128m}
+    cpus: ${CLOUDFLARED_CPUS:-0.10}
+    logging: *default-logging
+    depends_on:
+      web:
+        condition: service_healthy
+    # The image has no shell. This only proves the binary can start; Better Stack
+    # on the public hostname is the check that the tunnel is actually up.
+    healthcheck:
+      test: ["CMD", "cloudflared", "--version"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # One-off EF migrator. Not started by `up`. See scripts/ef-migrate.sh.
+  migrator:
+    profiles: ["migrate"]
+    image: mcr.microsoft.com/dotnet/sdk:10.0
+    platform: ${DOCKER_PLATFORM:-linux/arm64}
+    restart: "no"
+    working_dir: /src
+    volumes:
+      - ../..:/src
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ConnectionStrings__Default: "Host=postgres;Port=5432;Database=${POSTGRES_DB:?};Username=${POSTGRES_MIGRATOR_USER:?};Password='${POSTGRES_MIGRATOR_PASSWORD:?}'"
+      Jwt__Secret: "${JWT_SECRET:?}"
+      Jwt__Issuer: ${JWT_ISSUER:-Worklane}
+      Jwt__Audience: ${JWT_AUDIENCE:-WorklaneClient}
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      DOTNET_NOLOGO: "1"
+      # Skip CRL checks. Package download still happens. A blocked CRL endpoint
+      # otherwise leaves `dotnet tool install` sitting on a socket with no output.
+      NUGET_CERT_REVOCATION_MODE: offline
+    entrypoint: ["bash", "-lc"]
+    mem_limit: ${MIGRATOR_MEM_LIMIT:-2g}
+    cpus: ${MIGRATOR_CPUS:-1.0}
+    logging: *default-logging
+    depends_on:
+      postgres:
+        condition: service_healthy

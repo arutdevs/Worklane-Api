@@ -1,4 +1,10 @@
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+# syntax=docker/dockerfile:1
+# Publish on the builder's native architecture. The app is framework-dependent
+# IL, so the same output runs on the target runtime image (linux/arm64 on the
+# Oracle A1 VM, linux/amd64 elsewhere). Native dependencies would break this;
+# this project has none.
+
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
 COPY src/Worklane.Domain/Worklane.Domain.csproj src/Worklane.Domain/
