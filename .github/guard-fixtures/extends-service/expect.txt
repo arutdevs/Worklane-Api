@@ -1,0 +1,2 @@
+image: rustfs/rustfs:1.0.3
+Rendered compose contains a dev S3 image, digest, endpoint, or RequireHttps false.

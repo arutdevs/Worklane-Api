@@ -1,0 +1,2 @@
+web image=${X:-busybox}
+Deploy compose service image contains a dollar sign.

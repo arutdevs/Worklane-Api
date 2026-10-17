@@ -1,0 +1,2 @@
+hidden image=$VAR
+Deploy compose service image contains a dollar sign.

@@ -1,2 +1,2 @@
 services:
-  web: {image: "${X}"}
+  web: {image: "${X:-busybox}"}

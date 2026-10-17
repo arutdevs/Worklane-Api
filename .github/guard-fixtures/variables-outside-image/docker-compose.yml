@@ -1,0 +1,7 @@
+name: ${COMPOSE_PROJECT_NAME:-guard-positive}
+services:
+  web:
+    image: nginx:alpine
+    environment:
+      APP_MODE: ${APP_MODE:-production}
+      GREETING: ${GREETING:-hello}
