@@ -2,6 +2,8 @@ using System.Text.Json;
 using FluentAssertions;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Metadata;
+using Microsoft.Extensions.Options;
+using Worklane.Application.Common.Options;
 using Worklane.WebApi.Middleware;
 
 namespace Worklane.IntegrationTests.Web;
@@ -11,7 +13,9 @@ public class ContentLengthLimitMiddlewareTests
     [Fact]
     public async Task DeclaredBodyOverTheLimit_IsRequestTooLarge()
     {
-        var middleware = new ContentLengthLimitMiddleware(_ => throw new InvalidOperationException("The body should not be read."));
+        var middleware = new ContentLengthLimitMiddleware(
+            _ => throw new InvalidOperationException("The body should not be read."),
+            Options.Create(new FileStorageSettings()));
         var context = new DefaultHttpContext();
         context.Request.Path = "/api/auth/login";
         context.Request.ContentLength = 50;
@@ -24,6 +28,7 @@ public class ContentLengthLimitMiddlewareTests
         await middleware.InvokeAsync(context);
 
         context.Response.StatusCode.Should().Be(StatusCodes.Status413PayloadTooLarge);
+        context.Response.ContentType.Should().Be("application/problem+json");
         context.Response.Body.Position = 0;
         using var json = await JsonDocument.ParseAsync(context.Response.Body);
         json.RootElement.GetProperty("code").GetString().Should().Be("request_too_large");
@@ -39,7 +44,7 @@ public class ContentLengthLimitMiddlewareTests
         {
             continued = true;
             return Task.CompletedTask;
-        });
+        }, Options.Create(new FileStorageSettings()));
         var context = new DefaultHttpContext();
         context.Request.ContentLength = 4;
         context.SetEndpoint(new Endpoint(

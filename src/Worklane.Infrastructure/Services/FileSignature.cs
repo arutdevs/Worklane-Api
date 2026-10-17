@@ -8,7 +8,7 @@ namespace Worklane.Infrastructure.Services;
 /// </summary>
 internal static class FileSignature
 {
-    /// <summary>How many leading bytes an upload inspects. The rest is streamed to storage.</summary>
+    /// <summary>How many leading bytes decide the binary signature. Text types are scanned for the whole stream.</summary>
     public const int HeaderLength = 8192;
 
     private static readonly UTF8Encoding Utf8 = new(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
@@ -148,7 +148,7 @@ internal static class FileSignature
         return !ContainsActiveContent(text);
     }
 
-    private static bool ContainsActiveContent(string text) =>
+    internal static bool ContainsActiveContent(string text) =>
         text.Contains("<script", StringComparison.OrdinalIgnoreCase) ||
         text.Contains("</script", StringComparison.OrdinalIgnoreCase) ||
         text.Contains("<html", StringComparison.OrdinalIgnoreCase) ||

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
@@ -15,6 +16,7 @@ using Microsoft.Extensions.Options;
 using Worklane.Application.Common.Options;
 using Worklane.Infrastructure;
 using Worklane.Infrastructure.Persistence;
+using Worklane.WebApi.Filters;
 using Worklane.WebApi.Hubs;
 using Worklane.WebApi.Middleware;
 using Worklane.WebApi.Seed;
@@ -35,6 +37,8 @@ builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
 
+builder.Services.AddMemoryCache();
+builder.Services.AddSingleton<IConfigureOptions<MvcOptions>, AttachmentUploadLimitSetup>();
 builder.Services.AddControllers()
     .AddJsonOptions(options => options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 builder.Services.Configure<ApiBehaviorOptions>(options =>
@@ -65,43 +69,66 @@ builder.Services.AddSwaggerGen(options =>
     });
 });
 
-// 2 MB for ordinary requests. Attachment upload raises its own ceiling with
-// [RequestSizeLimit] on the action, which still matches a trailing slash.
+// 2 MB for ordinary requests. Attachment upload raises its own ceiling from
+// FileStorage:MaxBytes plus a 1 MB multipart envelope. Default MaxBytes is 10 MB,
+// so that route's ceiling is 11 MB unless MaxBytes is configured higher.
 builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = FileStorageSettings.GlobalRequestBodyLimitBytes);
 
 builder.Services.Configure<AttachmentRateLimitSettings>(
     builder.Configuration.GetSection(AttachmentRateLimitSettings.SectionName));
+builder.Services.Configure<CommentRateLimitSettings>(
+    builder.Configuration.GetSection(CommentRateLimitSettings.SectionName));
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
     options.OnRejected = async (context, cancellationToken) =>
     {
+        if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out TimeSpan retryAfter))
+        {
+            var seconds = Math.Max(1, (int)Math.Ceiling(retryAfter.TotalSeconds));
+            context.HttpContext.Response.Headers.RetryAfter = seconds.ToString(CultureInfo.InvariantCulture);
+        }
+
         context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
         var problem = new ProblemDetails
         {
             Status = StatusCodes.Status429TooManyRequests,
             Title = "Too Many Requests",
-            Detail = "Too many attachment or comment requests for this user and workspace.",
+            Detail = "Too many requests for this user and workspace.",
             Instance = context.HttpContext.Request.Path
         };
         problem.Extensions["code"] = "rate_limited";
-        await context.HttpContext.Response.WriteAsJsonAsync(problem, cancellationToken);
+        await context.HttpContext.Response.WriteAsJsonAsync(
+            problem,
+            options: null,
+            contentType: "application/problem+json",
+            cancellationToken);
     };
     options.AddPolicy("attachments", httpContext =>
     {
         var settings = httpContext.RequestServices.GetRequiredService<IOptions<AttachmentRateLimitSettings>>().Value;
-        var permit = settings.PermitLimit < 1 ? 1 : settings.PermitLimit;
-        var windowSeconds = settings.WindowSeconds < 1 ? 1 : settings.WindowSeconds;
+        return FixedWindow(httpContext, settings.PermitLimit, settings.WindowSeconds);
+    });
+    options.AddPolicy("comments", httpContext =>
+    {
+        var settings = httpContext.RequestServices.GetRequiredService<IOptions<CommentRateLimitSettings>>().Value;
+        return FixedWindow(httpContext, settings.PermitLimit, settings.WindowSeconds);
+    });
+
+    static RateLimitPartition<string> FixedWindow(HttpContext httpContext, int permitLimit, int windowSeconds)
+    {
+        var permit = permitLimit < 1 ? 1 : permitLimit;
+        var window = windowSeconds < 1 ? 1 : windowSeconds;
         return RateLimitPartition.GetFixedWindowLimiter(
             AttachmentRateLimitPartition.Key(httpContext),
             _ => new FixedWindowRateLimiterOptions
             {
                 PermitLimit = permit,
-                Window = TimeSpan.FromSeconds(windowSeconds),
+                Window = TimeSpan.FromSeconds(window),
                 QueueLimit = 0,
                 AutoReplenishment = true
             });
-    });
+    }
 });
 
 builder.Services.AddSignalR()
@@ -116,7 +143,8 @@ builder.Services.AddCors(options =>
         .WithOrigins(builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? new[] { "http://localhost:4200" })
         .AllowAnyHeader()
         .AllowAnyMethod()
-        .AllowCredentials());
+        .AllowCredentials()
+        .WithExposedHeaders("Content-Disposition", "Retry-After"));
 });
 
 var jwtSettings = builder.Configuration.GetSection(JwtSettings.SectionName).Get<JwtSettings>() ?? new JwtSettings();

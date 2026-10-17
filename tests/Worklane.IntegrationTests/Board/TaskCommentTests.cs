@@ -207,9 +207,12 @@ public class TaskCommentTests : IClassFixture<WorklaneWebApplicationFactory>
         edited.Details.Value.TryGetProperty("oldValue", out _).Should().BeFalse();
         edited.Details.Value.TryGetProperty("newValue", out _).Should().BeFalse();
         edited.Details.Value.TryGetProperty("body", out _).Should().BeFalse();
+        var added = activity!.Single(a => a.Type == TaskActivityType.CommentAdded);
+        added.Details!.Value.GetProperty("commentId").GetGuid().Should().Be(created.Id);
+        added.Details.Value.TryGetProperty("body", out _).Should().BeFalse();
 
         var text = await (await board.Client.GetAsync($"/api/tasks/{task.Id}/activity")).Content.ReadAsStringAsync();
-        text.Should().Contain(original);
+        text.Should().NotContain(original);
         text.Should().NotContain(revised);
     }
 
@@ -234,7 +237,7 @@ public class TaskCommentTests : IClassFixture<WorklaneWebApplicationFactory>
         editedRow.Details.Value.TryGetProperty("oldValue", out _).Should().BeFalse();
         editedRow.Details.Value.TryGetProperty("newValue", out _).Should().BeFalse();
         var beforeText = await (await board.Client.GetAsync($"/api/tasks/{task.Id}/activity")).Content.ReadAsStringAsync();
-        beforeText.Should().Contain(original);
+        beforeText.Should().NotContain(original);
         beforeText.Should().NotContain(revised);
 
         (await board.Client.DeleteAsync($"/api/comments/{created.Id}")).StatusCode.Should().Be(HttpStatusCode.NoContent);
