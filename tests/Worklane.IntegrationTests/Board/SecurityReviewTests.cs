@@ -331,6 +331,7 @@ public class SecurityReviewTests : IClassFixture<WorklaneWebApplicationFactory>
         var badRequestBody = await new StreamReader(badRequestContext.Response.Body).ReadToEndAsync();
         badRequestBody.Should().NotContain(secret);
         badRequestBody.Should().Contain("The request is invalid.");
+        JsonDocument.Parse(badRequestBody).RootElement.GetProperty("code").GetString().Should().Be("invalid_request_body");
 
         var tooLarge = new ExceptionHandlingMiddleware(
             _ => throw new InvalidDataException(secret, new BadHttpRequestException(secret, StatusCodes.Status413PayloadTooLarge)),
@@ -342,6 +343,7 @@ public class SecurityReviewTests : IClassFixture<WorklaneWebApplicationFactory>
         var tooLargeBody = await new StreamReader(tooLargeContext.Response.Body).ReadToEndAsync();
         tooLargeBody.Should().NotContain(secret);
         tooLargeBody.Should().Contain("The request body exceeds the size limit.");
+        JsonDocument.Parse(tooLargeBody).RootElement.GetProperty("code").GetString().Should().Be("request_too_large");
 
         var validation = new ExceptionHandlingMiddleware(
             _ => throw new FluentValidation.ValidationException("Body is required."),
@@ -351,6 +353,7 @@ public class SecurityReviewTests : IClassFixture<WorklaneWebApplicationFactory>
         validationContext.Response.Body.Position = 0;
         var validationBody = await new StreamReader(validationContext.Response.Body).ReadToEndAsync();
         validationBody.Should().Contain("Body is required.");
+        JsonDocument.Parse(validationBody).RootElement.GetProperty("code").GetString().Should().Be("validation_failed");
     }
 
     [Fact]
@@ -370,7 +373,9 @@ public class SecurityReviewTests : IClassFixture<WorklaneWebApplicationFactory>
                 new BadHttpRequestException("no marker text", StatusCodes.Status413PayloadTooLarge)));
         var typedContext = new ActionContext(new DefaultHttpContext(), new RouteData(), new ActionDescriptor(), typed);
         var result = ExceptionHandlingMiddleware.InvalidModelStateResponse(typedContext, _ => new BadRequestResult());
-        result.Should().BeOfType<ObjectResult>().Which.StatusCode.Should().Be(StatusCodes.Status413PayloadTooLarge);
+        var tooLargeResult = result.Should().BeOfType<ObjectResult>().Subject;
+        tooLargeResult.StatusCode.Should().Be(StatusCodes.Status413PayloadTooLarge);
+        tooLargeResult.Value.Should().BeOfType<ProblemDetails>().Which.Extensions["code"].Should().Be("request_too_large");
     }
 
     [Fact]
@@ -560,6 +565,9 @@ public class KestrelUploadLimitTests : IClassFixture<KestrelUploadFactory>
             var raisedBody = await raised.Content.ReadAsStringAsync();
             raised.StatusCode.Should().Be(HttpStatusCode.RequestEntityTooLarge, raisedBody);
             raisedBody.Should().Contain("File exceeds the maximum size");
+            var raisedProblem = JsonDocument.Parse(raisedBody).RootElement;
+            raisedProblem.GetProperty("code").GetString().Should().Be("file_too_large");
+            raisedProblem.GetProperty("maxBytes").GetInt64().Should().Be(WorklaneWebApplicationFactory.TestMaxUploadBytes);
         }
 
         var overEndpoint = new byte[FileStorageSettings.AttachmentRequestLimitBytes + 1];
@@ -581,12 +589,15 @@ public class KestrelUploadLimitTests : IClassFixture<KestrelUploadFactory>
             upload.StatusCode.Should().Be(HttpStatusCode.RequestEntityTooLarge, uploadBody);
             uploadBody.Should().Contain("exceeds the size limit");
             uploadBody.Should().NotContain("File exceeds the maximum size");
+            JsonDocument.Parse(uploadBody).RootElement.GetProperty("code").GetString().Should().Be("request_too_large");
         }
 
         var loginBody = new ByteArrayContent(overGlobal);
         loginBody.Headers.ContentType = new MediaTypeHeaderValue("application/json");
         var login = await board.Client.PostAsync("/api/auth/login", loginBody);
-        login.StatusCode.Should().Be(HttpStatusCode.RequestEntityTooLarge);
+        var loginText = await login.Content.ReadAsStringAsync();
+        login.StatusCode.Should().Be(HttpStatusCode.RequestEntityTooLarge, loginText);
+        JsonDocument.Parse(loginText).RootElement.GetProperty("code").GetString().Should().Be("request_too_large");
 
         var small = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
         (await board.Client.PostAsync("/api/auth/login", small)).StatusCode.Should().NotBe(HttpStatusCode.RequestEntityTooLarge);

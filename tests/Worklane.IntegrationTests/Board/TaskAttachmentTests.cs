@@ -89,8 +89,11 @@ public class TaskAttachmentTests : IClassFixture<WorklaneWebApplicationFactory>
             .StatusCode.Should().Be(HttpStatusCode.BadRequest);
 
         var tooBig = new byte[WorklaneWebApplicationFactory.TestMaxUploadBytes + 1];
-        (await UploadAsync(board.Client, task.Id, tooBig, "image/png", "big.png"))
-            .StatusCode.Should().Be(HttpStatusCode.RequestEntityTooLarge);
+        var tooBigResponse = await UploadAsync(board.Client, task.Id, tooBig, "image/png", "big.png");
+        tooBigResponse.StatusCode.Should().Be(HttpStatusCode.RequestEntityTooLarge);
+        var tooBigBody = await tooBigResponse.Content.ReadFromJsonAsync<JsonElement>(TestAuthHelper.JsonOptions);
+        tooBigBody.GetProperty("code").GetString().Should().Be("file_too_large");
+        tooBigBody.GetProperty("maxBytes").GetInt64().Should().Be(WorklaneWebApplicationFactory.TestMaxUploadBytes);
 
         var jpg = await UploadAsync(board.Client, task.Id, SampleFiles.Jpeg, "text/html", "photo.jpg");
         jpg.StatusCode.Should().Be(HttpStatusCode.Created);

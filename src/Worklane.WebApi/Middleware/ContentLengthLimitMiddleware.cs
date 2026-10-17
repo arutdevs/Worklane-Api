@@ -28,13 +28,15 @@ public class ContentLengthLimitMiddleware
 
         context.Response.StatusCode = StatusCodes.Status413PayloadTooLarge;
         context.Response.ContentType = "application/problem+json";
-        await context.Response.WriteAsJsonAsync(new ProblemDetails
+        var problem = new ProblemDetails
         {
             Status = StatusCodes.Status413PayloadTooLarge,
             Title = "Payload Too Large",
             Detail = "The request body exceeds the size limit.",
             Instance = context.Request.Path
-        });
+        };
+        problem.Extensions["code"] = "request_too_large";
+        await context.Response.WriteAsJsonAsync(problem);
     }
 
     internal static bool DeclaredBodyExceedsLimit(HttpContext context)

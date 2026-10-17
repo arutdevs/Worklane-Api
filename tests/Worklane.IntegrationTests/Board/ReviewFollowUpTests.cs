@@ -1,7 +1,9 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text.Json;
 using FluentAssertions;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
@@ -37,6 +39,9 @@ public class RateLimitAndQuotaTests : IClassFixture<RateLimitAndQuotaFactory>
         (await Comment(board.Client, task.Id, "two")).StatusCode.Should().Be(HttpStatusCode.Created);
         var blocked = await Comment(board.Client, task.Id, "three");
         blocked.StatusCode.Should().Be(HttpStatusCode.TooManyRequests);
+        var limited = await blocked.Content.ReadFromJsonAsync<JsonElement>(TestAuthHelper.JsonOptions);
+        limited.GetProperty("code").GetString().Should().Be("rate_limited");
+        limited.GetProperty("status").GetInt32().Should().Be(StatusCodes.Status429TooManyRequests);
 
         (await Comment(member.Client, task.Id, "member")).StatusCode.Should().Be(HttpStatusCode.Created);
 
@@ -66,7 +71,11 @@ public class RateLimitAndQuotaTests : IClassFixture<RateLimitAndQuotaFactory>
         var over = await Upload(board.Client, task.Id, SampleFiles.Jpeg, "shot.jpg");
         var body = await over.Content.ReadAsStringAsync();
         over.StatusCode.Should().Be(HttpStatusCode.Conflict, body);
-        body.Should().Contain("quota");
+        var problem = JsonDocument.Parse(body).RootElement;
+        problem.GetProperty("code").GetString().Should().Be("quota_exceeded");
+        problem.GetProperty("usedBytes").GetInt64().Should().Be(SampleFiles.Png.Length);
+        problem.GetProperty("quotaBytes").GetInt64().Should().Be(SampleFiles.Png.Length);
+        problem.GetProperty("fileBytes").GetInt64().Should().Be(SampleFiles.Jpeg.Length);
     }
 
     private static Task<HttpResponseMessage> Comment(HttpClient client, Guid taskId, string body) =>

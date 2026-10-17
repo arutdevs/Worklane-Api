@@ -104,8 +104,10 @@ public class TaskAttachmentService : ITaskAttachmentService
             throw new UnsupportedMediaTypeException(extension);
 
         var used = await WorkspaceUsageAsync(task.Project.WorkspaceId, cancellationToken);
+        // The header buffer holds the whole file when the read stopped early.
+        long? knownFileBytes = headerRead < header.Length ? headerRead : null;
         if (used >= _settings.WorkspaceQuotaBytes)
-            throw new ConflictException("Workspace storage quota exceeded.");
+            throw QuotaExceeded(used, knownFileBytes);
 
         var attachmentId = Guid.NewGuid();
         var attachment = new TaskAttachment
@@ -130,7 +132,7 @@ public class TaskAttachmentService : ITaskAttachmentService
         if (used + size > _settings.WorkspaceQuotaBytes)
         {
             await _storage.DeleteAsync(attachment.StorageKey, cancellationToken);
-            throw new ConflictException("Workspace storage quota exceeded.");
+            throw QuotaExceeded(used, size);
         }
 
         attachment.SizeBytes = size;
@@ -236,6 +238,22 @@ public class TaskAttachmentService : ITaskAttachmentService
     private bool ContentTypeAllowed(string contentType) =>
         _settings.AllowedContentTypes.Any(allowed =>
             string.Equals(NormalizeContentType(allowed), contentType, StringComparison.Ordinal));
+
+    private ConflictException QuotaExceeded(long usedBytes, long? fileBytes)
+    {
+        var parameters = new Dictionary<string, object?>
+        {
+            ["usedBytes"] = usedBytes,
+            ["quotaBytes"] = _settings.WorkspaceQuotaBytes
+        };
+        if (fileBytes is long bytes)
+            parameters["fileBytes"] = bytes;
+
+        return new ConflictException(
+            "quota_exceeded",
+            $"This workspace has used {usedBytes} of {_settings.WorkspaceQuotaBytes} bytes.",
+            parameters);
+    }
 
     private async Task<long> WorkspaceUsageAsync(Guid workspaceId, CancellationToken cancellationToken)
     {

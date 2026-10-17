@@ -1,0 +1,186 @@
+using System.Net;
+using System.Text.Json;
+using FluentAssertions;
+using FluentValidation;
+using FluentValidation.Results;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Abstractions;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
+using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Logging.Abstractions;
+using Worklane.Application.Common.Exceptions;
+using Worklane.WebApi.Middleware;
+
+namespace Worklane.IntegrationTests.Web;
+
+public class ExceptionHandlingMiddlewareTests
+{
+    [Fact]
+    public async Task AppException_WritesCodeAndTopLevelParams()
+    {
+        var body = await Invoke(new ConflictException(
+            "column_has_archived_cards",
+            "Column has 2 archived card(s). Choose a column to move them to.",
+            ErrorParams.Of(("activeTaskCount", 0), ("archivedTaskCount", 2))));
+
+        body.Status.Should().Be(HttpStatusCode.Conflict);
+        body.Json.GetProperty("code").GetString().Should().Be("column_has_archived_cards");
+        body.Json.GetProperty("title").GetString().Should().Be("Conflict");
+        body.Json.GetProperty("detail").GetString().Should().Be("Column has 2 archived card(s). Choose a column to move them to.");
+        body.Json.GetProperty("activeTaskCount").GetInt32().Should().Be(0);
+        body.Json.GetProperty("archivedTaskCount").GetInt32().Should().Be(2);
+        body.Json.TryGetProperty("extensions", out _).Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData(typeof(BadRequestException), "bad_request", HttpStatusCode.BadRequest)]
+    [InlineData(typeof(ConflictException), "conflict", HttpStatusCode.Conflict)]
+    [InlineData(typeof(ForbiddenAccessException), "forbidden", HttpStatusCode.Forbidden)]
+    [InlineData(typeof(AuthenticationFailedException), "unauthorized", HttpStatusCode.Unauthorized)]
+    [InlineData(typeof(NotFoundException), "not_found", HttpStatusCode.NotFound)]
+    public async Task DefaultCodes_FollowTheExceptionType(Type exceptionType, string code, HttpStatusCode status)
+    {
+        var exception = (Exception)Activator.CreateInstance(exceptionType, "nope")!;
+        var body = await Invoke(exception);
+
+        body.Status.Should().Be(status);
+        body.Json.GetProperty("code").GetString().Should().Be(code);
+        body.Json.GetProperty("detail").GetString().Should().Be("nope");
+    }
+
+    [Fact]
+    public async Task NotFound_UsesNotFoundCode()
+    {
+        var body = await Invoke(new NotFoundException(nameof(BoardColumnPlaceholder), Guid.Empty));
+        body.Status.Should().Be(HttpStatusCode.NotFound);
+        body.Json.GetProperty("code").GetString().Should().Be("not_found");
+    }
+
+    [Fact]
+    public async Task FileTooLarge_IncludesMaxBytes()
+    {
+        var body = await Invoke(new PayloadTooLargeException(10 * 1024 * 1024));
+        body.Status.Should().Be(HttpStatusCode.RequestEntityTooLarge);
+        body.Json.GetProperty("code").GetString().Should().Be("file_too_large");
+        body.Json.GetProperty("maxBytes").GetInt64().Should().Be(10 * 1024 * 1024);
+        body.Json.GetProperty("detail").GetString().Should().Be("File exceeds the maximum size of 10485760 bytes.");
+    }
+
+    [Fact]
+    public async Task UnsupportedMediaType_UsesItsCode()
+    {
+        var body = await Invoke(new UnsupportedMediaTypeException(".exe"));
+        body.Status.Should().Be(HttpStatusCode.UnsupportedMediaType);
+        body.Json.GetProperty("code").GetString().Should().Be("unsupported_media_type");
+    }
+
+    [Fact]
+    public async Task Validation_WritesFieldCodesAndKeepsEnglishErrors()
+    {
+        var body = await Invoke(new ValidationException(
+        [
+            new ValidationFailure("Name", "'Name' must not be empty.") { ErrorCode = "NotEmptyValidator" },
+            new ValidationFailure("WipLimit", "This field can't be cleared.") { ErrorCode = "not_nullable" }
+        ]));
+
+        body.Status.Should().Be(HttpStatusCode.BadRequest);
+        body.Json.GetProperty("code").GetString().Should().Be("validation_failed");
+        body.Json.GetProperty("errors").GetProperty("Name")[0].GetString().Should().Be("'Name' must not be empty.");
+        body.Json.GetProperty("fieldCodes").GetProperty("Name")[0].GetString().Should().Be("not_empty");
+        body.Json.GetProperty("fieldCodes").GetProperty("WipLimit")[0].GetString().Should().Be("not_nullable");
+    }
+
+    [Fact]
+    public async Task UnhandledException_IsInternalErrorWithoutTheMessage()
+    {
+        var body = await Invoke(new InvalidOperationException("SELECT secret FROM users"));
+        body.Status.Should().Be(HttpStatusCode.InternalServerError);
+        body.Json.GetProperty("code").GetString().Should().Be("internal_error");
+        body.Json.GetProperty("detail").GetString().Should().Be("An unexpected error occurred.");
+        body.Json.GetRawText().Should().NotContain("secret");
+    }
+
+    [Fact]
+    public async Task FrameworkBodyLimit_UsesRequestTooLarge()
+    {
+        var body = await Invoke(new BadHttpRequestException("Kestrel limit 2048", StatusCodes.Status413PayloadTooLarge));
+        body.Status.Should().Be(HttpStatusCode.RequestEntityTooLarge);
+        body.Json.GetProperty("code").GetString().Should().Be("request_too_large");
+        body.Json.GetProperty("detail").GetString().Should().Be("The request body exceeds the size limit.");
+        body.Json.GetRawText().Should().NotContain("2048");
+        body.Json.TryGetProperty("maxBytes", out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task FrameworkBadRequest_UsesInvalidRequestBody()
+    {
+        var body = await Invoke(new BadHttpRequestException("malformed", StatusCodes.Status400BadRequest));
+        body.Status.Should().Be(HttpStatusCode.BadRequest);
+        body.Json.GetProperty("code").GetString().Should().Be("invalid_request_body");
+        body.Json.GetProperty("detail").GetString().Should().Be("The request is invalid.");
+    }
+
+    [Fact]
+    public async Task ReservedParamNames_DoNotReplaceCode()
+    {
+        var body = await Invoke(new ConflictException(
+            "column_delete_conflict",
+            "The column changed while it was being deleted. Reload the board and try again.",
+            ErrorParams.Of(("code", "should-not-win"))));
+
+        body.Json.GetProperty("code").GetString().Should().Be("column_delete_conflict");
+    }
+
+    [Fact]
+    public void InvalidModelState_StampsRequestTooLarge()
+    {
+        var http = new DefaultHttpContext();
+        http.Request.Path = "/api/tasks/x/attachments";
+        var modelState = new ModelStateDictionary();
+        modelState.TryAddModelException("file", new BadHttpRequestException("too big", StatusCodes.Status413PayloadTooLarge));
+        var context = new ActionContext(http, new RouteData(), new ActionDescriptor(), modelState);
+
+        var result = ExceptionHandlingMiddleware.InvalidModelStateResponse(context, _ => new BadRequestResult());
+
+        var problem = result.Should().BeOfType<ObjectResult>().Subject;
+        problem.StatusCode.Should().Be(StatusCodes.Status413PayloadTooLarge);
+        var body = problem.Value.Should().BeOfType<ProblemDetails>().Subject;
+        body.Extensions["code"].Should().Be("request_too_large");
+    }
+
+    [Fact]
+    public void InvalidModelState_StampsInvalidRequestBodyOnTheBuiltInResult()
+    {
+        var http = new DefaultHttpContext();
+        http.Request.Path = "/api/tasks";
+        var modelState = new ModelStateDictionary();
+        modelState.AddModelError("title", "Required");
+        var context = new ActionContext(http, new RouteData(), new ActionDescriptor(), modelState);
+
+        var result = ExceptionHandlingMiddleware.InvalidModelStateResponse(
+            context,
+            ctx => new ObjectResult(new ValidationProblemDetails(ctx.ModelState)) { StatusCode = 400 });
+
+        var problem = result.Should().BeOfType<ObjectResult>().Subject.Value.Should().BeOfType<ValidationProblemDetails>().Subject;
+        problem.Extensions["code"].Should().Be("invalid_request_body");
+    }
+
+    private static async Task<(HttpStatusCode Status, JsonElement Json, string? ContentType)> Invoke(Exception exception)
+    {
+        var middleware = new ExceptionHandlingMiddleware(
+            _ => throw exception,
+            NullLogger<ExceptionHandlingMiddleware>.Instance);
+        var context = new DefaultHttpContext();
+        context.Request.Path = "/api/example";
+        context.Response.Body = new MemoryStream();
+
+        await middleware.InvokeAsync(context);
+
+        context.Response.Body.Position = 0;
+        using var document = await JsonDocument.ParseAsync(context.Response.Body);
+        return ((HttpStatusCode)context.Response.StatusCode, document.RootElement.Clone(), context.Response.ContentType);
+    }
+
+    private sealed class BoardColumnPlaceholder;
+}

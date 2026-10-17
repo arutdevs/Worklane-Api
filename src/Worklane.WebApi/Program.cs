@@ -77,13 +77,15 @@ builder.Services.AddRateLimiter(options =>
     options.OnRejected = async (context, cancellationToken) =>
     {
         context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
-        await context.HttpContext.Response.WriteAsJsonAsync(new ProblemDetails
+        var problem = new ProblemDetails
         {
             Status = StatusCodes.Status429TooManyRequests,
             Title = "Too Many Requests",
             Detail = "Too many attachment or comment requests for this user and workspace.",
             Instance = context.HttpContext.Request.Path
-        }, cancellationToken);
+        };
+        problem.Extensions["code"] = "rate_limited";
+        await context.HttpContext.Response.WriteAsJsonAsync(problem, cancellationToken);
     };
     options.AddPolicy("attachments", httpContext =>
     {

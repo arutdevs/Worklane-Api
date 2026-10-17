@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text;
 using FluentValidation;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -68,11 +69,25 @@ public class ExceptionHandlingMiddleware
             Instance = context.Request.Path
         };
 
+        problemDetails.Extensions["code"] = CodeFor(exception, statusCode);
+
+        if (exception is AppException app)
+        {
+            foreach (var (key, value) in app.Params)
+            {
+                if (!ReservedExtensions.Contains(key))
+                    problemDetails.Extensions[key] = value;
+            }
+        }
+
         if (exception is ValidationException validationException)
         {
             problemDetails.Extensions["errors"] = validationException.Errors
                 .GroupBy(e => e.PropertyName)
                 .ToDictionary(g => g.Key, g => g.Select(e => e.ErrorMessage).ToArray());
+            problemDetails.Extensions["fieldCodes"] = validationException.Errors
+                .GroupBy(e => e.PropertyName)
+                .ToDictionary(g => g.Key, g => g.Select(e => ToFieldCode(e.ErrorCode)).ToArray());
         }
 
         context.Response.ContentType = "application/problem+json";
@@ -109,8 +124,65 @@ public class ExceptionHandlingMiddleware
             HttpStatusCode.Conflict => "The request conflicts with the current state.",
             HttpStatusCode.RequestEntityTooLarge => "The request body exceeds the size limit.",
             HttpStatusCode.UnsupportedMediaType => "The file type is not allowed.",
+            HttpStatusCode.TooManyRequests => "Too many requests.",
             _ => "An unexpected error occurred."
         };
+    }
+
+    private static readonly HashSet<string> ReservedExtensions = new(StringComparer.Ordinal)
+    {
+        "type", "title", "status", "detail", "instance", "code", "errors", "fieldCodes", "traceId"
+    };
+
+    private static string CodeFor(Exception exception, HttpStatusCode statusCode) => exception switch
+    {
+        AppException app => app.Code,
+        ValidationException => "validation_failed",
+        BadHttpRequestException { StatusCode: StatusCodes.Status413PayloadTooLarge } => "request_too_large",
+        BadHttpRequestException => "invalid_request_body",
+        InvalidDataException { InnerException: BadHttpRequestException { StatusCode: StatusCodes.Status413PayloadTooLarge } } => "request_too_large",
+        InvalidDataException { InnerException: BadHttpRequestException } => "invalid_request_body",
+        _ => statusCode switch
+        {
+            HttpStatusCode.BadRequest => "bad_request",
+            HttpStatusCode.Unauthorized => "unauthorized",
+            HttpStatusCode.Forbidden => "forbidden",
+            HttpStatusCode.NotFound => "not_found",
+            HttpStatusCode.Conflict => "conflict",
+            HttpStatusCode.RequestEntityTooLarge => "request_too_large",
+            HttpStatusCode.UnsupportedMediaType => "unsupported_media_type",
+            HttpStatusCode.TooManyRequests => "rate_limited",
+            _ => "internal_error"
+        }
+    };
+
+    /// <summary>
+    /// FluentValidation's default error code is the validator class name
+    /// (<c>NotEmptyValidator</c>). A code that is already snake_case is kept.
+    /// </summary>
+    private static string ToFieldCode(string? errorCode)
+    {
+        if (string.IsNullOrWhiteSpace(errorCode))
+            return "invalid";
+
+        if (errorCode.All(c => char.IsAsciiLetterLower(c) || char.IsAsciiDigit(c) || c == '_'))
+            return errorCode;
+
+        var name = errorCode.EndsWith("Validator", StringComparison.Ordinal)
+            ? errorCode[..^"Validator".Length]
+            : errorCode;
+
+        var builder = new StringBuilder(name.Length + 4);
+        for (var i = 0; i < name.Length; i++)
+        {
+            var c = name[i];
+            if (char.IsUpper(c) && i > 0 && builder.Length > 0 && builder[^1] != '_')
+                builder.Append('_');
+            if (c != '_')
+                builder.Append(char.ToLowerInvariant(c));
+        }
+
+        return builder.Length == 0 ? "invalid" : builder.ToString();
     }
 
     /// <summary>
@@ -122,15 +194,22 @@ public class ExceptionHandlingMiddleware
     public static IActionResult InvalidModelStateResponse(ActionContext context, Func<ActionContext, IActionResult> builtIn)
     {
         if (!ModelStateRecordsBodyTooLarge(context.ModelState))
-            return builtIn(context);
+        {
+            var result = builtIn(context);
+            if (result is ObjectResult { Value: ProblemDetails problem } && !problem.Extensions.ContainsKey("code"))
+                problem.Extensions["code"] = "invalid_request_body";
+            return result;
+        }
 
-        return new ObjectResult(new ProblemDetails
+        var tooLarge = new ProblemDetails
         {
             Status = StatusCodes.Status413PayloadTooLarge,
             Title = "Payload Too Large",
             Detail = "The request body exceeds the size limit.",
             Instance = context.HttpContext.Request.Path
-        })
+        };
+        tooLarge.Extensions["code"] = "request_too_large";
+        return new ObjectResult(tooLarge)
         {
             StatusCode = StatusCodes.Status413PayloadTooLarge,
             ContentTypes = { "application/problem+json" }
