@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.IdentityModel.JsonWebTokens;
 using Worklane.Infrastructure.Persistence;
 
@@ -18,18 +19,34 @@ internal static class AttachmentRateLimitPartition
 
         var workspace = "unknown";
         if (TryGetTaskId(httpContext, out var taskId))
-        {
-            var db = httpContext.RequestServices.GetRequiredService<WorklaneDbContext>();
-            var id = db.TaskItems
-                .IgnoreQueryFilters()
-                .Where(t => t.Id == taskId)
-                .Select(t => (Guid?)t.Project.WorkspaceId)
-                .FirstOrDefault();
-            if (id is Guid workspaceId)
-                workspace = workspaceId.ToString("N");
-        }
+            workspace = WorkspaceForTask(httpContext, taskId);
 
         return sub + ":" + workspace;
+    }
+
+    private static string WorkspaceForTask(HttpContext httpContext, Guid taskId)
+    {
+        var cache = httpContext.RequestServices.GetService<IMemoryCache>();
+        var cacheKey = "task-workspace:" + taskId.ToString("N");
+        if (cache is not null && cache.TryGetValue(cacheKey, out string? cached) && cached is not null)
+            return cached;
+
+        var db = httpContext.RequestServices.GetRequiredService<WorklaneDbContext>();
+        var id = db.TaskItems
+            .IgnoreQueryFilters()
+            .Where(t => t.Id == taskId)
+            .Select(t => (Guid?)t.Project.WorkspaceId)
+            .FirstOrDefault();
+        var workspace = id is Guid workspaceId ? workspaceId.ToString("N") : "unknown";
+        if (cache is not null && workspace != "unknown")
+        {
+            cache.Set(cacheKey, workspace, new MemoryCacheEntryOptions
+            {
+                AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(10)
+            });
+        }
+
+        return workspace;
     }
 
     private static bool TryGetTaskId(HttpContext httpContext, out Guid taskId)

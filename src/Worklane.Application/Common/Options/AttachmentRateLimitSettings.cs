@@ -1,8 +1,8 @@
 namespace Worklane.Application.Common.Options;
 
 /// <summary>
-/// Fixed window for the "attachments" rate-limit policy. Comment creation shares it.
-/// The partition key is the caller's subject plus the task's workspace.
+/// Fixed window for the "attachments" rate-limit policy. Comment creation uses its own
+/// policy. The partition key is the caller's subject plus the task's workspace.
 /// </summary>
 public class AttachmentRateLimitSettings
 {

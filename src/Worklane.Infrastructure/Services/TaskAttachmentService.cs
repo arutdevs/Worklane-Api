@@ -103,7 +103,11 @@ public class TaskAttachmentService : ITaskAttachmentService
         if (!FileSignature.Matches(extension, header.AsSpan(0, headerRead)))
             throw new UnsupportedMediaTypeException(extension);
 
-        var used = await WorkspaceUsageAsync(task.Project.WorkspaceId, cancellationToken);
+        var workspaceId = task.Project.WorkspaceId;
+        // Fast path only. This sum does not see uncommitted uploads, so it is not
+        // the quota decision. InsertWithinWorkspaceQuotaAsync holds
+        // pg_advisory_xact_lock for this workspace across the re-check and the insert.
+        var used = await WorkspaceUsageAsync(workspaceId, cancellationToken);
         // The header buffer holds the whole file when the read stopped early.
         long? knownFileBytes = headerRead < header.Length ? headerRead : null;
         if (used >= _settings.WorkspaceQuotaBytes)
@@ -118,44 +122,24 @@ public class TaskAttachmentService : ITaskAttachmentService
             FileName = safeName,
             ContentType = detectedType,
             CreatedAt = DateTimeOffset.UtcNow,
-            StorageKey = $"{task.Project.WorkspaceId:N}/{task.Id:N}/{attachmentId:N}"
+            StorageKey = $"{workspaceId:N}/{task.Id:N}/{attachmentId:N}"
         };
 
         await using var prefixed = new PrefixedReadStream(header.AsMemory(0, headerRead), content);
-        var size = await _storage.SaveAsync(attachment.StorageKey, prefixed, _settings.MaxBytes, cancellationToken);
+        Stream body = prefixed;
+        if (StreamingTextChecker.RequiresFullScan(extension))
+            body = new ScanningReadStream(prefixed, StreamingTextChecker.Create(extension, header.AsSpan(0, headerRead)));
+
+        var size = await _storage.SaveAsync(attachment.StorageKey, body, _settings.MaxBytes, cancellationToken);
         if (size <= 0)
         {
             await _storage.DeleteAsync(attachment.StorageKey, cancellationToken);
             throw new BadRequestException("file_empty", "A non-empty file is required.");
         }
 
-        if (used + size > _settings.WorkspaceQuotaBytes)
-        {
-            await _storage.DeleteAsync(attachment.StorageKey, cancellationToken);
-            throw QuotaExceeded(used, size);
-        }
-
-        attachment.SizeBytes = size;
-        _db.TaskAttachments.Add(attachment);
-        _db.TaskActivities.Add(new TaskActivity
-        {
-            Id = Guid.NewGuid(),
-            TaskId = task.Id,
-            Type = TaskActivityType.AttachmentAdded,
-            ActorUserId = userId,
-            CreatedAt = attachment.CreatedAt,
-            Details = ActivityJson.Of(new
-            {
-                attachmentId = attachment.Id,
-                fileName = attachment.FileName,
-                contentType = attachment.ContentType,
-                sizeBytes = attachment.SizeBytes
-            })
-        });
-
         try
         {
-            await _db.SaveChangesAsync(cancellationToken);
+            await InsertWithinWorkspaceQuotaAsync(attachment, task.Id, userId, size, workspaceId, cancellationToken);
         }
         catch
         {
@@ -171,6 +155,46 @@ public class TaskAttachmentService : ITaskAttachmentService
             await BroadcastTaskCountsAsync(task.Id, cancellationToken);
         }, cancellationToken);
         return dto;
+    }
+
+    /// <summary>
+    /// Authoritative quota check and insert. The advisory lock is held until the
+    /// transaction commits, so a second upload in this workspace cannot insert
+    /// against a sum that omits this file.
+    /// </summary>
+    private async Task InsertWithinWorkspaceQuotaAsync(
+        TaskAttachment attachment,
+        Guid taskId,
+        Guid userId,
+        long size,
+        Guid workspaceId,
+        CancellationToken cancellationToken)
+    {
+        await using var transaction = await _db.Database.BeginTransactionAsync(cancellationToken);
+        await WorkspaceQuotaLock.AcquireAsync(_db.Database, workspaceId, cancellationToken);
+        var usedNow = await WorkspaceUsageAsync(workspaceId, cancellationToken);
+        if (usedNow + size > _settings.WorkspaceQuotaBytes)
+            throw QuotaExceeded(usedNow, size);
+
+        attachment.SizeBytes = size;
+        _db.TaskAttachments.Add(attachment);
+        _db.TaskActivities.Add(new TaskActivity
+        {
+            Id = Guid.NewGuid(),
+            TaskId = taskId,
+            Type = TaskActivityType.AttachmentAdded,
+            ActorUserId = userId,
+            CreatedAt = attachment.CreatedAt,
+            Details = ActivityJson.Of(new
+            {
+                attachmentId = attachment.Id,
+                fileName = attachment.FileName,
+                contentType = attachment.ContentType,
+                sizeBytes = attachment.SizeBytes
+            })
+        });
+        await _db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
     }
 
     public async Task<AttachmentContent> OpenAsync(Guid attachmentId, CancellationToken cancellationToken = default)

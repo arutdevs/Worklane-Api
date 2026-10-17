@@ -7,6 +7,8 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Worklane.Application.Board.Dtos;
@@ -14,6 +16,9 @@ using Worklane.Application.Board.Interfaces;
 using Worklane.Application.Common.Exceptions;
 using Worklane.Application.Projects.Dtos;
 using Worklane.Application.Workspaces.Dtos;
+using Worklane.Domain.Entities;
+using Worklane.Infrastructure.Persistence;
+using Worklane.Infrastructure.Services;
 using Worklane.IntegrationTests.Infrastructure;
 
 namespace Worklane.IntegrationTests.Board;
@@ -38,11 +43,17 @@ public class RateLimitAndQuotaTests : IClassFixture<RateLimitAndQuotaFactory>
         (await Comment(board.Client, task.Id, "one")).StatusCode.Should().Be(HttpStatusCode.Created);
         (await Comment(board.Client, task.Id, "two")).StatusCode.Should().Be(HttpStatusCode.Created);
         var blocked = await Comment(board.Client, task.Id, "three");
-        blocked.StatusCode.Should().Be(HttpStatusCode.TooManyRequests);
-        var limited = await blocked.Content.ReadFromJsonAsync<JsonElement>(TestAuthHelper.JsonOptions);
+        var blockedBody = await blocked.Content.ReadAsStringAsync();
+        blocked.StatusCode.Should().Be(HttpStatusCode.TooManyRequests, blockedBody);
+        blocked.Content.Headers.ContentType!.MediaType.Should().Be("application/problem+json");
+        blocked.Headers.RetryAfter.Should().NotBeNull();
+        blocked.Headers.RetryAfter!.Delta.Should().NotBeNull();
+        blocked.Headers.RetryAfter.Delta!.Value.TotalSeconds.Should().BeGreaterThan(0);
+        var limited = JsonDocument.Parse(blockedBody).RootElement;
         limited.GetProperty("code").GetString().Should().Be("rate_limited");
         limited.GetProperty("status").GetInt32().Should().Be(StatusCodes.Status429TooManyRequests);
 
+        (await Upload(board.Client, task.Id, SampleFiles.Png, "still.png")).StatusCode.Should().Be(HttpStatusCode.Created);
         (await Comment(member.Client, task.Id, "member")).StatusCode.Should().Be(HttpStatusCode.Created);
 
         var otherWorkspace = await (await board.Client.PostAsJsonAsync("/api/workspaces", new { name = "Elsewhere" }))
@@ -78,6 +89,59 @@ public class RateLimitAndQuotaTests : IClassFixture<RateLimitAndQuotaFactory>
         problem.GetProperty("fileBytes").GetInt64().Should().Be(SampleFiles.Jpeg.Length);
     }
 
+    [Fact]
+    public async Task ConcurrentUpload_WaitsForTheWorkspaceQuotaLock()
+    {
+        var board = await BoardTestSetup.CreateAsync(_factory, "quota-race@test.com");
+        var task = await BoardTestSetup.CreateTaskAsync(board, "Race");
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<WorklaneDbContext>();
+        await using var tx = await db.Database.BeginTransactionAsync();
+        await WorkspaceQuotaLock.AcquireAsync(db.Database, board.User.Workspace.Id, CancellationToken.None);
+        db.TaskAttachments.Add(new TaskAttachment
+        {
+            Id = Guid.NewGuid(),
+            TaskId = task.Id,
+            UploadedById = board.User.Tokens.User.Id,
+            FileName = "held.png",
+            ContentType = "image/png",
+            SizeBytes = SampleFiles.Png.Length,
+            StorageKey = $"{board.User.Workspace.Id:N}/{task.Id:N}/{Guid.NewGuid():N}",
+            CreatedAt = DateTimeOffset.UtcNow
+        });
+        await db.SaveChangesAsync();
+
+        var upload = Upload(board.Client, task.Id, SampleFiles.Png, "second.png");
+        var sawWaiter = false;
+        for (var i = 0; i < 50 && !sawWaiter && !upload.IsCompleted; i++)
+        {
+            await Task.Delay(100);
+            var connection = db.Database.GetDbConnection();
+            await using var command = connection.CreateCommand();
+            command.Transaction = tx.GetDbTransaction();
+            command.CommandText = """
+                SELECT COUNT(*)::bigint FROM pg_locks
+                WHERE locktype = 'advisory' AND NOT granted
+                """;
+            var count = (long)(await command.ExecuteScalarAsync())!;
+            sawWaiter = count > 0;
+        }
+
+        sawWaiter.Should().BeTrue("the upload should block on the workspace advisory lock");
+        await tx.CommitAsync();
+
+        var response = await upload;
+        var responseBody = await response.Content.ReadAsStringAsync();
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict, responseBody);
+
+        using var check = _factory.Services.CreateScope();
+        var stored = await check.ServiceProvider.GetRequiredService<WorklaneDbContext>().TaskAttachments
+            .IgnoreQueryFilters()
+            .CountAsync(a => a.TaskId == task.Id);
+        stored.Should().Be(1);
+    }
+
     private static Task<HttpResponseMessage> Comment(HttpClient client, Guid taskId, string body) =>
         client.PostAsJsonAsync($"/api/tasks/{taskId}/comments", new { body });
 
@@ -102,6 +166,8 @@ public class RateLimitAndQuotaFactory : WorklaneWebApplicationFactory
             {
                 ["RateLimit:Attachments:PermitLimit"] = "2",
                 ["RateLimit:Attachments:WindowSeconds"] = "60",
+                ["RateLimit:Comments:PermitLimit"] = "2",
+                ["RateLimit:Comments:WindowSeconds"] = "60",
                 ["FileStorage:WorkspaceQuotaBytes"] = SampleFiles.Png.Length.ToString(),
             });
         });

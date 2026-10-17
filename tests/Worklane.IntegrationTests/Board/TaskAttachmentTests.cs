@@ -4,8 +4,11 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using FluentAssertions;
 using Microsoft.AspNetCore.SignalR.Client;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.Configuration;
 using Worklane.Application.Board.Dtos;
 using Worklane.Domain.Enums;
+using Worklane.Infrastructure.Services;
 using Worklane.IntegrationTests.Infrastructure;
 
 namespace Worklane.IntegrationTests.Board;
@@ -248,5 +251,62 @@ public class TaskAttachmentTests : IClassFixture<WorklaneWebApplicationFactory>
         file.Headers.ContentType = new MediaTypeHeaderValue(contentType);
         content.Add(file, "file", fileName);
         return await client.PostAsync($"/api/tasks/{taskId}/attachments", content);
+    }
+}
+
+public class LargeTextUploadTests : IClassFixture<LargeTextUploadFactory>
+{
+    private readonly LargeTextUploadFactory _factory;
+
+    public LargeTextUploadTests(LargeTextUploadFactory factory)
+    {
+        _factory = factory;
+    }
+
+    [Fact]
+    public async Task Csv_WithScriptPastTheHeader_IsRejected_PlainCsvIsAccepted()
+    {
+        var board = await BoardTestSetup.CreateAsync(_factory, "files-scan@test.com");
+        var task = await BoardTestSetup.CreateTaskAsync(board, "Scan");
+
+        var plain = new byte[FileSignature.HeaderLength + 64];
+        for (var i = 0; i < plain.Length; i++)
+            plain[i] = (byte)(i % 8 == 7 ? '\n' : 'a');
+
+        (await UploadAsync(board.Client, task.Id, plain, "text/csv", "plain.csv"))
+            .StatusCode.Should().Be(HttpStatusCode.Created);
+
+        var script = "<script>alert(1)</script>\n"u8.ToArray();
+        var hidden = new byte[FileSignature.HeaderLength + script.Length];
+        plain.AsSpan(0, FileSignature.HeaderLength).CopyTo(hidden);
+        script.CopyTo(hidden.AsSpan(FileSignature.HeaderLength));
+
+        (await UploadAsync(board.Client, task.Id, hidden, "text/csv", "hidden.csv"))
+            .StatusCode.Should().Be(HttpStatusCode.UnsupportedMediaType);
+    }
+
+    private static async Task<HttpResponseMessage> UploadAsync(
+        HttpClient client, Guid taskId, byte[] bytes, string contentType, string fileName)
+    {
+        using var content = new MultipartFormDataContent();
+        var file = new ByteArrayContent(bytes);
+        file.Headers.ContentType = new MediaTypeHeaderValue(contentType);
+        content.Add(file, "file", fileName);
+        return await client.PostAsync($"/api/tasks/{taskId}/attachments", content);
+    }
+}
+
+public class LargeTextUploadFactory : WorklaneWebApplicationFactory
+{
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
+        base.ConfigureWebHost(builder);
+        builder.ConfigureAppConfiguration((_, config) =>
+        {
+            config.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["FileStorage:MaxBytes"] = (64 * 1024).ToString()
+            });
+        });
     }
 }

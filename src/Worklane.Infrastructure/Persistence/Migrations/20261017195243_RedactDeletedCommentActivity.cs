@@ -17,7 +17,8 @@ namespace Worklane.Infrastructure.Persistence.Migrations
         /// <inheritdoc />
         protected override void Down(MigrationBuilder migrationBuilder)
         {
-            // The removed comment text cannot be restored.
+            // No-op. Redaction is irreversible: the comment text that was removed from
+            // activity cannot be restored, so there is nothing for Down to put back.
         }
     }
 }

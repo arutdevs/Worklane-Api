@@ -34,7 +34,7 @@ public class TaskCommentsController : ControllerBase
 
     /// <summary>Adds a comment. Broadcasts <c>CommentCreated</c> to the project group.</summary>
     [HttpPost("api/tasks/{taskId:guid}/comments")]
-    [EnableRateLimiting("attachments")]
+    [EnableRateLimiting("comments")]
     [RequireWorkspaceRole(WorkspaceRole.Member, WorkspaceResourceType.Task, "taskId")]
     public async Task<ActionResult<CommentDto>> CreateComment(
         Guid taskId,

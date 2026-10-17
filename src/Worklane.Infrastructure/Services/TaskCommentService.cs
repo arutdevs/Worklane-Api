@@ -76,7 +76,7 @@ public class TaskCommentService : ITaskCommentService
             Type = TaskActivityType.CommentAdded,
             ActorUserId = userId,
             CreatedAt = now,
-            Details = ActivityJson.Of(new { commentId = comment.Id, body = comment.Body })
+            Details = ActivityJson.Of(new { commentId = comment.Id })
         });
         await _db.SaveChangesAsync(cancellationToken);
 
