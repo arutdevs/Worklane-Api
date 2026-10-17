@@ -3,10 +3,10 @@
 # Logs must not be world-readable; the scripts avoid printing secrets, but a
 # failed command can still echo a path.
 #
-# 15 18 * * * root /opt/worklane/deploy/beta/scripts/pg-dump-to-r2.sh /opt/worklane/deploy/beta/.env.prod >> /var/log/worklane-backup-prod.log 2>&1
-# 45 18 * * * root /opt/worklane/deploy/beta/scripts/pg-dump-to-r2.sh /opt/worklane/deploy/beta/.env.staging >> /var/log/worklane-backup-staging.log 2>&1
-# 30 18 * * * root /opt/worklane/deploy/beta/scripts/sync-attachments-to-r2.sh /opt/worklane/deploy/beta/.env.prod >> /var/log/worklane-attachments-prod.log 2>&1
-# 50 18 * * * root /opt/worklane/deploy/beta/scripts/sync-attachments-to-r2.sh /opt/worklane/deploy/beta/.env.staging >> /var/log/worklane-attachments-staging.log 2>&1
+# 15 18 * * * root /opt/worklane/deploy/beta/scripts/pg-dump-to-r2.sh /etc/worklane/prod.env >> /var/log/worklane-backup-prod.log 2>&1
+# 45 18 * * * root /opt/worklane/deploy/beta/scripts/pg-dump-to-r2.sh /etc/worklane/staging.env >> /var/log/worklane-backup-staging.log 2>&1
+# 30 18 * * * root /opt/worklane/deploy/beta/scripts/sync-attachments-to-r2.sh /etc/worklane/prod.env >> /var/log/worklane-attachments-prod.log 2>&1
+# 50 18 * * * root /opt/worklane/deploy/beta/scripts/sync-attachments-to-r2.sh /etc/worklane/staging.env >> /var/log/worklane-attachments-staging.log 2>&1
 #
 # Weekly restore drill (manual during the beta; do not cron it until it has been rehearsed):
 #   deploy/beta/scripts/restore-from-r2.sh <env-file> <object-key> --yes

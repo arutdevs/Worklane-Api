@@ -8,7 +8,9 @@ namespace Worklane.Infrastructure.Persistence;
 /// Lets <c>dotnet ef</c> build the DbContext without spinning up the full WebApi host
 /// (which otherwise fails validating unrelated Identity/DataProtection services at design time).
 /// <c>ConnectionStrings__Default</c> wins when it is set, so the beta migrator role is used
-/// on the VM. With the variable unset, local <c>dotnet ef</c> keeps the dev connection string.
+/// on the VM. The migrations bundle calls this factory and must not be passed
+/// <c>--connection</c>, which would put the password in the process argv.
+/// With the variable unset, local <c>dotnet ef</c> keeps the dev connection string.
 /// </summary>
 public class WorklaneDbContextFactory : IDesignTimeDbContextFactory<WorklaneDbContext>
 {

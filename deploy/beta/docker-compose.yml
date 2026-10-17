@@ -1,18 +1,27 @@
 # Oracle Cloud Always Free Ampere A1 (linux/arm64, 2 OCPU / 12 GB).
 # Same file, two compose projects, two env files, on one VM:
-#   deploy/beta/scripts/up.sh deploy/beta/.env.prod
-#   deploy/beta/scripts/up.sh deploy/beta/.env.staging
+#   deploy/beta/scripts/up.sh /etc/worklane/prod.env
+#   deploy/beta/scripts/up.sh /etc/worklane/staging.env
+# Those env files are outside this checkout (root:root, mode 600).
 # Postgres, the API, and nginx are not published on the host. cloudflared
 # dials out. Dev docker-compose.yml at the repo root is a different stack.
 #
 # Networks: edge (cloudflared, web), app (web, api), db (api, postgres, migrator).
 # db is internal, so Postgres has no route to the internet. The tunnel's
-# public hostname must be only http://web:80.
+# public hostname must be only http://web:8080 (unprivileged nginx).
+#
+# The worklane-*:beta image names below are fallbacks so this file renders
+# with no variable in any image: line. up.sh does not run them. It merges
+# /etc/worklane/<slot>.compose.yml, whose image: lines are literals
+# (worklane-api:prod-<sha>, and the staging equivalent). Do not
+# `docker compose up --build`: that rebuilds the shared :beta tags and
+# bypasses the image lock. up.sh uses `up -d --no-build`.
 #
 # Security: do not set ASPNETCORE_ENVIRONMENT=Development. Do not write a JWT
 # or password value in this file (Jwt__Secret is only ${JWT_SECRET} from the
-# git-ignored env file). Do not add a host port except 127.0.0.1:port:container.
-# Postgres stays unpublished. Do not add an object-storage container.
+# env file outside the checkout). Do not add a host port except
+# 127.0.0.1:port:container. Postgres stays unpublished. Do not add an
+# object-storage container. Do not bind-mount the repo root or deploy/beta.
 # Attachments stay on the local volume until B-18.
 
 name: ${COMPOSE_PROJECT_NAME:?set worklane-prod or worklane-staging}
@@ -75,7 +84,8 @@ services:
       start_period: 20s
 
   api:
-    # Built on the VM and tagged locally. pull_policy never: Compose will not pull this name.
+    # Fallback tag only. build-images.sh tags worklane-api:<slot>-<commit> and
+    # up.sh overrides this line. pull_policy never: Compose will not pull this name.
     image: worklane-api:beta
     platform: ${DOCKER_PLATFORM:-linux/arm64}
     pull_policy: never
@@ -129,7 +139,11 @@ services:
       start_period: 40s
 
   web:
-    # Built from the Worklane-Web repo on the VM and tagged locally. Not built by this file.
+    # Fallback tag only. Not built by this file. The operator builds Worklane-Web
+    # FROM nginxinc/nginx-unprivileged:1.29-alpine@sha256:0c79d56aee561a1d81c63f00eee5fb5fe29279560cdc55e91425133104c7fbe6
+    # at the reviewed Web commit, tags worklane-web:<slot>-<websha>, and
+    # record-web-image.sh stores that SHA plus `docker image inspect` id.
+    # That image listens on 8080 as uid 101. pull_policy never.
     image: worklane-web:beta
     platform: ${DOCKER_PLATFORM:-linux/arm64}
     pull_policy: never
@@ -150,7 +164,7 @@ services:
       api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "if command -v wget >/dev/null 2>&1; then wget -q -O /dev/null http://127.0.0.1/; elif command -v curl >/dev/null 2>&1; then curl -fsS -o /dev/null http://127.0.0.1/; else exit 1; fi"]
+      test: ["CMD-SHELL", "if command -v wget >/dev/null 2>&1; then wget -q -O /dev/null http://127.0.0.1:8080/; elif command -v curl >/dev/null 2>&1; then curl -fsS -o /dev/null http://127.0.0.1:8080/; else exit 1; fi"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -186,8 +200,10 @@ services:
       retries: 3
       start_period: 15s
 
-  # One-off EF migrator. Not started by `up`. The image already contains the
-  # migrations bundle. See scripts/ef-migrate.sh.
+  # One-off EF migrator. Not started by `up`. ef-migrate.sh builds this image
+  # from the same commit as the API and checks its id. The bundle reads
+  # ConnectionStrings__Default from the environment (no --connection, no
+  # repo bind mount). See scripts/ef-migrate.sh.
   migrator:
     profiles: ["migrate"]
     image: worklane-migrator:beta
@@ -199,11 +215,6 @@ services:
     restart: "no"
     networks: [db]
     working_dir: /tmp
-    volumes:
-      - type: bind
-        source: ../..
-        target: /src
-        read_only: true
     environment:
       ASPNETCORE_ENVIRONMENT: Production
       ConnectionStrings__Default: "Host=postgres;Port=5432;Database=${POSTGRES_DB:?};Username=${POSTGRES_MIGRATOR_USER:?};Password='${POSTGRES_MIGRATOR_PASSWORD:?}'"

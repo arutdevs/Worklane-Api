@@ -1,0 +1,15 @@
+# Example only. The real file is written beside the env file, for example
+# /etc/worklane/prod.images.lock, mode 600, root-owned. Scripts parse it by
+# key and never source it. Replace every value on the VM.
+# API_COMMIT and MIGRATOR_COMMIT are the same full SHA of this repo.
+# WEB_COMMIT is the reviewed Worklane-Web SHA (see Worklane-Web PR #2 for the
+# nginx config). WEB_IMAGE_ID is `docker image inspect --format '{{.Id}}'`.
+API_COMMIT=0000000000000000000000000000000000000000
+API_IMAGE=worklane-api:prod-0000000000000000000000000000000000000000
+API_IMAGE_ID=sha256:replace-me
+MIGRATOR_COMMIT=0000000000000000000000000000000000000000
+MIGRATOR_IMAGE=worklane-migrator:prod-0000000000000000000000000000000000000000
+MIGRATOR_IMAGE_ID=sha256:replace-me
+WEB_COMMIT=0000000000000000000000000000000000000000
+WEB_IMAGE=worklane-web:prod-0000000000000000000000000000000000000000
+WEB_IMAGE_ID=sha256:replace-me

@@ -52,7 +52,7 @@ rand() {
 
 umask 077
 workdir=$(mktemp -d)
-trap 'rm -rf "$workdir"' EXIT
+trap 'rm -rf "$workdir"; rm -f "$(deploy_dir)/WL63_DONE"' EXIT
 envfile="$workdir/env"
 cat >"$envfile" <<EOF
 COMPOSE_PROJECT_NAME=worklane-prod
@@ -138,6 +138,30 @@ if grep -nE 'uses:[[:space:]]+[^#[:space:]]+@(v[0-9]|main|master)' .github/workf
 fi
 if grep -nE 'dotnet tool install|dotnet ef ' deploy/beta/scripts/ef-migrate.sh; then
   die "ef-migrate.sh must not install dotnet-ef at runtime"
+fi
+if grep -nE '^[[:space:]]*[^#].*--connection' deploy/beta/migrate.sh; then
+  die "migrate.sh must not pass --connection"
+fi
+if grep -n '/src' deploy/beta/migrate.sh; then
+  die "migrate.sh must not refer to a /src mount"
+fi
+if grep -nE '(^|[^[:alnum:]-])--build([^[:alnum:]-]|$)' deploy/beta/scripts/up.sh; then
+  die "up.sh must not build images"
+fi
+if ! grep -q 'up -d --no-build' deploy/beta/scripts/up.sh; then
+  die "up.sh must start containers with --no-build"
+fi
+if ! grep -q 'build_migrator_image' deploy/beta/scripts/ef-migrate.sh; then
+  die "ef-migrate.sh must build the migrator from the locked API commit"
+fi
+if grep -n 'run --rm --no-build' deploy/beta/scripts/ef-migrate.sh; then
+  die "compose run has no --no-build flag on this Compose; do not pass --build"
+fi
+if grep -nE 'http://web:80([^0-9]|$)' deploy/beta/docker-compose.yml deploy/beta/README.md; then
+  die "tunnel origin must be http://web:8080"
+fi
+if grep -n 'mounts the repo read-only' deploy/beta/README.md; then
+  die "README still says the migrator mounts the repo"
 fi
 
 rendered="$workdir/compose.json"
@@ -241,8 +265,10 @@ assert "Jwt__Secret" not in menv
 conn = menv["ConnectionStrings__Default"]
 assert "Username=worklane_migrator" in conn
 mounts = migrator.get("volumes") or []
-src_mounts = [m for m in mounts if isinstance(m, dict) and m.get("target") == "/src"]
-assert src_mounts and src_mounts[0].get("read_only") is True, mounts
+assert mounts == [], mounts
+web_test = " ".join(services["web"]["healthcheck"]["test"])
+assert "127.0.0.1:8080" in web_test, web_test
+assert "127.0.0.1/" not in web_test.replace("127.0.0.1:8080", ""), web_test
 aws = migrate["services"]["awscli"]
 assert_hardened("awscli", aws)
 assert aws["image"].startswith("amazon/aws-cli:2.38.1@sha256:")
@@ -263,6 +289,119 @@ assert api_env["ASPNETCORE_ENVIRONMENT"] == "Production"
 print("compose config ok")
 PY
 
+# Fail when a beta service bind-mounts the repo root or anything under deploy/beta.
+# Named volumes are ignored. A bind of some other path is allowed.
+assert_no_repo_bind() {
+  python3 - "$1" "$(repo_root)" <<'PY'
+import json, os, sys
+doc = json.load(open(sys.argv[1]))
+repo = os.path.realpath(sys.argv[2])
+bad = []
+for name, service in doc.get("services", {}).items():
+    for mount in service.get("volumes") or []:
+        if not isinstance(mount, dict) or mount.get("type") != "bind":
+            continue
+        source = mount.get("source") or ""
+        norm = os.path.realpath(source)
+        parts = norm.split(os.sep)
+        contains_beta = any(
+            parts[i] == "deploy" and parts[i + 1] == "beta"
+            for i in range(len(parts) - 1)
+        )
+        if norm == repo or contains_beta:
+            bad.append(f"{name}:{source}")
+if bad:
+    print("beta service bind-mounts the repo or deploy/beta: " + ", ".join(bad), file=sys.stderr)
+    sys.exit(1)
+PY
+}
+
+assert_no_repo_bind "$rendered"
+assert_no_repo_bind "$workdir/migrate.json"
+
+# Control: a named volume and a bind outside the repo are not flagged.
+python3 - "$rendered" "$workdir/ok-binds.json" "$(repo_root)" <<'PY'
+import json, sys
+doc = json.load(open(sys.argv[1]))
+doc["services"]["api"]["volumes"] = [
+    {"type": "volume", "source": "worklane-prod_pgdata", "target": "/var/lib/postgresql/data"},
+    {"type": "bind", "source": "/var/lib/worklane-outside", "target": "/data"},
+    {"type": "bind", "source": sys.argv[3] + "/src", "target": "/just-src"},
+]
+json.dump(doc, open(sys.argv[2], "w"))
+PY
+assert_no_repo_bind "$workdir/ok-binds.json"
+
+# Negative: repo root, and a path that contains deploy/beta.
+for source in "$(repo_root)" "$(repo_root)/deploy/beta" "$(repo_root)/deploy/beta/scripts"; do
+  python3 - "$rendered" "$workdir/bad-bind.json" "$source" <<'PY'
+import json, sys
+doc = json.load(open(sys.argv[1]))
+doc["services"]["api"]["volumes"] = [
+    {"type": "bind", "source": sys.argv[3], "target": "/src", "read_only": True}
+]
+json.dump(doc, open(sys.argv[2], "w"))
+PY
+  set +e
+  bind_out=$(assert_no_repo_bind "$workdir/bad-bind.json" 2>&1)
+  bind_status=$?
+  set -e
+  [[ "$bind_status" -ne 0 ]]
+  printf '%s\n' "$bind_out" | grep -q 'bind-mounts the repo or deploy/beta'
+done
+
+# Same check against a real compose render, not only a mutated document.
+bad_override="$workdir/bad-bind.yml"
+cat >"$bad_override" <<EOF
+services:
+  migrator:
+    volumes:
+      - type: bind
+        source: $(repo_root)
+        target: /src
+        read_only: true
+EOF
+docker compose --env-file "$envfile" -f "$compose_path" -f "$bad_override" --profile migrate config --format json >"$workdir/bad-render.json"
+set +e
+bind_out=$(assert_no_repo_bind "$workdir/bad-render.json" 2>&1)
+bind_status=$?
+set -e
+[[ "$bind_status" -ne 0 ]]
+printf '%s\n' "$bind_out" | grep -q 'migrator:'
+
+# Generated override: literal name and images, no ${ in an image line.
+sha40=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+websha=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+# shellcheck source=lib.sh
+source "$SCRIPT_DIR/lib.sh"
+write_override_file "$workdir/sample.compose.yml" worklane-prod \
+  "worklane-api:prod-${sha40}" \
+  "worklane-migrator:prod-${sha40}" \
+  "worklane-web:prod-${websha}"
+grep -q '^name: worklane-prod$' "$workdir/sample.compose.yml"
+if grep -nE '^[[:space:]]*image:[[:space:]]*.*\$' "$workdir/sample.compose.yml"; then
+  die "sample override has a variable image"
+fi
+set +e
+(
+  write_override_file "$workdir/bad-image.yml" worklane-prod 'worklane-api:beta' 'worklane-migrator:beta'
+) >"$workdir/bad-image.out" 2>&1
+bad_image_status=$?
+set -e
+[[ "$bad_image_status" -ne 0 ]]
+grep -q '40 hex' "$workdir/bad-image.out"
+docker compose -f "$workdir/sample.compose.yml" config --no-interpolate --format json >"$workdir/sample.json"
+python3 - "$workdir/sample.json" <<'PY'
+import json, sys
+doc = json.load(open(sys.argv[1]))
+assert doc["name"] == "worklane-prod"
+for service in doc["services"].values():
+    image = service["image"]
+    assert "$" not in image, image
+    assert not image.endswith(":beta"), image
+print("override images are literal")
+PY
+
 # up.sh must stop on the WL-63 gate before it talks to the Docker daemon.
 set +e
 up_out=$("$SCRIPT_DIR/up.sh" "$envfile" 2>&1)
@@ -271,6 +410,17 @@ set -e
 [[ "$up_status" -ne 0 ]]
 printf '%s\n' "$up_out" | grep -q 'WL-63'
 printf '%s\n' "$up_out" | grep -q 'preflight --up ok'
+
+# After the gate, a missing image lock still refuses to build or start.
+printf 'yes\n' >"$(deploy_dir)/WL63_DONE"
+set +e
+lock_out=$("$SCRIPT_DIR/up.sh" "$envfile" 2>&1)
+lock_status=$?
+set -e
+rm -f "$(deploy_dir)/WL63_DONE"
+[[ "$lock_status" -ne 0 ]]
+printf '%s\n' "$lock_out" | grep -q 'image lock'
+printf '%s\n' "$lock_out" | grep -q 'preflight --up ok'
 
 # Placeholder JWT is rejected.
 bad="$workdir/bad"
