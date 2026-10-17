@@ -40,7 +40,7 @@ public class TaskCardCountTests : IClassFixture<WorklaneWebApplicationFactory>
             .Content.ReadFromJsonAsync<CommentDto>(TestAuthHelper.JsonOptions);
         (await board.Client.PostAsJsonAsync($"/api/tasks/{task.Id}/comments", new { body = "Two" }))
             .StatusCode.Should().Be(HttpStatusCode.Created);
-        (await UploadAsync(board.Client, task.Id, [1, 2, 3], "image/png", "shot.png"))
+        (await UploadAsync(board.Client, task.Id, SampleFiles.Png, "image/png", "shot.png"))
             .StatusCode.Should().Be(HttpStatusCode.Created);
 
         await AssertCounts(await GetTask(board, task.Id), 2, 1);
