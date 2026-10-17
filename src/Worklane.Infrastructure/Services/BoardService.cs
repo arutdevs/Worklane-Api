@@ -1,7 +1,9 @@
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 using Worklane.Application.Board.Dtos;
 using Worklane.Application.Board.Interfaces;
 using Worklane.Application.Common.Exceptions;
+using Worklane.Application.Common.Interfaces;
 using Worklane.Domain.Common;
 using Worklane.Domain.Entities;
 using Worklane.Domain.Enums;
@@ -14,11 +16,13 @@ public class BoardService : IBoardService
 {
     private readonly WorklaneDbContext _db;
     private readonly IBoardNotifier _notifier;
+    private readonly ICurrentTenantService _tenant;
 
-    public BoardService(WorklaneDbContext db, IBoardNotifier notifier)
+    public BoardService(WorklaneDbContext db, IBoardNotifier notifier, ICurrentTenantService tenant)
     {
         _db = db;
         _notifier = notifier;
+        _tenant = tenant;
     }
 
     // ── Columns ──────────────────────────────────────────────────────────────
@@ -40,6 +44,7 @@ public class BoardService : IBoardService
 
         var assigneeMap = await BuildAssigneeMapAsync(tasks, ct);
         var cardCounts = await LoadCardCountsAsync(tasks.Select(t => t.Id), ct);
+        var archivedCounts = await LoadArchivedTaskCountsAsync(columns.Select(c => c.Id), ct);
 
         return columns.Select(col =>
         {
@@ -48,7 +53,7 @@ public class BoardService : IBoardService
             return new BoardColumnDto(
                 col.Id, col.ProjectId, col.Name, col.Order, col.IsDone, col.IsInProgress,
                 colTasks.Select(t => ToDto(t, project.Key, assigneeMap, over, cardCounts)).ToList(),
-                col.WipLimit, colTasks.Count, over);
+                col.WipLimit, colTasks.Count, over, archivedCounts.GetValueOrDefault(col.Id));
         }).ToList();
     }
 
@@ -88,37 +93,89 @@ public class BoardService : IBoardService
 
         await _db.SaveChangesAsync(ct);
         var taskCount = await _db.TaskItems.CountAsync(t => t.ColumnId == column.Id, ct);
-        return ToColumnDto(column, taskCount);
+        var archivedCount = await CountArchivedTasksAsync(column.Id, ct);
+        return ToColumnDto(column, taskCount, archivedCount);
     }
 
     public async Task DeleteColumnAsync(Guid columnId, Guid? targetColumnId, CancellationToken ct = default)
     {
         var column = await _db.BoardColumns
-            .Include(c => c.Tasks)
             .FirstOrDefaultAsync(c => c.Id == columnId, ct)
             ?? throw new NotFoundException(nameof(BoardColumn), columnId);
 
-        if (column.Tasks.Count > 0)
+        if (_tenant.WorkspaceId is not Guid workspaceId)
+            throw new ForbiddenAccessException();
+
+        var cards = await _db.TaskItems
+            .IgnoreQueryFilters()
+            .Where(t => t.ColumnId == columnId && t.Project.WorkspaceId == workspaceId)
+            .OrderBy(t => t.Order)
+            .ToListAsync(ct);
+
+        if (cards.Count == 0)
         {
-            if (targetColumnId is null)
-                throw new ConflictException("Column has tasks. Provide targetColumnId to move them first.");
+            _db.BoardColumns.Remove(column);
+            await SaveColumnDeleteAsync(ct);
+            return;
+        }
 
-            var target = await RequireColumnInProjectAsync(column.ProjectId, targetColumnId.Value, ct);
+        var activeCount = cards.Count(t => !t.IsArchived);
+        var archivedCount = cards.Count - activeCount;
 
-            var maxOrder = await _db.TaskItems
-                .Where(t => t.ColumnId == target.Id)
-                .MaxAsync(t => (double?)t.Order, ct) ?? 0;
+        if (targetColumnId is null)
+        {
+            var otherColumns = await _db.BoardColumns
+                .CountAsync(c => c.ProjectId == column.ProjectId && c.Id != column.Id, ct);
 
-            int i = 0;
-            foreach (var task in column.Tasks)
+            if (otherColumns == 0 && archivedCount > 0)
             {
-                task.ColumnId = targetColumnId.Value;
-                task.Order = maxOrder + (++i) * 65536.0;
+                throw new ConflictException(
+                    "last_column_has_archived_cards",
+                    $"This is the project's last column and it has {archivedCount} archived card(s). Purge them or add another column first.",
+                    ErrorParams.Of(("archivedTaskCount", archivedCount)));
             }
+
+            if (activeCount > 0)
+            {
+                throw new ConflictException(
+                    "column_has_active_cards",
+                    $"Column has {activeCount} card(s) and {archivedCount} archived card(s). Provide targetColumnId to move them first.",
+                    ErrorParams.Of(("activeTaskCount", activeCount), ("archivedTaskCount", archivedCount)));
+            }
+
+            throw new ConflictException(
+                "column_has_archived_cards",
+                $"Column has {archivedCount} archived card(s). Choose a column to move them to.",
+                ErrorParams.Of(("activeTaskCount", activeCount), ("archivedTaskCount", archivedCount)));
+        }
+
+        if (targetColumnId.Value == columnId)
+        {
+            throw new BadRequestException(
+                "target_column_same_as_source",
+                "Target column must be different from the column being deleted.");
+        }
+
+        var target = await _db.BoardColumns
+            .FirstOrDefaultAsync(c => c.Id == targetColumnId.Value && c.ProjectId == column.ProjectId, ct)
+            ?? throw new NotFoundException(
+                "target_column_not_found",
+                "Target column was not found in this project.");
+
+        var maxOrder = await _db.TaskItems
+            .IgnoreQueryFilters()
+            .Where(t => t.ColumnId == target.Id && t.Project.WorkspaceId == workspaceId)
+            .MaxAsync(t => (double?)t.Order, ct) ?? 0;
+
+        var i = 0;
+        foreach (var task in cards)
+        {
+            task.ColumnId = target.Id;
+            task.Order = maxOrder + (++i) * 65536.0;
         }
 
         _db.BoardColumns.Remove(column);
-        await _db.SaveChangesAsync(ct);
+        await SaveColumnDeleteAsync(ct);
     }
 
     // ── Tasks ─────────────────────────────────────────────────────────────────
@@ -479,9 +536,60 @@ public class BoardService : IBoardService
                 ct);
     }
 
-    private static BoardColumnDto ToColumnDto(BoardColumn c, int taskCount) =>
+    private static BoardColumnDto ToColumnDto(BoardColumn c, int taskCount, int archivedTaskCount = 0) =>
         new(c.Id, c.ProjectId, c.Name, c.Order, c.IsDone, c.IsInProgress, [],
-            c.WipLimit, taskCount, IsOverWip(c.WipLimit, taskCount));
+            c.WipLimit, taskCount, IsOverWip(c.WipLimit, taskCount), archivedTaskCount);
+
+    private async Task<IReadOnlyDictionary<Guid, int>> LoadArchivedTaskCountsAsync(
+        IEnumerable<Guid> columnIds, CancellationToken ct)
+    {
+        if (_tenant.WorkspaceId is not Guid workspaceId)
+            return new Dictionary<Guid, int>();
+
+        var ids = columnIds.Distinct().ToList();
+        if (ids.Count == 0)
+            return new Dictionary<Guid, int>();
+
+        var rows = await _db.TaskItems
+            .IgnoreQueryFilters()
+            .Where(t => ids.Contains(t.ColumnId) && t.IsArchived && t.Project.WorkspaceId == workspaceId)
+            .GroupBy(t => t.ColumnId)
+            .Select(g => new { ColumnId = g.Key, Count = g.Count() })
+            .ToListAsync(ct);
+
+        return rows.ToDictionary(r => r.ColumnId, r => r.Count);
+    }
+
+    private async Task<int> CountArchivedTasksAsync(Guid columnId, CancellationToken ct)
+    {
+        var counts = await LoadArchivedTaskCountsAsync([columnId], ct);
+        return counts.GetValueOrDefault(columnId);
+    }
+
+    private async Task SaveColumnDeleteAsync(CancellationToken ct)
+    {
+        try
+        {
+            await _db.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateException ex) when (IsForeignKeyViolation(ex))
+        {
+            throw new ConflictException(
+                "column_delete_conflict",
+                "The column changed while it was being deleted. Reload the board and try again.");
+        }
+    }
+
+    private static bool IsForeignKeyViolation(DbUpdateException exception)
+    {
+        for (var current = exception.InnerException; current is not null; current = current.InnerException)
+        {
+            if (current is PostgresException postgres && postgres.SqlState == PostgresErrorCodes.ForeignKeyViolation)
+                return true;
+        }
+
+        return false;
+    }
 
     private readonly record struct ColumnWip(int? Limit, int Count)
     {

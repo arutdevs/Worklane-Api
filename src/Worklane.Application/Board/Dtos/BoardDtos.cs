@@ -13,7 +13,8 @@ public record BoardColumnDto(
     IReadOnlyList<TaskItemDto> Tasks,
     int? WipLimit,
     int TaskCount,
-    bool IsOverWipLimit
+    bool IsOverWipLimit,
+    int ArchivedTaskCount = 0
 );
 
 public record TaskItemDto(
