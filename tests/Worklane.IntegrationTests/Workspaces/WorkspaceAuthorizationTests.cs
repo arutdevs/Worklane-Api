@@ -351,7 +351,7 @@ public class WorkspaceAuthorizationTests : IClassFixture<WorklaneWebApplicationF
 
         try
         {
-            await db.Database.MigrateAsync("20261017180618_AddCommentsAttachmentsActivityAndWip");
+            await db.Database.MigrateAsync("20261017195243_RedactDeletedCommentActivity");
             (await AuditTableCountAsync(db)).Should().Be(0);
         }
         finally

@@ -20,7 +20,7 @@ namespace Worklane.Infrastructure.Persistence.Migrations
                     ActorUserId = table.Column<Guid>(type: "uuid", nullable: false),
                     TargetUserId = table.Column<Guid>(type: "uuid", nullable: false),
                     Action = table.Column<string>(type: "character varying(32)", maxLength: 32, nullable: false),
-                    OldRole = table.Column<string>(type: "character varying(16)", maxLength: 16, nullable: false),
+                    OldRole = table.Column<string>(type: "character varying(16)", maxLength: 16, nullable: true),
                     NewRole = table.Column<string>(type: "character varying(16)", maxLength: 16, nullable: true),
                     OccurredAt = table.Column<DateTimeOffset>(type: "timestamp with time zone", nullable: false)
                 },

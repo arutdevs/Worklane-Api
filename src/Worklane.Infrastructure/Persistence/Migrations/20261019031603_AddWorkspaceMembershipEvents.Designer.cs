@@ -12,7 +12,7 @@ using Worklane.Infrastructure.Persistence;
 namespace Worklane.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(WorklaneDbContext))]
-    [Migration("20261017194051_AddWorkspaceMembershipEvents")]
+    [Migration("20261019031603_AddWorkspaceMembershipEvents")]
     partial class AddWorkspaceMembershipEvents
     {
         /// <inheritdoc />
@@ -606,7 +606,6 @@ namespace Worklane.Infrastructure.Persistence.Migrations
                         .HasColumnType("timestamp with time zone");
 
                     b.Property<string>("OldRole")
-                        .IsRequired()
                         .HasMaxLength(16)
                         .HasColumnType("character varying(16)");
 
