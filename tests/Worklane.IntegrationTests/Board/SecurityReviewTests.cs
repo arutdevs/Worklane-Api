@@ -685,8 +685,11 @@ public class KestrelUploadLimitTests : IClassFixture<KestrelUploadFactory>
         login.StatusCode.Should().Be(HttpStatusCode.RequestEntityTooLarge);
         login.Content.Headers.ContentType!.MediaType.Should().Be("application/problem+json");
 
+        // The oversized login above makes Kestrel abort that connection. A new client
+        // avoids sending the follow-up on the pooled connection that was just reset.
         var small = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
-        (await board.Client.PostAsync("/api/auth/login", small)).StatusCode.Should().NotBe(HttpStatusCode.RequestEntityTooLarge);
+        using var followUp = _factory.CreateClient();
+        (await followUp.PostAsync("/api/auth/login", small)).StatusCode.Should().NotBe(HttpStatusCode.RequestEntityTooLarge);
     }
 }
 
