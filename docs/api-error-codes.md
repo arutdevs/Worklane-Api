@@ -20,8 +20,8 @@ Reserved names are not overwritten by exception parameters, compared without reg
 | `file_empty` | 400 | | A non-empty file is required. | emitted |
 | `invalid_request_body` | 400 | | The request is invalid. | emitted |
 | `invalid_route_id` | 400 | | Route parameter "{name}" is missing or not a valid id. | emitted |
-| `assignee_not_member` | 400 | | Assignee must be a member of this workspace. | planned (WL-61) |
-| `validation_failed` | 400 | `errors`, `fieldCodes` | The validator's English message. `fieldCodes` are per-field codes, not response codes. `not_empty` is emitted for `NotEmptyValidator`. `not_nullable` is planned (WL-61). | emitted |
+| `assignee_not_member` | 400 | | Assignee must be a member of this workspace. | emitted |
+| `validation_failed` | 400 | `errors`, `fieldCodes` | The validator's English message. `fieldCodes` are per-field codes, not response codes. `not_empty` is emitted for `NotEmptyValidator`. `not_nullable` is emitted when `Title`, `Priority`, or `ColumnId` is JSON null. | emitted |
 | `target_column_same_as_source` | 400 | | Target column must be different from the column being deleted. | emitted |
 | `unauthorized` | 401 | | A valid access token is required. | emitted |
 | `forbidden` | 403 | | You do not have permission to perform this action. | emitted |

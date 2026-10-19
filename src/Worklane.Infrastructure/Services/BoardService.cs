@@ -226,39 +226,42 @@ public class BoardService : IBoardService
                 changes.Add((field, current, updated));
         }
 
-        if (request.Title is not null)
+        if (request.Title.IsSpecified)
         {
-            Track("title", task.Title, request.Title);
-            task.Title = request.Title;
+            Track("title", task.Title, request.Title.Value);
+            task.Title = request.Title.Value!;
         }
-        if (request.Description is not null)
+        if (request.Description.IsSpecified)
         {
-            Track("description", task.Description, request.Description);
-            task.Description = request.Description;
+            Track("description", task.Description, request.Description.Value);
+            task.Description = request.Description.Value;
         }
-        if (request.AssigneeId is { } updateAssigneeId)
+        if (request.AssigneeId.IsSpecified)
         {
-            await EnsureAssigneeIsMemberAsync(task.ProjectId, updateAssigneeId, ct);
-            Track("assigneeId", IdText(task.AssigneeId), IdText(updateAssigneeId));
-            task.AssigneeId = updateAssigneeId;
+            if (request.AssigneeId.Value is { } assigneeId)
+                await EnsureAssigneeIsMemberAsync(task.ProjectId, assigneeId, ct);
+            Track("assigneeId", IdText(task.AssigneeId), IdText(request.AssigneeId.Value));
+            task.AssigneeId = request.AssigneeId.Value;
         }
-        if (request.Priority.HasValue)
+        if (request.Priority.IsSpecified)
         {
-            Track("priority", task.Priority.ToString(), request.Priority.Value.ToString());
-            task.Priority = request.Priority.Value;
+            var priority = request.Priority.Value!.Value;
+            Track("priority", task.Priority.ToString(), priority.ToString());
+            task.Priority = priority;
         }
-        if (request.DueDate is not null)
+        if (request.DueDate.IsSpecified)
         {
-            Track("dueDate", DateText(task.DueDate), DateText(request.DueDate));
-            task.DueDate = request.DueDate;
+            Track("dueDate", DateText(task.DueDate), DateText(request.DueDate.Value));
+            task.DueDate = request.DueDate.Value;
         }
-        if (request.ColumnId.HasValue)
+        if (request.ColumnId.IsSpecified)
         {
-            await RequireColumnInProjectAsync(task.ProjectId, request.ColumnId.Value, ct);
-            Track("columnId", IdText(task.ColumnId), IdText(request.ColumnId));
-            task.ColumnId = request.ColumnId.Value;
+            var columnId = request.ColumnId.Value!.Value;
+            await RequireColumnInProjectAsync(task.ProjectId, columnId, ct);
+            Track("columnId", IdText(task.ColumnId), IdText(columnId));
+            task.ColumnId = columnId;
         }
-        if (request.EstimateDays.HasValue)
+        if (request.EstimateDays.IsSpecified)
         {
             Track("estimateDays", task.EstimateDays, request.EstimateDays.Value);
             task.EstimateDays = request.EstimateDays.Value;
@@ -544,7 +547,7 @@ public class BoardService : IBoardService
             .AnyAsync(m => m.WorkspaceId == workspaceId && m.UserId == assigneeId, ct);
 
         if (!isMember)
-            throw new BadRequestException("Assignee must be a member of this workspace.");
+            throw new BadRequestException("assignee_not_member", "Assignee must be a member of this workspace.");
     }
 
     private readonly record struct CardCounts(int Comments, int Attachments);
