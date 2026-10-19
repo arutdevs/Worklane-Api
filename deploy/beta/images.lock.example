@@ -2,14 +2,18 @@
 # /etc/worklane/prod.images.lock, mode 600, root-owned. Scripts parse it by
 # key and never source it. Replace every value on the VM.
 # API_COMMIT and MIGRATOR_COMMIT are the same full SHA of this repo.
-# WEB_COMMIT is the reviewed Worklane-Web SHA (see Worklane-Web PR #2 for the
-# nginx config). WEB_IMAGE_ID is `docker image inspect --format '{{.Id}}'`.
+# WEB_COMMIT is the reviewed Worklane-Web SHA. This draft records
+# 8bf129286373546443b2804feb622bfa67d9c509, the head of Worklane-Web PR #7
+# (CI green). Re-pin WEB_COMMIT and WEB_IMAGE to the merged Web commit
+# before any deploy. WEB_IMAGE_ID is filled on the VM by record-web-image.sh
+# (`docker image inspect --format '{{.Id}}'`). The image is nginx-unprivileged,
+# uid 101, listening on 8080.
 API_COMMIT=0000000000000000000000000000000000000000
 API_IMAGE=worklane-api:prod-0000000000000000000000000000000000000000
 API_IMAGE_ID=sha256:replace-me
 MIGRATOR_COMMIT=0000000000000000000000000000000000000000
 MIGRATOR_IMAGE=worklane-migrator:prod-0000000000000000000000000000000000000000
 MIGRATOR_IMAGE_ID=sha256:replace-me
-WEB_COMMIT=0000000000000000000000000000000000000000
-WEB_IMAGE=worklane-web:prod-0000000000000000000000000000000000000000
+WEB_COMMIT=8bf129286373546443b2804feb622bfa67d9c509
+WEB_IMAGE=worklane-web:prod-8bf129286373546443b2804feb622bfa67d9c509
 WEB_IMAGE_ID=sha256:replace-me

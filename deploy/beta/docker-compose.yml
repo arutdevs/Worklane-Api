@@ -148,6 +148,10 @@ services:
     # at the reviewed Web commit, tags worklane-web:<slot>-<websha>, and
     # record-web-image.sh stores that SHA plus `docker image inspect` id.
     # That image listens on 8080 as uid 101. pull_policy never, no build: section.
+    # The reviewed Web commit for this draft is 8bf129286373546443b2804feb622bfa67d9c509
+    # (Worklane-Web PR #7 head, CI green). Re-pin it to the merged Web commit
+    # before any deploy. nginx resolves the upstream host `api` at startup, so
+    # this service waits until that container is healthy.
     image: worklane-web:unlocked-do-not-run
     platform: ${DOCKER_PLATFORM:-linux/arm64}
     pull_policy: never

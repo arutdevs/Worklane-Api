@@ -113,15 +113,17 @@ Clone this repo to `/opt/worklane` (no secrets in git). Clone `Worklane-Web` nex
 ```bash
 # API and migrator, from this commit, for prod. Repeat with staging.env.
 deploy/beta/scripts/build-images.sh /etc/worklane/prod.env
-# Web. This repo does not build it. Tag the reviewed Worklane-Web commit
-# (Worklane-Web PR #2 is the nginx change). <websha> is `git rev-parse HEAD` there.
+# Web. This repo does not build it. The pin is Worklane-Web PR #7 head
+# 8bf129286373546443b2804feb622bfa67d9c509 (CI green).
+# Re-pin WEB_COMMIT to the merged Web commit before any deploy.
+# <websha> is `git rev-parse HEAD` in Worklane-Web at the commit you ship.
 docker build --platform linux/arm64 \
   --label "org.opencontainers.image.revision=<websha>" \
   -t "worklane-web:prod-<websha>" /path/to/Worklane-Web
 deploy/beta/scripts/record-web-image.sh /etc/worklane/prod.env <websha>
 ```
 
-`record-web-image.sh` stores that SHA and `docker image inspect --format '{{.Id}}'` in `/etc/worklane/prod.images.lock`. The image must run as uid 101 and expose `8080/tcp`. `up.sh` refuses to start if the local id, the tag, or the `org.opencontainers.image.revision` label does not match the lock. It also refuses to start if a local `worklane-*:unlocked-do-not-run` image exists. Worklane-Web is a private repo; this checkout cannot look the SHA up for you.
+`deploy/beta/images.lock.example` records that draft SHA as `WEB_COMMIT`. `record-web-image.sh` stores the SHA you pass and `docker image inspect --format '{{.Id}}'` in `/etc/worklane/prod.images.lock`. The image must run as uid 101 and expose `8080/tcp` (nginx-unprivileged). `web` depends on `api` with `condition: service_healthy`, because that nginx config resolves the host `api` when the process starts. `up.sh` refuses to start if the local id, the tag, or the `org.opencontainers.image.revision` label does not match the lock. It also refuses to start if a local `worklane-*:unlocked-do-not-run` image exists. Worklane-Web is a private repo; this checkout cannot look the SHA up for you. Do not deploy `8bf129286373546443b2804feb622bfa67d9c509` while Worklane-Web PR #7 is unmerged.
 
 `build-images.sh` refuses a dirty worktree (`git status --porcelain --untracked-files=all`) and labels the API and migrator images with the same revision. The build context is `git archive` of that commit, not the working tree, so an ignored file such as `src/Worklane.WebApi/LabProbe.cs` or `.env.local` is not copied into the image. On a VM that already ran an older compose file, remove the shared tags and any local sentinel so a plain `docker compose up` cannot find them:
 
@@ -286,7 +288,7 @@ Roles, created by `scripts/init-db-roles.sh`:
 | `worklane_app` | yes | the API |
 | `worklane_readonly` | yes | `pg_dump` |
 
-There is no `worklane_owner` role. `init-db-roles.sh` used to create that NOLOGIN role and grant it to the migrator, but it never ran `SET ROLE worklane_owner`. Default privileges are `FOR ROLE` the migrator, so new tables are owned by the migrator. Dropping the unused role is the simpler fix.
+There is no `worklane_owner` role. `init-db-roles.sh` used to create that NOLOGIN role and grant it to the migrator, but it never ran `SET ROLE worklane_owner`. Default privileges are `FOR ROLE` the migrator, so new tables are owned by the migrator. On a database created by the old script, `init-db-roles.sh` revokes that membership and runs `DROP ROLE IF EXISTS worklane_owner`. The app role may `SELECT` from `__EFMigrationsHistory` and cannot `INSERT`, `UPDATE`, or `DELETE` it. The migrator owns the table, so `Migrate()` still records a row. The revoke runs only after the table exists; `ef-migrate.sh` calls `init-db-roles.sh` again after the migrator.
 
 `scripts/ef-migrate.sh /etc/worklane/prod.env --yes` waits for Postgres, creates roles, writes a `pre-migration/` dump, then builds `worklane-migrator:<slot>-<api sha>` from the same commit as the locked API image. It checks `docker image inspect` against the lock and runs that image. `compose run` is not given `--build`, so it does not rebuild the tag it just recorded. The container does not install `dotnet-ef`, has no JWT secret, and does not mount the repo. `Worklane.Migrator` calls `WorklaneDbContextFactory`, which reads `ConnectionStrings__Default`. The entry script does not pass `--connection`, so the migrator password is not placed in the process argv. Both beta connection strings set `GSS Encryption Mode=Disable`. Postgres on the internal network uses a password, not Kerberos, and the setting stops Npgsql from warning that `libgssapi_krb5` is missing. A migration failure prints the exception type and `SqlState` only, not the exception message, because that message can contain the connection string. With that variable unset, `WorklaneDbContextFactory` uses the dev connection string only when `ASPNETCORE_ENVIRONMENT=Development`. Any other environment, including an unset one, throws. A local `dotnet ef` command now needs `ASPNETCORE_ENVIRONMENT=Development` when `ConnectionStrings__Default` is unset.
 
@@ -442,7 +444,7 @@ Render Free (Singapore) plus Neon Free (Singapore) plus R2 is the documented fal
 | WAL-G PITR | Dump script only. RPO is the last dump, not 5 minutes. |
 | Grafana Alloy, Sentry SDK | No exporter in the API. Env keys are comments. |
 | Image registry | CI builds the API image and the migrator Dockerfile for `linux/amd64` and `linux/arm64` and does not push either. The droplet builds locally. |
-| Web nginx | Worklane-Web is a separate repo. Build it FROM `nginxinc/nginx-unprivileged` (digest in the compose comment), listen 8080, and record that commit's image id with `record-web-image.sh`. Confirm `/hubs` upgrade headers there. |
+| Web nginx | Pin is Worklane-Web PR #7 head `8bf129286373546443b2804feb622bfa67d9c509` (CI green; nginx-unprivileged, uid 101, port 8080). Re-pin `WEB_COMMIT` to the merged Web commit before any deploy. `web` waits for a healthy `api` so nginx can resolve host `api` at startup. Confirm `/hubs` upgrade headers there. |
 | DataProtection keys in the API (WL-63a) | The volume, mount, and `DataProtection__KeysPath` are already here. WL-63a must read that path, call `SetApplicationName` separately per slot, choose `ProtectKeysWithCertificate` or record the accepted risk, and never back the dpkeys volume up to R2 unencrypted. Until then a restart still mints an ephemeral key. |
 | Apply migrations on the VM | Retried once here with no `--connection` argument. The migrator used `tcp://postgres:5432` and timed out to the container address. `pg_isready -h 127.0.0.1` inside Postgres succeeded. `ef-migrate.sh` on the Oracle VM must show a row in `__EFMigrationsHistory`. |
 | Weekly restore automation | Script is manual. Drill once before users, then decide if cron is safe. |

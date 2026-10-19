@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # Record a Worklane-Web image that is already loaded locally.
 # The tag must be worklane-web:<slot>-<40 hex sha of the reviewed Web commit>.
-# Example review: Worklane-Web PR #2 (nginx). This repo cannot see that private
-# repo; the operator supplies the SHA they reviewed and the local image id.
+# Draft pin: Worklane-Web PR #7 head 8bf129286373546443b2804feb622bfa67d9c509
+# (CI green). Re-pin this to the merged Web commit before any deploy.
+# This repo cannot see that private repo; the operator supplies the
+# SHA they reviewed and the local image id. The image must be nginx-unprivileged
+# on 8080 as uid 101. Compose waits for a healthy api so nginx can resolve `api`.
 #   record-web-image.sh /etc/worklane/prod.env <40-hex-sha>
 set -euo pipefail
 

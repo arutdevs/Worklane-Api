@@ -16,3 +16,4 @@ build_api_image
 build_migrator_image
 printf 'recorded %s\n' "$(image_lock_file)"
 printf 'Next: tag worklane-web:%s-<web sha> from the reviewed Worklane-Web commit, then record-web-image.sh\n' "$(env_slot)"
+printf 'Draft pin is 8bf129286373546443b2804feb622bfa67d9c509 (Worklane-Web PR #7 head, CI green). Re-pin to the merged Web commit before any deploy.\n'
