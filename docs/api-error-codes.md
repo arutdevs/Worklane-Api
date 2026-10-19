@@ -8,6 +8,8 @@ The JWT bearer challenge 401 is the only error with an empty body. The Web app u
 
 Reserved names are not overwritten by exception parameters, compared without regard to case: `type`, `title`, `status`, `detail`, `instance`, `code`, `errors`, `fieldCodes`, `traceId`.
 
+`fieldCodes` keys are currently the PascalCase property names. That is existing behaviour; this note does not change it.
+
 `not_found` and `unauthorized` are generic for now. Later cards rename them to `<entity>_not_found`, and to `invalid_credentials` / `refresh_token_invalid` (WL-64).
 
 `RequireWorkspaceRoleAttribute`: a non-member gets 404 `not_found` with the same body as a non-existent id. 403 `workspace_access_denied` is only for a member whose role is too low. That filter change ships in WL-88. Until then, a non-member still gets 403 `workspace_access_denied`.
