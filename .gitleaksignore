@@ -1,0 +1,4 @@
+# Fingerprints of the development JWT signing secret introduced in the initial commit.
+# A new secret, including one written on a Jwt__Secret or "Secret" line, is a different fingerprint.
+777101675a86af931180e267864b04cd4c584cd6:docker-compose.yml:generic-api-key:25
+777101675a86af931180e267864b04cd4c584cd6:src/Worklane.WebApi/appsettings.Development.json:generic-api-key:9

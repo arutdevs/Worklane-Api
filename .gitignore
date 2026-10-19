@@ -13,11 +13,8 @@ obj/
 # Local attachment storage (see FileStorage:LocalPath)
 data/
 
-# OS
-.DS_Store
-Thumbs.db
-
 # Local secrets. Placeholder templates (*.env.example) stay tracked.
+# .env.example is the only env file that belongs in git.
 .env
 .env.*
 !.env.example
@@ -26,3 +23,7 @@ deploy/beta/WL63_DONE
 # Generated per-env compose overrides and image locks, if one is copied into the tree.
 deploy/beta/*.compose.yml
 deploy/beta/*.images.lock
+
+# OS
+.DS_Store
+Thumbs.db

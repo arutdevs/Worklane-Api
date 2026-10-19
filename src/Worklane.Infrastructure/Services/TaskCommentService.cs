@@ -1,4 +1,6 @@
+using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Worklane.Application.Board.Dtos;
 using Worklane.Application.Board.Interfaces;
 using Worklane.Application.Common.Exceptions;
@@ -13,13 +15,22 @@ public class TaskCommentService : ITaskCommentService
 {
     private readonly WorklaneDbContext _db;
     private readonly IBoardNotifier _notifier;
+    private readonly IBoardService _board;
     private readonly IWorkspaceService _workspaces;
+    private readonly ILogger<TaskCommentService> _logger;
 
-    public TaskCommentService(WorklaneDbContext db, IBoardNotifier notifier, IWorkspaceService workspaces)
+    public TaskCommentService(
+        WorklaneDbContext db,
+        IBoardNotifier notifier,
+        IBoardService board,
+        IWorkspaceService workspaces,
+        ILogger<TaskCommentService> logger)
     {
         _db = db;
         _notifier = notifier;
+        _board = board;
         _workspaces = workspaces;
+        _logger = logger;
     }
 
     public async Task<IReadOnlyList<CommentDto>> GetCommentsAsync(Guid taskId, CancellationToken cancellationToken = default)
@@ -65,13 +76,17 @@ public class TaskCommentService : ITaskCommentService
             Type = TaskActivityType.CommentAdded,
             ActorUserId = userId,
             CreatedAt = now,
-            Details = ActivityJson.Of(new { commentId = comment.Id, body = comment.Body })
+            Details = ActivityJson.Of(new { commentId = comment.Id })
         });
         await _db.SaveChangesAsync(cancellationToken);
 
         var names = await UserLookup.DisplayNamesAsync(_db, [userId], cancellationToken);
         var dto = ToDto(comment, names);
-        await _notifier.CommentCreatedAsync(task.ProjectId, Broadcast(dto, task.ProjectId), cancellationToken);
+        await BroadcastQuietlyAsync(async () =>
+        {
+            await _notifier.CommentCreatedAsync(task.ProjectId, Broadcast(dto, task.ProjectId), cancellationToken);
+            await BroadcastTaskCountsAsync(task.Id, cancellationToken);
+        }, cancellationToken);
         return dto;
     }
 
@@ -93,7 +108,6 @@ public class TaskCommentService : ITaskCommentService
             return ToDto(comment, currentNames);
         }
 
-        var previous = comment.Body;
         var now = DateTimeOffset.UtcNow;
         comment.Body = body;
         comment.UpdatedAt = now;
@@ -104,13 +118,16 @@ public class TaskCommentService : ITaskCommentService
             Type = TaskActivityType.CommentEdited,
             ActorUserId = userId,
             CreatedAt = now,
-            Details = ActivityJson.Of(new { commentId = comment.Id, oldValue = previous, newValue = body })
+            Details = ActivityJson.Of(new { commentId = comment.Id, edited = true })
         });
         await _db.SaveChangesAsync(cancellationToken);
 
         var names = await UserLookup.DisplayNamesAsync(_db, [comment.AuthorId], cancellationToken);
         var dto = ToDto(comment, names);
-        await _notifier.CommentUpdatedAsync(comment.Task.ProjectId, Broadcast(dto, comment.Task.ProjectId), cancellationToken);
+        // The count does not change on edit, so there is no TaskUpdated broadcast.
+        await BroadcastQuietlyAsync(
+            () => _notifier.CommentUpdatedAsync(comment.Task.ProjectId, Broadcast(dto, comment.Task.ProjectId), cancellationToken),
+            cancellationToken);
         return dto;
     }
 
@@ -129,6 +146,13 @@ public class TaskCommentService : ITaskCommentService
         var taskId = comment.TaskId;
         var now = DateTimeOffset.UtcNow;
 
+        var history = await _db.TaskActivities
+            .Where(a => a.TaskId == taskId &&
+                (a.Type == TaskActivityType.CommentAdded || a.Type == TaskActivityType.CommentEdited))
+            .ToListAsync(cancellationToken);
+        foreach (var activity in history)
+            RedactCommentText(activity, commentId);
+
         _db.TaskComments.Remove(comment);
         _db.TaskActivities.Add(new TaskActivity
         {
@@ -141,10 +165,14 @@ public class TaskCommentService : ITaskCommentService
         });
         await _db.SaveChangesAsync(cancellationToken);
 
-        await _notifier.CommentDeletedAsync(
-            projectId,
-            new CommentDeletedEvent(projectId, taskId, commentId),
-            cancellationToken);
+        await BroadcastQuietlyAsync(async () =>
+        {
+            await _notifier.CommentDeletedAsync(
+                projectId,
+                new CommentDeletedEvent(projectId, taskId, commentId),
+                cancellationToken);
+            await BroadcastTaskCountsAsync(taskId, cancellationToken);
+        }, cancellationToken);
     }
 
     public async Task<Guid?> GetWorkspaceIdForCommentAsync(Guid commentId, CancellationToken cancellationToken = default)
@@ -158,13 +186,59 @@ public class TaskCommentService : ITaskCommentService
 
     private async Task<bool> CanModerateAsync(Guid workspaceId, Guid authorId, Guid userId, CancellationToken cancellationToken)
     {
-        if (authorId == userId) return true;
         var role = await _workspaces.GetUserRoleAsync(workspaceId, userId, cancellationToken);
-        return role is WorkspaceRole.Admin or WorkspaceRole.Owner;
+        if (role is WorkspaceRole.Admin or WorkspaceRole.Owner)
+            return true;
+        return authorId == userId && role == WorkspaceRole.Member;
+    }
+
+    private async Task BroadcastQuietlyAsync(Func<Task> broadcast, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await broadcast();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogError(ex, "Comment change was saved but could not be broadcast.");
+        }
     }
 
     private static CommentDto ToDto(TaskComment comment, IReadOnlyDictionary<Guid, string> names) =>
         new(comment.Id, comment.TaskId, UserLookup.Ref(names, comment.AuthorId), comment.Body, comment.CreatedAt, comment.UpdatedAt);
+
+    private async Task BroadcastTaskCountsAsync(Guid taskId, CancellationToken cancellationToken)
+    {
+        var task = await _board.GetTaskAsync(taskId, cancellationToken);
+        await _notifier.TaskUpdatedAsync(task.ProjectId, task, cancellationToken);
+    }
+
+    /// <summary>
+    /// Drops body, oldValue, and newValue from activity rows for this comment so a
+    /// Viewer reading the log cannot recover text that was deleted.
+    /// </summary>
+    private static void RedactCommentText(TaskActivity activity, Guid commentId)
+    {
+        if (string.IsNullOrEmpty(activity.Details)) return;
+
+        JsonNode? node;
+        try
+        {
+            node = JsonNode.Parse(activity.Details);
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return;
+        }
+
+        if (node is not JsonObject obj) return;
+        if (!Guid.TryParse(obj["commentId"]?.ToString(), out var id) || id != commentId) return;
+
+        obj.Remove("body");
+        obj.Remove("oldValue");
+        obj.Remove("newValue");
+        activity.Details = obj.ToJsonString(ActivityJson.Options);
+    }
 
     private static CommentBroadcastDto Broadcast(CommentDto dto, Guid projectId) =>
         new(dto.Id, dto.TaskId, dto.Author, dto.Body, dto.CreatedAt, dto.UpdatedAt, projectId);

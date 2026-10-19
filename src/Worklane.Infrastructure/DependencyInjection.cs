@@ -36,7 +36,19 @@ public static class DependencyInjection
         services.Configure<JwtSettings>(configuration.GetSection(JwtSettings.SectionName));
         services.Configure<EmailSettings>(configuration.GetSection(EmailSettings.SectionName));
         services.Configure<FrontendSettings>(configuration.GetSection(FrontendSettings.SectionName));
-        services.Configure<FileStorageSettings>(configuration.GetSection(FileStorageSettings.SectionName));
+        services.AddOptions<FileStorageSettings>()
+            .Configure<IConfiguration>((settings, config) =>
+            {
+                var bound = FileStorageSettings.FromConfiguration(config);
+                settings.LocalPath = bound.LocalPath;
+                settings.MaxBytes = bound.MaxBytes;
+                settings.WorkspaceQuotaBytes = bound.WorkspaceQuotaBytes;
+                settings.AllowedContentTypes = bound.AllowedContentTypes;
+                settings.AllowedExtensions = bound.AllowedExtensions;
+            })
+            .Validate(static settings => settings.MaxBytes > 0, "FileStorage:MaxBytes must be greater than 0.")
+            .Validate(static settings => settings.WorkspaceQuotaBytes > 0, "FileStorage:WorkspaceQuotaBytes must be greater than 0.")
+            .ValidateOnStart();
 
         services.AddScoped<ICurrentTenantService, CurrentTenantService>();
         services.AddScoped<ITokenService, JwtTokenService>();

@@ -179,12 +179,17 @@ namespace Worklane.Infrastructure.Persistence.Migrations
                 table: "TaskActivities",
                 newName: "IX_TaskActivities_TaskId_MovedAt");
 
+            // Created rows, and rows for comments or files, have no ToColumnId. Delete
+            // them before that column becomes required, so PostgreSQL does not store Guid.Empty.
+            migrationBuilder.Sql("""
+                DELETE FROM "TaskActivities" WHERE "ToColumnId" IS NULL;
+                """);
+
             migrationBuilder.AlterColumn<Guid>(
                 name: "ToColumnId",
                 table: "TaskActivities",
                 type: "uuid",
                 nullable: false,
-                defaultValue: new Guid("00000000-0000-0000-0000-000000000000"),
                 oldClrType: typeof(Guid),
                 oldType: "uuid",
                 oldNullable: true);

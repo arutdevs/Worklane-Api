@@ -117,4 +117,14 @@ public class ProjectService : IProjectService
             .Select(p => (Guid?)p.WorkspaceId)
             .SingleOrDefaultAsync(cancellationToken);
     }
+
+    public async Task<bool> IsArchivedAsync(Guid projectId, CancellationToken cancellationToken)
+    {
+        var archived = await _db.Projects
+            .IgnoreQueryFilters()
+            .Where(p => p.Id == projectId)
+            .Select(p => (bool?)p.IsArchived)
+            .SingleOrDefaultAsync(cancellationToken);
+        return archived == true;
+    }
 }

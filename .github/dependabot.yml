@@ -1,5 +1,14 @@
 version: 2
 updates:
+  # Opens pull requests for digest bumps in docker-compose.yml and compose.dev.yml.
+  # Nothing in this repo automerges those pulls. A digest change stays a reviewed edit.
+  - package-ecosystem: docker-compose
+    directory: /
+    target-branch: develop
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 2
+
   # Digest bumps in deploy/beta/docker-compose.yml. Nothing automerges.
   - package-ecosystem: docker-compose
     directory: /deploy/beta
