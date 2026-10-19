@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
@@ -19,7 +20,21 @@ public class WorklaneWebApplicationFactory : WebApplicationFactory<Program>, IAs
     /// </summary>
     public string AttachmentPath { get; } = Path.Combine(Path.GetTempPath(), "worklane-tests", Guid.NewGuid().ToString("N"));
 
+    public string DataProtectionKeysPath { get; } = Path.Combine(Path.GetTempPath(), "worklane-tests", "dp-" + Guid.NewGuid().ToString("N"));
+
+    public string JwtSecret { get; } = NewKey();
+
+    public string PreviousJwtSecret { get; } = NewKey();
+
     public const long TestMaxUploadBytes = 2048;
+
+    public WorklaneWebApplicationFactory()
+    {
+        Directory.CreateDirectory(AttachmentPath);
+        Directory.CreateDirectory(DataProtectionKeysPath);
+    }
+
+    private static string NewKey() => Convert.ToBase64String(RandomNumberGenerator.GetBytes(64));
 
     public async Task InitializeAsync()
     {
@@ -31,6 +46,8 @@ public class WorklaneWebApplicationFactory : WebApplicationFactory<Program>, IAs
         await _postgres.DisposeAsync();
         if (Directory.Exists(AttachmentPath))
             Directory.Delete(AttachmentPath, recursive: true);
+        if (Directory.Exists(DataProtectionKeysPath))
+            Directory.Delete(DataProtectionKeysPath, recursive: true);
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
@@ -43,7 +60,10 @@ public class WorklaneWebApplicationFactory : WebApplicationFactory<Program>, IAs
             {
                 ["ConnectionStrings:Default"] = _postgres.GetConnectionString(),
                 ["FileStorage:LocalPath"] = AttachmentPath,
-                ["FileStorage:MaxBytes"] = TestMaxUploadBytes.ToString()
+                ["FileStorage:MaxBytes"] = TestMaxUploadBytes.ToString(),
+                ["Jwt:Secret"] = JwtSecret,
+                ["Jwt:PreviousSecrets:0"] = PreviousJwtSecret,
+                ["DataProtection:KeysPath"] = DataProtectionKeysPath
             });
         });
     }

@@ -2,6 +2,7 @@ using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Worklane.Application.Auth.Interfaces;
 using Worklane.Application.Board.Interfaces;
 using Worklane.Application.Common.Interfaces;
@@ -33,7 +34,10 @@ public static class DependencyInjection
             .AddEntityFrameworkStores<WorklaneDbContext>()
             .AddDefaultTokenProviders();
 
-        services.Configure<JwtSettings>(configuration.GetSection(JwtSettings.SectionName));
+        services.AddOptions<JwtSettings>()
+            .Bind(configuration.GetSection(JwtSettings.SectionName))
+            .ValidateOnStart();
+        services.AddSingleton<IValidateOptions<JwtSettings>, JwtSettingsValidator>();
         services.Configure<EmailSettings>(configuration.GetSection(EmailSettings.SectionName));
         services.Configure<FrontendSettings>(configuration.GetSection(FrontendSettings.SectionName));
         services.AddOptions<FileStorageSettings>()
