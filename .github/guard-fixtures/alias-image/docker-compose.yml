@@ -1,0 +1,4 @@
+x-img: &img ${X:-busybox}
+services:
+  web:
+    image: *img

@@ -14,26 +14,52 @@ a Kanban board with drag-and-drop, and a dashboard that measures effort per pers
 - **Frontend:** Angular 22 (standalone components) + Bootstrap 5 + ng-bootstrap
 - **i18n:** ngx-translate, English (`en`, default) and Thai (`th`)
 - **Realtime:** SignalR hub at `/hubs/notifications`. Clients join a project group and receive board, comment, attachment, and presence events (see below)
-- **Containers:** Docker Compose — `api`, `web`, `postgres`
+- **Containers:** Docker Compose — `api`, `web`, `postgres`. Local S3-compatible storage is a dev-only overlay (`compose.dev.yml`)
 
 ## Run everything
 
 ```bash
-docker compose up
+cp .env.example .env
+# Fill S3_ROOT_USER, S3_ROOT_PASSWORD, WL_S3_ACCESS_KEY, and WL_S3_SECRET_KEY.
+# Example: openssl rand -hex 24
+docker compose -f docker-compose.yml -f compose.dev.yml up
 ```
 
-This builds and starts all three services:
+`docker compose up` without `compose.dev.yml` starts the API, web, and Postgres only. That is the file a staging or prod deploy should use. RustFS is not in it, and it does not start.
+
+ห้าม deploy จนกว่า WL-63 (${JWT_SIGNING_KEY:?}) และ WL-71 จะเสร็จ
+
+The deploy compose guard only selects files by name (`*compose*` and `*stack*`). A file named `prod.yml` would slip through. A symlinked `docker-compose.yml` also slips through, because the scan uses `find -type f` and does not follow symlinks. The real control is C7 in WL-71. Fixture changes under `.github/guard-fixtures/` go through Security review as a process. `.github/CODEOWNERS` names @arutdevs, the same account that opens every pull request, and code-owner review is not enforced, so that entry enforces nothing. Enforcing that review is อรุษ's ruleset decision.
+
+The dev command above also starts local object storage. This builds and starts the stack:
 
 | Service    | URL                                   |
 |------------|----------------------------------------|
 | Web (Angular, served by nginx) | http://localhost:4200        |
 | API (Swagger UI in Development) | http://localhost:5000/swagger |
 | Postgres   | localhost:5432 (user/pass/db: `worklane`) |
+| Object storage (S3 API, localhost only) | http://localhost:9000 |
 
-EF Core migrations are applied automatically on API startup in the `Development` environment
-(the default in `docker-compose.yml`), and a demo user/workspace/project are seeded on first run.
+`compose.dev.yml` sets `ASPNETCORE_ENVIRONMENT=Development`. `docker-compose.yml` does not, so a deploy of that file keeps the ASP.NET Production default. In Development, EF Core migrations run on API startup and a demo user, workspace, and project are seeded on first run.
 
 **Demo login:** `demo@worklane.app` / `Demo123!`
+
+## Local object storage
+
+Dev compose runs RustFS as `s3` (S3 API published on `127.0.0.1:9000` only; the console port is not published) and a one-shot `s3-init` container. `s3-init` creates the private bucket `worklane-dev-files`, lifecycle rules for `quarantine/` (1 day) and `exports/` (7 days), and a least-privilege app user whose policy allows object operations on that bucket plus `s3:ListBucketMultipartUploads`. It checks each of those results and exits non-zero when a step fails. Every credential is read from `.env`. Compose has no default password: a missing value stops `docker compose` before the container starts. The built-in RustFS account name is rejected, and each password must be at least 16 characters.
+
+`WL_S3_VERSIONING` defaults to `off`, matching Cloudflare R2 (the beta store). Set it to `on` in `.env` before the first `s3-init` run to exercise the DigitalOcean Spaces path: bucket versioning and a 20-day noncurrent-version expiry. Application code must not rely on versioning or bucket policy, because R2 provides neither. If versioning was enabled on the `s3data` volume, switching the flag to `off` leaves it in place; reset with `docker compose -f docker-compose.yml -f compose.dev.yml down -v`.
+
+The API still stores attachments on the `attachments` volume. With the dev overlay, `FileStorage__S3__ServiceUrl` is `http://s3:9000` (and the other `FileStorage__S3__*` keys from the storage spec are set), but `FileStorageSettings` does not bind those keys yet, so `FileStorage__Provider` is left unset and the process keeps the local-disk provider. Images are pinned by digest in `compose.dev.yml`. Dependabot may open a pull request for a digest bump. Those pulls are not automerged. CI scans the pinned images with Trivy and fails on a CRITICAL finding that has a fix. It does not run RustFS as the test storage.
+
+### Digest bump checklist
+
+Keep the image as a literal `name:tag@sha256:…`. Do not wrap it in `${IMAGE:-…}`. A digest change is a reviewed edit, and it is not automerged. The pull request has to include:
+
+- **Verify digest.** `docker buildx imagetools inspect <image>:<tag>`, and the index digest that will be pinned matches the digest in the compose file.
+- **Provenance.** The provenance revision matches the git commit of that tag (`gh api repos/rustfs/rustfs/git/refs/tags/<tag>` for the server, `repos/rustfs/cli` for `rc`).
+- **Advisories.** No new security advisory covers that version.
+- **Smoke test.** `s3-init` exits 0, an anonymous object GET is 403, the app user is denied `CreateBucket`, and the app user can put, get, and delete an object.
 
 ## Golden path
 
@@ -149,6 +175,7 @@ worklane/
 │       ├── core/                # services, guards, interceptors, models
 │       ├── shell/               # navbar, sidenav, shell layout
 │       └── features/            # auth, workspaces, projects, board, dashboard
+├── compose.dev.yml              # local RustFS only; not used for staging/prod
 └── docker-compose.yml
 ```
 
@@ -167,3 +194,5 @@ Components do **not** carry their own stylesheets — the single theme definitio
 `appsettings.Development.json` and `docker-compose.yml` ship a **development-only** JWT signing
 secret for convenience. Replace `Jwt__Secret` with a real secret (e.g. via environment variable or
 a secrets manager) before deploying anywhere real.
+
+Object-storage credentials (`S3_ROOT_USER`, `S3_ROOT_PASSWORD`, `WL_S3_ACCESS_KEY`, `WL_S3_SECRET_KEY`) are not in the repo. Copy `.env.example` to `.env` and generate them locally. `.env` and `.env.*` are git-ignored; `.env.example` is the exception. Postgres, the API, and the web app publish on `127.0.0.1` only.
