@@ -1,0 +1,126 @@
+name: Image scan
+
+on:
+  push:
+    branches: [main, develop]
+  # Any base branch, so a pull request stacked on another feature branch still runs this check.
+  pull_request:
+
+concurrency:
+  group: image-scan-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  base-compose-has-no-dev-s3:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rendered deploy compose has no dev S3
+        run: bash scripts/check-deploy-compose.sh
+
+      # Fixtures are pruned out of the scan above. expect.txt of PASS must exit 0.
+      # Any other expect.txt must exit 1 and the guard output must contain each line.
+      # At least one of those lines must exactly equal a full guard ::error line.
+      # config failed / could not read in the output always fail, even if expect.txt lists them.
+      - name: Guard fixtures match expect.txt
+        run: |
+          set -euo pipefail
+          root="$(pwd)"
+          found=0
+          status=0
+          for d in .github/guard-fixtures/*/; do
+            [ -d "$d" ] || continue
+            found=1
+            echo "===== ${d} ====="
+            if [ ! -f "$d/expect.txt" ]; then
+              echo "::error::${d} missing expect.txt"
+              status=1
+              continue
+            fi
+            out="$(mktemp)"
+            set +e
+            (cd "$d" && bash "$root/scripts/check-deploy-compose.sh") >"$out" 2>&1
+            code=$?
+            set -e
+            cat "$out"
+            if ! grep -q '[^[:space:]]' "$d/expect.txt"; then
+              echo "::error::${d} expect.txt has no non-blank line"
+              status=1
+              rm -f "$out"
+              continue
+            fi
+            # PASS counts only when it is the entire file, not one line among others.
+            expect_body=$(tr -d '\r' < "$d/expect.txt")
+            if [ "$expect_body" = "PASS" ]; then
+              if [ "$code" -ne 0 ]; then
+                echo "::error::${d} expected exit 0, got ${code}"
+                status=1
+              else
+                echo "expected exit 0: ${d}"
+              fi
+            else
+              bad=0
+              if [ "$code" -ne 1 ]; then
+                echo "::error::${d} expected exit 1, got ${code}"
+                bad=1
+              fi
+              exact_guard=0
+              while IFS= read -r expected || [ -n "$expected" ]; do
+                expected="${expected%$'\r'}"
+                [ -z "$expected" ] && continue
+                if ! grep -q -F -e "$expected" -- "$out"; then
+                  echo "::error::${d} output missing expected text: ${expected}"
+                  bad=1
+                fi
+                case "$expected" in
+                  '::error file='*)
+                    if grep -q -x -F -e "$expected" -- "$out"; then
+                      exact_guard=1
+                    fi
+                    ;;
+                esac
+              done < "$d/expect.txt"
+              if [ "$exact_guard" -eq 0 ]; then
+                echo "::error::${d} expect.txt has no line that exactly equals a full guard error message"
+                bad=1
+              fi
+              for expected in "config failed" "could not read"; do
+                if grep -q -F -e "$expected" -- "$out"; then
+                  echo "::error::${d} output contains unexpected: ${expected}"
+                  bad=1
+                fi
+              done
+              if [ "$bad" -eq 0 ]; then
+                echo "expected exit 1: ${d}"
+              else
+                status=1
+              fi
+            fi
+            rm -f "$out"
+          done
+          if [ "$found" -eq 0 ]; then
+            echo "::error::no guard fixtures found"
+            status=1
+          fi
+          exit "$status"
+
+  trivy:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - rustfs/rustfs:1.0.3@sha256:9ca9559533b537d10482fe923288b676ad08f92a7069d9a17327fbae3cab688b
+          - rustfs/rc:v0.1.36@sha256:ab024bfebee49a750ce886b4c70963ccd9ddaa03f491704a90710641d7a26699
+    steps:
+      # Fail when Trivy finds a CRITICAL vulnerability that already has a fix.
+      # Unfixed CRITICAL findings do not fail the job: there is no image bump that clears them yet.
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ${{ matrix.image }}
+          format: table
+          exit-code: "1"
+          severity: CRITICAL
+          ignore-unfixed: true
+          vuln-type: os,library

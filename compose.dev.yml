@@ -1,0 +1,161 @@
+# Local object storage only. Do not include this file in a staging or prod deploy.
+#   docker compose -f docker-compose.yml -f compose.dev.yml up
+
+services:
+  s3:
+    image: rustfs/rustfs:1.0.3@sha256:9ca9559533b537d10482fe923288b676ad08f92a7069d9a17327fbae3cab688b
+    command: ["/data"]
+    environment:
+      RUSTFS_ACCESS_KEY: ${S3_ROOT_USER:?set S3_ROOT_USER in .env}
+      RUSTFS_SECRET_KEY: ${S3_ROOT_PASSWORD:?set S3_ROOT_PASSWORD in .env}
+      RUSTFS_CONSOLE_ENABLE: "false"
+      RUSTFS_CHECK_UPDATE: "false"
+      RUSTFS_CONSOLE_CORS_ALLOWED_ORIGINS: "http://localhost:4200"
+    ports:
+      - "127.0.0.1:9000:9000"
+    volumes:
+      - s3data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/health >/dev/null || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 5s
+
+  s3-init:
+    image: rustfs/rc:v0.1.36@sha256:ab024bfebee49a750ce886b4c70963ccd9ddaa03f491704a90710641d7a26699
+    depends_on:
+      s3:
+        condition: service_healthy
+    environment:
+      S3_ROOT_USER: ${S3_ROOT_USER:?set S3_ROOT_USER in .env}
+      S3_ROOT_PASSWORD: ${S3_ROOT_PASSWORD:?set S3_ROOT_PASSWORD in .env}
+      WL_S3_ACCESS_KEY: ${WL_S3_ACCESS_KEY:?set WL_S3_ACCESS_KEY in .env}
+      WL_S3_SECRET_KEY: ${WL_S3_SECRET_KEY:?set WL_S3_SECRET_KEY in .env}
+      WL_S3_BUCKET: worklane-dev-files
+      # off matches Cloudflare R2 (no versioning). Set on to exercise the Spaces path.
+      WL_S3_VERSIONING: ${WL_S3_VERSIONING:-off}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        reject_default() {
+          value=$$(printf '%s' "$$1" | tr '[:upper:]' '[:lower:]')
+          if [ "$$value" = "rustfsadmin" ]; then
+            echo "default credential is not allowed"
+            exit 1
+          fi
+        }
+        reject_default "$$S3_ROOT_USER"
+        reject_default "$$S3_ROOT_PASSWORD"
+        reject_default "$$WL_S3_ACCESS_KEY"
+        reject_default "$$WL_S3_SECRET_KEY"
+        if [ "$${#S3_ROOT_PASSWORD}" -lt 16 ]; then
+          echo "S3_ROOT_PASSWORD must be at least 16 characters"
+          exit 1
+        fi
+        if [ "$${#WL_S3_SECRET_KEY}" -lt 16 ]; then
+          echo "WL_S3_SECRET_KEY must be at least 16 characters"
+          exit 1
+        fi
+
+        rc alias set local http://s3:9000 "$$S3_ROOT_USER" "$$S3_ROOT_PASSWORD"
+        if ! rc bucket list "local/$$WL_S3_BUCKET" >/dev/null 2>&1; then
+          rc bucket create "local/$$WL_S3_BUCKET"
+        fi
+        rc bucket list "local/$$WL_S3_BUCKET" >/dev/null
+
+        if [ "$$WL_S3_VERSIONING" = "on" ]; then
+          rc bucket version enable "local/$$WL_S3_BUCKET"
+          rc bucket version info --no-color "local/$$WL_S3_BUCKET" | grep -q 'Enabled'
+        fi
+        rc bucket anonymous set private "local/$$WL_S3_BUCKET"
+        rc bucket anonymous get --no-color "local/$$WL_S3_BUCKET" | grep -q 'private'
+
+        if rc bucket lifecycle rule list --json "local/$$WL_S3_BUCKET" | grep -q '"id"'; then
+          rc bucket lifecycle rule remove "local/$$WL_S3_BUCKET" --all
+        fi
+        if [ "$$WL_S3_VERSIONING" = "on" ]; then
+          rc bucket lifecycle rule add "local/$$WL_S3_BUCKET" --noncurrent-expiry-days 20
+        fi
+        rc bucket lifecycle rule add "local/$$WL_S3_BUCKET" --prefix "quarantine/" --expiry-days 1
+        rc bucket lifecycle rule add "local/$$WL_S3_BUCKET" --prefix "exports/" --expiry-days 7
+        rules=$$(rc bucket lifecycle rule list --json "local/$$WL_S3_BUCKET")
+        printf '%s\n' "$$rules" | grep -q 'quarantine/'
+        printf '%s\n' "$$rules" | grep -q 'exports/'
+        if [ "$$WL_S3_VERSIONING" = "on" ]; then
+          printf '%s\n' "$$rules" | grep -q 'noncurrent'
+        fi
+
+        cat > /tmp/worklane-api.json <<JSON
+        {"Version":"2012-10-17","Statement":[
+          {"Effect":"Allow","Action":["s3:GetObject","s3:PutObject","s3:DeleteObject","s3:DeleteObjectVersion","s3:GetObjectVersion","s3:AbortMultipartUpload","s3:ListMultipartUploadParts"],"Resource":["arn:aws:s3:::$$WL_S3_BUCKET/*"]},
+          {"Effect":"Allow","Action":["s3:ListBucket","s3:ListBucketVersions","s3:GetBucketLocation","s3:ListBucketMultipartUploads"],"Resource":["arn:aws:s3:::$$WL_S3_BUCKET"]}
+        ]}
+        JSON
+
+        if rc admin user info local "$$WL_S3_ACCESS_KEY" >/dev/null 2>&1; then
+          if rc admin policy info local worklane-api >/dev/null 2>&1; then
+            attached=$$(rc admin policy entities local --user "$$WL_S3_ACCESS_KEY" --json)
+            if printf '%s\n' "$$attached" | grep -q 'worklane-api'; then
+              rc admin policy detach local worklane-api --user "$$WL_S3_ACCESS_KEY"
+            fi
+          fi
+          rc admin user rm local "$$WL_S3_ACCESS_KEY"
+        fi
+        if rc admin policy info local worklane-api >/dev/null 2>&1; then
+          rc admin policy rm local worklane-api
+        fi
+        rc admin policy create local worklane-api /tmp/worklane-api.json
+        rc admin policy info --no-color local worklane-api | grep -q 's3:ListBucketMultipartUploads'
+        rc admin user add local "$$WL_S3_ACCESS_KEY" "$$WL_S3_SECRET_KEY"
+        rc admin policy attach local worklane-api --user "$$WL_S3_ACCESS_KEY"
+        rc admin policy entities local --user "$$WL_S3_ACCESS_KEY" --json | grep -q 'worklane-api'
+
+        set +e
+        wget -S -O /dev/null "http://s3:9000/$$WL_S3_BUCKET/__wl_s3_init_absent__" >/tmp/anon.txt 2>&1
+        set -e
+        anon_status=$$(sed -n 's/.*HTTP\/[0-9.]* \([0-9][0-9][0-9]\).*/\1/p' /tmp/anon.txt | head -n 1)
+        if [ "$$anon_status" != "403" ]; then
+          echo "anonymous object GET status is $${anon_status:-missing}"
+          exit 1
+        fi
+
+        rc alias set app http://s3:9000 "$$WL_S3_ACCESS_KEY" "$$WL_S3_SECRET_KEY"
+        set +e
+        rc bucket create "app/wl-s3-init-denied" >/tmp/create.txt 2>&1
+        create_rc=$$?
+        set -e
+        if [ "$$create_rc" -eq 0 ]; then
+          echo "app user CreateBucket was allowed"
+          exit 1
+        fi
+        grep -q 'AccessDenied' /tmp/create.txt
+
+        printf 'probe\n' > /tmp/probe.txt
+        rc cp /tmp/probe.txt "app/$$WL_S3_BUCKET/s3-init-probe.txt"
+        rc cat "app/$$WL_S3_BUCKET/s3-init-probe.txt" | grep -q 'probe'
+        rc rm "app/$$WL_S3_BUCKET/s3-init-probe.txt"
+        echo "s3-init done"
+    restart: "no"
+
+  api:
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      FileStorage__S3__ServiceUrl: "http://s3:9000"
+      FileStorage__S3__Region: "us-east-1"
+      FileStorage__S3__Bucket: "worklane-dev-files"
+      FileStorage__S3__AccessKey: ${WL_S3_ACCESS_KEY:?set WL_S3_ACCESS_KEY in .env}
+      FileStorage__S3__SecretKey: ${WL_S3_SECRET_KEY:?set WL_S3_SECRET_KEY in .env}
+      FileStorage__S3__ForcePathStyle: "true"
+      FileStorage__S3__RequireHttps: "false"
+      FileStorage__S3__PresignExpirySeconds: "60"
+      FileStorage__S3__PublicServiceUrl: "http://localhost:9000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      s3-init:
+        condition: service_completed_successfully
+
+volumes:
+  s3data:

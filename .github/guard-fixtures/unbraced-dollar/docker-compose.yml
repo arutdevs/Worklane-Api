@@ -1,0 +1,4 @@
+services:
+  hidden:
+    profiles: ["dev"]
+    image: $VAR

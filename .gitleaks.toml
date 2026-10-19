@@ -1,0 +1,6 @@
+title = "Worklane secret scan"
+
+[extend]
+useDefault = true
+
+# Known findings are ignored by fingerprint in .gitleaksignore, not by line text.

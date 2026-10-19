@@ -1,0 +1,5 @@
+include:
+  - path: hidden.yml
+services:
+  web:
+    image: nginx:alpine

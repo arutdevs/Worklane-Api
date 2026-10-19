@@ -13,6 +13,11 @@ obj/
 # Local attachment storage (see FileStorage:LocalPath)
 data/
 
+# Local secrets. .env.example is the only env file that belongs in git.
+.env
+.env.*
+!.env.example
+
 # OS
 .DS_Store
 Thumbs.db
