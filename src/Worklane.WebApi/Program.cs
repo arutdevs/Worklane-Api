@@ -1,6 +1,10 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json.Serialization;
+using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
@@ -8,10 +12,11 @@ using Serilog;
 using Worklane.Application;
 using Worklane.Application.Board.Interfaces;
 using Worklane.Application.Common.Interfaces;
-using Microsoft.AspNetCore.Http.Features;
+using Microsoft.Extensions.Options;
 using Worklane.Application.Common.Options;
 using Worklane.Infrastructure;
 using Worklane.Infrastructure.Persistence;
+using Worklane.WebApi.Filters;
 using Worklane.WebApi.Hubs;
 using Worklane.WebApi.Middleware;
 using Worklane.WebApi.Seed;
@@ -32,8 +37,16 @@ builder.Services.AddInfrastructure(builder.Configuration);
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
 
+builder.Services.AddMemoryCache();
+builder.Services.AddSingleton<IConfigureOptions<MvcOptions>, AttachmentUploadLimitSetup>();
 builder.Services.AddControllers()
     .AddJsonOptions(options => options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter()));
+builder.Services.Configure<ApiBehaviorOptions>(options =>
+{
+    var builtIn = options.InvalidModelStateResponseFactory;
+    options.InvalidModelStateResponseFactory = context =>
+        ExceptionHandlingMiddleware.InvalidModelStateResponse(context, builtIn);
+});
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>
 {
@@ -56,18 +69,71 @@ builder.Services.AddSwaggerGen(options =>
     });
 });
 
-var fileStorage = builder.Configuration.GetSection(FileStorageSettings.SectionName).Get<FileStorageSettings>() ?? new FileStorageSettings();
-var maxUploadBytes = fileStorage.MaxBytes > 0 ? fileStorage.MaxBytes : 10 * 1024 * 1024;
-// Leave room for the multipart envelope so a file at the configured cap still fits,
-// while anything larger is rejected by Kestrel with 413 before it is buffered.
-var requestCeiling = maxUploadBytes + (1024 * 1024);
-builder.Services.Configure<FormOptions>(options => options.MultipartBodyLengthLimit = requestCeiling);
-builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = requestCeiling);
+// 2 MB for ordinary requests. Attachment upload raises its own ceiling from
+// FileStorage:MaxBytes plus a 1 MB multipart envelope. Default MaxBytes is 10 MB,
+// so that route's ceiling is 11 MB unless MaxBytes is configured higher.
+builder.WebHost.ConfigureKestrel(options => options.Limits.MaxRequestBodySize = FileStorageSettings.GlobalRequestBodyLimitBytes);
+
+builder.Services.Configure<AttachmentRateLimitSettings>(
+    builder.Configuration.GetSection(AttachmentRateLimitSettings.SectionName));
+builder.Services.Configure<CommentRateLimitSettings>(
+    builder.Configuration.GetSection(CommentRateLimitSettings.SectionName));
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.OnRejected = async (context, cancellationToken) =>
+    {
+        if (context.Lease.TryGetMetadata(MetadataName.RetryAfter, out TimeSpan retryAfter))
+        {
+            var seconds = Math.Max(1, (int)Math.Ceiling(retryAfter.TotalSeconds));
+            context.HttpContext.Response.Headers.RetryAfter = seconds.ToString(CultureInfo.InvariantCulture);
+        }
+
+        context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+        await context.HttpContext.Response.WriteAsJsonAsync(
+            new ProblemDetails
+            {
+                Status = StatusCodes.Status429TooManyRequests,
+                Title = "Too Many Requests",
+                Detail = "Too many requests for this user and workspace.",
+                Instance = context.HttpContext.Request.Path
+            },
+            options: null,
+            contentType: "application/problem+json",
+            cancellationToken);
+    };
+    options.AddPolicy("attachments", httpContext =>
+    {
+        var settings = httpContext.RequestServices.GetRequiredService<IOptions<AttachmentRateLimitSettings>>().Value;
+        return FixedWindow(httpContext, settings.PermitLimit, settings.WindowSeconds);
+    });
+    options.AddPolicy("comments", httpContext =>
+    {
+        var settings = httpContext.RequestServices.GetRequiredService<IOptions<CommentRateLimitSettings>>().Value;
+        return FixedWindow(httpContext, settings.PermitLimit, settings.WindowSeconds);
+    });
+
+    static RateLimitPartition<string> FixedWindow(HttpContext httpContext, int permitLimit, int windowSeconds)
+    {
+        var permit = permitLimit < 1 ? 1 : permitLimit;
+        var window = windowSeconds < 1 ? 1 : windowSeconds;
+        return RateLimitPartition.GetFixedWindowLimiter(
+            AttachmentRateLimitPartition.Key(httpContext),
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = permit,
+                Window = TimeSpan.FromSeconds(window),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            });
+    }
+});
 
 builder.Services.AddSignalR()
     .AddJsonProtocol(options => options.PayloadSerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 builder.Services.AddScoped<IBoardNotifier, SignalRBoardNotifier>();
 builder.Services.AddSingleton<IPresenceTracker, PresenceTracker>();
+builder.Services.AddSingleton<IRealtimeGroupMembership, SignalRGroupMembership>();
 
 builder.Services.AddCors(options =>
 {
@@ -75,7 +141,8 @@ builder.Services.AddCors(options =>
         .WithOrigins(builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? new[] { "http://localhost:4200" })
         .AllowAnyHeader()
         .AllowAnyMethod()
-        .AllowCredentials());
+        .AllowCredentials()
+        .WithExposedHeaders("Content-Disposition", "Retry-After"));
 });
 
 var jwtSettings = builder.Configuration.GetSection(JwtSettings.SectionName).Get<JwtSettings>() ?? new JwtSettings();
@@ -121,7 +188,6 @@ builder.Services.AddAuthorization();
 var app = builder.Build();
 
 app.UseSerilogRequestLogging();
-
 app.UseMiddleware<ExceptionHandlingMiddleware>();
 
 // Configure the HTTP request pipeline.
@@ -142,9 +208,14 @@ app.UseCors("Web");
 
 app.UseAuthentication();
 app.UseAuthorization();
+app.UseRateLimiter();
+app.UseMiddleware<ContentLengthLimitMiddleware>();
 
 app.MapControllers();
-app.MapHub<NotificationsHub>("/hubs/notifications");
+app.MapHub<NotificationsHub>("/hubs/notifications", options =>
+{
+    options.CloseOnAuthenticationExpiration = true;
+});
 
 app.Run();
 

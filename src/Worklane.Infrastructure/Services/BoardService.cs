@@ -103,8 +103,7 @@ public class BoardService : IBoardService
             if (targetColumnId is null)
                 throw new ConflictException("Column has tasks. Provide targetColumnId to move them first.");
 
-            var target = await _db.BoardColumns.FirstOrDefaultAsync(c => c.Id == targetColumnId.Value, ct)
-                ?? throw new NotFoundException(nameof(BoardColumn), targetColumnId.Value);
+            var target = await RequireColumnInProjectAsync(column.ProjectId, targetColumnId.Value, ct);
 
             var maxOrder = await _db.TaskItems
                 .Where(t => t.ColumnId == target.Id)
@@ -132,9 +131,11 @@ public class BoardService : IBoardService
         // Resolve target column (default = first column by order). The whole column is
         // needed, not just its id — its IsInProgress/IsDone flags decide whether the task
         // starts the clock the moment it is created.
+        if (request.AssigneeId is { } createAssigneeId)
+            await EnsureAssigneeIsMemberAsync(projectId, createAssigneeId, ct);
+
         var column = request.ColumnId.HasValue
-            ? await _db.BoardColumns.FirstOrDefaultAsync(c => c.Id == request.ColumnId.Value, ct)
-                ?? throw new NotFoundException(nameof(BoardColumn), request.ColumnId.Value)
+            ? await RequireColumnInProjectAsync(projectId, request.ColumnId.Value, ct)
             : await _db.BoardColumns
                 .Where(c => c.ProjectId == projectId)
                 .OrderBy(c => c.Order)
@@ -235,10 +236,11 @@ public class BoardService : IBoardService
             Track("description", task.Description, request.Description);
             task.Description = request.Description;
         }
-        if (request.AssigneeId is not null)
+        if (request.AssigneeId is { } updateAssigneeId)
         {
-            Track("assigneeId", IdText(task.AssigneeId), IdText(request.AssigneeId));
-            task.AssigneeId = request.AssigneeId;
+            await EnsureAssigneeIsMemberAsync(task.ProjectId, updateAssigneeId, ct);
+            Track("assigneeId", IdText(task.AssigneeId), IdText(updateAssigneeId));
+            task.AssigneeId = updateAssigneeId;
         }
         if (request.Priority.HasValue)
         {
@@ -252,6 +254,7 @@ public class BoardService : IBoardService
         }
         if (request.ColumnId.HasValue)
         {
+            await RequireColumnInProjectAsync(task.ProjectId, request.ColumnId.Value, ct);
             Track("columnId", IdText(task.ColumnId), IdText(request.ColumnId));
             task.ColumnId = request.ColumnId.Value;
         }
@@ -290,8 +293,7 @@ public class BoardService : IBoardService
             .FirstOrDefaultAsync(t => t.Id == taskId, ct)
             ?? throw new NotFoundException(nameof(TaskItem), taskId);
 
-        var toColumn = await _db.BoardColumns.FirstOrDefaultAsync(c => c.Id == request.ToColumnId, ct)
-            ?? throw new NotFoundException(nameof(BoardColumn), request.ToColumnId);
+        var toColumn = await RequireColumnInProjectAsync(task.ProjectId, request.ToColumnId, ct);
 
         var fromColumnId = task.ColumnId;
         var changedColumn = fromColumnId != toColumn.Id;
@@ -517,6 +519,32 @@ public class BoardService : IBoardService
         return limits.ToDictionary(
             c => c.Id,
             c => new ColumnWip(c.WipLimit, counts.GetValueOrDefault(c.Id)));
+    }
+
+    /// <summary>
+    /// A column id from another project, including another workspace, is treated as missing
+    /// so its name never lands in activity details.
+    /// </summary>
+    private async Task<BoardColumn> RequireColumnInProjectAsync(Guid projectId, Guid columnId, CancellationToken ct)
+    {
+        var column = await _db.BoardColumns
+            .FirstOrDefaultAsync(c => c.Id == columnId && c.ProjectId == projectId, ct);
+        return column ?? throw new NotFoundException(nameof(BoardColumn), columnId);
+    }
+
+    private async Task EnsureAssigneeIsMemberAsync(Guid projectId, Guid assigneeId, CancellationToken ct)
+    {
+        var workspaceId = await _db.Projects
+            .Where(p => p.Id == projectId)
+            .Select(p => (Guid?)p.WorkspaceId)
+            .FirstOrDefaultAsync(ct)
+            ?? throw new NotFoundException(nameof(Project), projectId);
+
+        var isMember = await _db.WorkspaceMembers
+            .AnyAsync(m => m.WorkspaceId == workspaceId && m.UserId == assigneeId, ct);
+
+        if (!isMember)
+            throw new BadRequestException("Assignee must be a member of this workspace.");
     }
 
     private readonly record struct CardCounts(int Comments, int Attachments);

@@ -31,17 +31,24 @@ public class NotificationsHub : Hub
     public async Task JoinProject(Guid projectId)
     {
         var userId = GetUserId();
-        if (userId == Guid.Empty) return;
-
-        var workspaceId = await _projects.GetWorkspaceIdForProjectAsync(projectId, Context.ConnectionAborted);
-        if (workspaceId is null) return;
-
-        var role = await _workspaces.GetUserRoleAsync(workspaceId.Value, userId, Context.ConnectionAborted);
-        if (role is null) return;
+        if (!await CanJoinAsync(projectId, userId))
+        {
+            await Groups.RemoveFromGroupAsync(Context.ConnectionId, GroupName(projectId));
+            throw new HubException("You are not a member of this workspace.");
+        }
 
         await Groups.AddToGroupAsync(Context.ConnectionId, GroupName(projectId));
 
+        // Join before the second membership check so a removal that lands in this
+        // window already sees the connection. If the check fails, LeaveProject drops
+        // both the group and the presence entry.
         var justCameOnline = _presence.Join(projectId, userId, Context.ConnectionId);
+        if (!await CanJoinAsync(projectId, userId))
+        {
+            await LeaveProject(projectId);
+            throw new HubException("You are not a member of this workspace.");
+        }
+
         await Clients.Caller.SendAsync("PresenceSnapshot", _presence.OnlineUserIds(projectId));
         if (justCameOnline)
             await Clients.OthersInGroup(GroupName(projectId)).SendAsync("UserOnline", userId);
@@ -50,12 +57,13 @@ public class NotificationsHub : Hub
     public async Task LeaveProject(Guid projectId)
     {
         await Groups.RemoveFromGroupAsync(Context.ConnectionId, GroupName(projectId));
-        await AnnounceLeave(_presence.Leave(Context.ConnectionId));
+        await AnnounceLeave(_presence.LeaveProject(Context.ConnectionId, projectId));
     }
 
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
-        await AnnounceLeave(_presence.Leave(Context.ConnectionId));
+        foreach (var left in _presence.Leave(Context.ConnectionId))
+            await AnnounceLeave(left);
         await base.OnDisconnectedAsync(exception);
     }
 
@@ -95,6 +103,21 @@ public class NotificationsHub : Hub
             await Clients.Group(group).SendAsync("TaskEditingStopped", taskId, result.UserId);
         if (result.WasLastConnection)
             await Clients.Group(group).SendAsync("UserOffline", result.UserId);
+    }
+
+    private async Task<bool> CanJoinAsync(Guid projectId, Guid userId)
+    {
+        if (userId == Guid.Empty)
+            return false;
+        if (await _projects.IsArchivedAsync(projectId, Context.ConnectionAborted))
+            return false;
+
+        var workspaceId = await _projects.GetWorkspaceIdForProjectAsync(projectId, Context.ConnectionAborted);
+        if (workspaceId is null)
+            return false;
+
+        var role = await _workspaces.GetUserRoleAsync(workspaceId.Value, userId, Context.ConnectionAborted);
+        return role is not null;
     }
 
     private Guid GetUserId()
