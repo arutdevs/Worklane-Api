@@ -2,6 +2,11 @@
 # Create migrator / app / readonly roles. Idempotent. Passwords come from the env file.
 # The migrator role owns objects it creates. There is no worklane_owner role:
 # nothing called SET ROLE, so a NOLOGIN group never became the owner.
+# Databases created by the old script still have that role. Revoke membership,
+# then DROP ROLE IF EXISTS. The app role can read __EFMigrationsHistory and
+# cannot insert, update, or delete it. The migrator owns the table, so migrate
+# still writes the history row. The revoke is skipped until the table exists,
+# which is why ef-migrate.sh calls this script again after migrate.
 #   init-db-roles.sh /etc/worklane/<slot>.env
 set -euo pipefail
 
@@ -78,6 +83,44 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO ${app};
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO ${readonly_role};
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO ${app};
 GRANT SELECT ON ALL SEQUENCES IN SCHEMA public TO ${readonly_role};
+
+-- Old init script: CREATE ROLE worklane_owner NOLOGIN; GRANT worklane_owner TO the migrator.
+-- Membership has to be revoked or DROP ROLE fails. REASSIGN/DROP OWNED cover a
+-- database where that role was given objects. Both are no-ops when it owns nothing.
+DO \$do\$
+DECLARE
+  member text;
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'worklane_owner') THEN
+    FOR member IN
+      SELECT m.rolname
+      FROM pg_auth_members am
+      JOIN pg_roles granted ON granted.oid = am.roleid
+      JOIN pg_roles m ON m.oid = am.member
+      WHERE granted.rolname = 'worklane_owner'
+    LOOP
+      EXECUTE format('REVOKE worklane_owner FROM %I', member);
+    END LOOP;
+  END IF;
+END
+\$do\$;
+
+SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'worklane_owner') AS drop_owner \gset
+\if :drop_owner
+REASSIGN OWNED BY worklane_owner TO ${migrator};
+DROP OWNED BY worklane_owner;
+\endif
+DROP ROLE IF EXISTS worklane_owner;
+
+-- After Migrate() the history table exists and default privileges have already
+-- granted the app role DML. Take that back. SELECT stays.
+DO \$do\$
+BEGIN
+  IF to_regclass('public."__EFMigrationsHistory"') IS NOT NULL THEN
+    REVOKE INSERT, UPDATE, DELETE ON TABLE public."__EFMigrationsHistory" FROM ${app};
+  END IF;
+END
+\$do\$;
 SQL
 
 compose exec -T postgres psql -q -v ON_ERROR_STOP=1 -U "$admin" -d "$db" <"$sql"
