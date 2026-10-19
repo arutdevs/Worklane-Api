@@ -1,0 +1,3 @@
+Fixtures for `scripts/check-deploy-compose.sh`. The repo scan prunes this directory.
+
+`expect.txt` of `PASS` means the guard must exit 0. Any other `expect.txt` lists error text that must appear, and the guard must exit 1. At least one of those lines must exactly equal a full guard `::error file=...` line. `config failed` and `could not read` in the guard output fail the check even when `expect.txt` lists them. Defaults are busybox so a variable image is not rejected by an empty render. Fixture changes in this directory go through Security review as a process. `.github/CODEOWNERS` names @arutdevs, the same account that opens every pull request, and code-owner review is not enforced, so that entry enforces nothing. Enforcing that review is อรุษ's ruleset decision.

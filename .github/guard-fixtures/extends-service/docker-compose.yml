@@ -1,0 +1,7 @@
+services:
+  web:
+    image: nginx:alpine
+  s3:
+    extends:
+      file: base-service.yml
+      service: s3
