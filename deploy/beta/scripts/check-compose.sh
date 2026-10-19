@@ -83,6 +83,8 @@ env_probe_created=0
 commit_probe_image=""
 worktree_probe_image=""
 exclude=""
+exclude_backup=""
+exclude_existed=0
 exclude_appended=0
 cleanup() {
   rm -f "$dirty_probe"
@@ -92,10 +94,14 @@ cleanup() {
   if [[ "$env_probe_created" == "1" ]]; then
     rm -f "$env_probe"
   fi
-  if [[ "$exclude_appended" == "1" && -n "$exclude" && -f "$exclude" ]]; then
-    local filtered="$workdir/exclude.filtered"
-    grep -vxF 'src/Worklane.WebApi/LabProbe.cs' "$exclude" >"$filtered"
-    mv "$filtered" "$exclude"
+  # Put the original info/exclude bytes and mode back. Filtering the line
+  # out leaves a blank line behind on every run.
+  if [[ "$exclude_appended" == "1" && -n "$exclude" ]]; then
+    if [[ "$exclude_existed" == "1" && -f "$exclude_backup" ]]; then
+      cp -p "$exclude_backup" "$exclude"
+    else
+      rm -f "$exclude"
+    fi
   fi
   if [[ "$wl63_created" == "1" ]]; then
     rm -f "$wl63"
@@ -315,7 +321,8 @@ def assert_hardened(name, service):
     assert service.get("read_only") is True, name
     assert "no-new-privileges:true" in (service.get("security_opt") or []), name
     assert "ALL" in (service.get("cap_drop") or []), name
-    assert service.get("pids_limit"), name
+    limit = service.get("pids_limit")
+    assert isinstance(limit, int) and not isinstance(limit, bool) and limit > 0, (name, limit)
     assert "/tmp" in tmpfs_targets(service), (name, service.get("tmpfs"))
 
 assert doc["name"] == "worklane-prod", doc.get("name")
@@ -398,6 +405,10 @@ aws = migrate["services"]["awscli"]
 assert_hardened("awscli", aws)
 assert aws["image"].startswith("amazon/aws-cli:2.38.1@sha256:")
 assert aws["restart"] == "no"
+assert aws.get("network_mode") == "none"
+web_dep = services["web"].get("depends_on") or {}
+assert set(web_dep) == {"api"}, web_dep
+assert web_dep["api"].get("condition") == "service_healthy", web_dep
 example = open(example_path).read()
 assert "replace-me" in example
 # The dev signing secret is base64 and must not be copied into the example or the render.
@@ -421,11 +432,15 @@ PY
 # Top-level volumes may not set driver, driver_opts, or external. Secrets and
 # configs are not expected: file, environment, and content all fail.
 # Service mounts must be type volume. docker.sock stays out.
+# The second argument is the compose project name (COMPOSE_PROJECT_NAME).
 assert_no_host_mounts() {
-  python3 - "$1" <<'PY'
-import json, sys
+  python3 - "$1" "$2" <<'PY'
+import hashlib, json, sys
 doc = json.load(open(sys.argv[1]))
+expected_name = sys.argv[2]
 bad = []
+if doc.get("name") != expected_name:
+    bad.append("name")
 
 # Union of keys compose emits for this file, interpolated and --no-interpolate.
 allowed = {
@@ -469,15 +484,167 @@ def sock(label, blob):
     if "docker.sock" in blob:
         bad.append(f"{label} docker.sock")
 
-def tmpfs_has_noexec(item):
+# Docker keeps the last tmpfs flag. "noexec,exec" is executable. Tokens are
+# split on commas so "noexec" is not treated as containing "exec".
+FORBIDDEN_TMPFS = {"exec", "suid", "dev"}
+REQUIRED_TMPFS = {"noexec", "nosuid", "nodev"}
+SHM_MAX = 512 * 1024 * 1024
+SLOT_ENV = {
+    "ASPNETCORE_ENVIRONMENT",
+    "AllowedHosts",
+    "Cors__AllowedOrigins__0",
+    "Frontend__BaseUrl",
+}
+# SHA-256 of entrypoint, command, healthcheck, redacted environment, and
+# depends_on. Two digests where interpolation changes the text (api, postgres).
+# Slot-specific hosts and the environment name are normalized so prod and
+# staging share a digest. Secret values are not part of the digest.
+REVIEWED = {
+    "api": {
+        "52056c71100a61e23d400ed31731de6f78f1eebe346d39244acf68caef921581",
+        "7d82d9cf805e39149aa0f98b8f3fc01be4f35b2baacf067f04c03872053e605a",
+    },
+    "awscli": {
+        "ba2939c91e5e6d0cdbef9a204537cb47b103ac8ab656e24a35fe38234e1aab11",
+    },
+    "cloudflared": {
+        "1f1849a4188abc83e06a1df1112809a09d95add968deaeb9eaa9eb98737f36fa",
+    },
+    "migrator": {
+        "35a36834fab5c1bc233ab02bc3d3b168a73f6533161bed00756c742bf8ea85ff",
+    },
+    "postgres": {
+        "3475b615b8f4c1ebb57933f69cee660fbb4fbb309cca1eeeda54a8b474c190c0",
+        "babf1c71ae6b30ebcfe0eff7e0663b953b745a2567c33f86e970630c8715a3c4",
+    },
+    "web": {
+        "bab30e3ce6f4939853c7c4bcb188bad665877b0b69b88c4e6dad88cea6a27b7a",
+    },
+}
+
+def tmpfs_tokens(item):
+    texts = []
     if isinstance(item, str):
-        if ":" not in item:
-            return False
-        flags = {part.strip().lower() for part in item.split(":", 1)[1].split(",")}
-        return "noexec" in flags
-    if isinstance(item, dict):
-        return "noexec" in json.dumps(item).lower()
-    return False
+        texts.append(item)
+    elif isinstance(item, dict):
+        def walk(node):
+            if isinstance(node, str):
+                texts.append(node)
+            elif isinstance(node, dict):
+                for value in node.values():
+                    walk(value)
+            elif isinstance(node, list):
+                for value in node:
+                    walk(value)
+        walk(item)
+    else:
+        return set()
+    flags = set()
+    for text in texts:
+        raw = text.strip()
+        if not raw:
+            continue
+        if raw.startswith("/"):
+            if ":" not in raw:
+                continue
+            raw = raw.split(":", 1)[1]
+        for part in raw.split(","):
+            token = part.strip().lower()
+            if token:
+                flags.add(token)
+    return flags
+
+def tmpfs_is_safe(item):
+    flags = tmpfs_tokens(item)
+    if flags & FORBIDDEN_TMPFS:
+        return False
+    return REQUIRED_TMPFS <= flags
+
+def parse_bytes(value):
+    if isinstance(value, bool) or value is None:
+        raise ValueError("missing size")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    text = str(value).strip().lower().replace(" ", "")
+    units = (
+        ("gib", 1024 ** 3),
+        ("gb", 1024 ** 3),
+        ("mib", 1024 ** 2),
+        ("mb", 1024 ** 2),
+        ("kib", 1024),
+        ("kb", 1024),
+        ("g", 1024 ** 3),
+        ("m", 1024 ** 2),
+        ("k", 1024),
+        ("b", 1),
+    )
+    for suffix, mult in units:
+        if text.endswith(suffix) and text[: -len(suffix)]:
+            return int(float(text[: -len(suffix)]) * mult)
+    return int(text)
+
+def as_env(value):
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, list):
+        out = {}
+        for item in value:
+            if isinstance(item, str) and "=" in item:
+                key, val = item.split("=", 1)
+                out[key] = val
+            else:
+                out[json.dumps(item, sort_keys=True)] = "<non-dict>"
+        return out
+    return {"<non-dict>": json.dumps(value, sort_keys=True)}
+
+def argv(value):
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value.split()
+    if isinstance(value, list):
+        return [None if part is None else str(part) for part in value]
+    return value
+
+def redact_env(env):
+    out = {}
+    for key, value in env.items():
+        upper = str(key).upper()
+        if key in SLOT_ENV:
+            out[key] = "<slot>"
+        elif key == "ConnectionStrings__Default" or any(
+            part in upper for part in ("PASSWORD", "SECRET", "TOKEN")
+        ):
+            out[key] = "<redacted>"
+        else:
+            out[key] = value
+    return out
+
+def reviewed_digest(service):
+    payload = {
+        "entrypoint": service.get("entrypoint"),
+        "command": argv(service.get("command")),
+        "healthcheck": service.get("healthcheck"),
+        "environment": redact_env(as_env(service.get("environment"))),
+        "depends_on": service.get("depends_on"),
+    }
+    blob = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(blob.encode()).hexdigest()
+
+def mount_source(mount):
+    if isinstance(mount, str):
+        return mount.split(":", 1)[0]
+    if isinstance(mount, dict):
+        return str(mount.get("source") or "")
+    return ""
+
+def is_pgdata(source):
+    base = str(source).replace("\\", "/").rsplit("/", 1)[-1]
+    return base == "pgdata" or base.endswith("_pgdata") or base.endswith("-pgdata")
 
 def namespace_label(value):
     text = str(value or "").strip().lower()
@@ -520,15 +687,46 @@ for name, service in (doc.get("services") or {}).items():
         if key in service:
             label = namespace_label(service.get(key))
             bad.append(f"{name} {key} {label}".rstrip())
-    if service.get("network_mode") not in (None, "", "none"):
-        mode = str(service.get("network_mode")).strip().lower()
+    mode_raw = service.get("network_mode")
+    mode = "" if mode_raw is None else str(mode_raw).strip().lower()
+    if name == "awscli":
+        if mode != "none":
+            bad.append(f"{name} network_mode")
+    elif mode not in ("", "none"):
         if mode == "host" or mode.startswith("service:"):
             bad.append(f"{name} network_mode {namespace_label(mode) or mode}")
+        else:
+            bad.append(f"{name} network_mode")
     if "extra_hosts" in service:
         bad.append(f"{name} extra_hosts")
     mounts = service.get("tmpfs") or []
-    if not mounts or not all(tmpfs_has_noexec(item) for item in mounts):
+    if not mounts or not all(tmpfs_is_safe(item) for item in mounts):
         bad.append(f"{name} tmpfs")
+    try:
+        limit = int(service.get("pids_limit"))
+    except (TypeError, ValueError):
+        bad.append(f"{name} pids_limit")
+    else:
+        if isinstance(service.get("pids_limit"), bool) or limit <= 0:
+            bad.append(f"{name} pids_limit")
+    if name == "postgres":
+        try:
+            shm = parse_bytes(service.get("shm_size"))
+        except (TypeError, ValueError):
+            bad.append(f"{name} shm_size")
+        else:
+            if shm <= 0 or shm > SHM_MAX:
+                bad.append(f"{name} shm_size")
+    if name == "web":
+        dep = service.get("depends_on")
+        api_dep = dep.get("api") if isinstance(dep, dict) else None
+        condition = api_dep.get("condition") if isinstance(api_dep, dict) else None
+        if not isinstance(dep, dict) or set(dep) != {"api"} or condition != "service_healthy":
+            bad.append(f"{name} depends_on")
+    digest = reviewed_digest(service)
+    allowed_digest = REVIEWED.get(name)
+    if allowed_digest is None or digest not in allowed_digest:
+        bad.append(f"{name} reviewed")
     build = service.get("build")
     if build not in (None, False, ""):
         bad.append(f"{name} build")
@@ -542,6 +740,9 @@ for name, service in (doc.get("services") or {}).items():
             if build.get("ssh"):
                 bad.append(f"{name} build ssh")
     for mount in service.get("volumes") or []:
+        source = mount_source(mount)
+        if name != "postgres" and is_pgdata(source):
+            bad.append(f"{name} pgdata")
         if isinstance(mount, str):
             sock(name, mount)
             if mount.startswith("/") or mount.startswith(".") or ":/" in mount:
@@ -584,31 +785,41 @@ for section in ("secrets", "configs"):
             bad.append(f"{section} {item_name} {key}")
         sock(f"{section} {item_name}", json.dumps(item))
 
+for net_name, net in (doc.get("networks") or {}).items():
+    if not isinstance(net, dict):
+        bad.append(f"network {net_name}")
+        continue
+    driver = str(net.get("driver") or "bridge").strip().lower()
+    if driver != "bridge":
+        bad.append(f"network {net_name} {driver}")
+
 if bad:
     print("host mount forbidden: " + "; ".join(bad), file=sys.stderr)
     sys.exit(1)
 PY
 }
 
-assert_no_host_mounts "$rendered"
-assert_no_host_mounts "$workdir/migrate.json"
-assert_no_host_mounts "$workdir/nointerp.json"
+assert_no_host_mounts "$rendered" worklane-prod
+assert_no_host_mounts "$workdir/migrate.json" worklane-prod
+assert_no_host_mounts "$workdir/nointerp.json" worklane-prod
 
-# Control: a named volume is not a bind.
+# Control: a named volume is not a bind. Not pgdata: that volume is postgres-only.
 python3 - "$rendered" "$workdir/ok-volume.json" <<'PY'
 import json, sys
 doc = json.load(open(sys.argv[1]))
 doc["services"]["api"]["volumes"] = [
-    {"type": "volume", "source": "worklane-prod_pgdata", "target": "/var/lib/postgresql/data"},
+    {"type": "volume", "source": "attachments", "target": "/var/worklane/attachments"},
 ]
 json.dump(doc, open(sys.argv[2], "w"))
 PY
-assert_no_host_mounts "$workdir/ok-volume.json"
+assert_no_host_mounts "$workdir/ok-volume.json" worklane-prod
 
 expect_host_mount_forbidden() {
-  local label=$1 bind_out bind_status
+  local label=$1
+  local project=${2:-worklane-prod}
+  local bind_out bind_status
   set +e
-  bind_out=$(assert_no_host_mounts "$workdir/bad-mount.json" 2>&1)
+  bind_out=$(assert_no_host_mounts "$workdir/bad-mount.json" "$project" 2>&1)
   bind_status=$?
   set -e
   if [[ "$bind_status" -eq 0 ]] || ! printf '%s\n' "$bind_out" | grep -q 'host mount forbidden' || ! printf '%s\n' "$bind_out" | grep -q -- "$label"; then
@@ -981,6 +1192,103 @@ configs:
 EOF
 expect_host_mount_forbidden "content"
 
+# Docker honors the last tmpfs flag, so a later exec/suid/dev wins.
+render_forbidden <<'EOF'
+services:
+  api:
+    tmpfs:
+      - /var/tmp:noexec,exec
+EOF
+expect_host_mount_forbidden "tmpfs"
+
+render_forbidden <<'EOF'
+services:
+  api:
+    tmpfs:
+      - /var/tmp:noexec,nosuid,nodev,suid
+EOF
+expect_host_mount_forbidden "tmpfs"
+
+render_forbidden <<'EOF'
+services:
+  api:
+    tmpfs:
+      - /var/tmp:noexec,nosuid,nodev,dev
+EOF
+expect_host_mount_forbidden "tmpfs"
+
+render_forbidden <<'EOF'
+services:
+  api:
+    tmpfs:
+      - /var/tmp:noexec,nosuid
+EOF
+expect_host_mount_forbidden "tmpfs"
+
+render_forbidden <<'EOF'
+services:
+  awscli:
+    network_mode: bridge
+EOF
+expect_host_mount_forbidden "network_mode"
+
+render_forbidden <<'EOF'
+services:
+  api:
+    pids_limit: -1
+EOF
+expect_host_mount_forbidden "pids_limit"
+
+render_forbidden <<'EOF'
+services:
+  postgres:
+    shm_size: 8gb
+EOF
+expect_host_mount_forbidden "shm_size"
+
+render_forbidden <<'EOF'
+services:
+  api:
+    volumes:
+      - pgdata:/tmp/pgdata
+EOF
+expect_host_mount_forbidden "pgdata"
+
+render_forbidden <<'EOF'
+services:
+  api:
+    environment:
+      DOTNET_STARTUP_HOOKS: /tmp/hook.dll
+EOF
+expect_host_mount_forbidden "reviewed"
+
+render_forbidden <<'EOF'
+services:
+  cloudflared:
+    command: ["sh", "-c", "echo"]
+EOF
+expect_host_mount_forbidden "reviewed"
+
+render_forbidden <<'EOF'
+services:
+  web:
+    depends_on:
+      postgres:
+        condition: service_started
+EOF
+expect_host_mount_forbidden "depends_on"
+
+render_forbidden <<'EOF'
+networks:
+  edge:
+    driver: macvlan
+EOF
+expect_host_mount_forbidden "macvlan"
+
+sed 's/^COMPOSE_PROJECT_NAME=.*/COMPOSE_PROJECT_NAME=evil/' "$envfile" >"$workdir/evil.env"
+docker compose --env-file "$workdir/evil.env" -f "$compose_path" config --format json >"$workdir/bad-mount.json"
+expect_host_mount_forbidden "name"
+
 # Generated override: literal name and images, no ${ in an image line.
 sha40=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 websha=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
@@ -1212,6 +1520,7 @@ for service in doc["services"].values():
     assert not service.get("ports"), service.get("image")
 print("staging project ok")
 PY
+assert_no_host_mounts "$workdir/staging.json" worklane-staging
 
 # Same render PR #5's image-scan uses: sibling .env.example and every profile.
 docker compose --env-file "$(deploy_dir)/.env.example" -f "$compose_path" --profile '*' config >/dev/null
@@ -1309,7 +1618,13 @@ fi
 mkdir -p "$(dirname "$exclude")"
 # The stock exclude file often has no trailing newline, so a bare append
 # glues the pattern onto the last comment and it never matches.
+# Keep a byte-for-byte copy, including mode, and restore that on exit.
 if ! grep -qxF 'src/Worklane.WebApi/LabProbe.cs' "$exclude" 2>/dev/null; then
+  exclude_backup="$workdir/info-exclude.backup"
+  if [[ -f "$exclude" ]]; then
+    cp -p "$exclude" "$exclude_backup"
+    exclude_existed=1
+  fi
   printf '\n%s\n' 'src/Worklane.WebApi/LabProbe.cs' >>"$exclude"
   exclude_appended=1
 fi
