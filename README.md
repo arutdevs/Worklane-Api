@@ -191,8 +191,16 @@ Components do **not** carry their own stylesheets — the single theme definitio
 
 ## Environment / secrets
 
-`appsettings.Development.json` and `docker-compose.yml` ship a **development-only** JWT signing
-secret for convenience. Replace `Jwt__Secret` with a real secret (e.g. via environment variable or
-a secrets manager) before deploying anywhere real.
+The API refuses to start when `Jwt:Secret` (or any `Jwt:PreviousSecrets` entry) is missing, not valid base64, shorter than 32 bytes, or matches a signing key that was committed to this repository. The check compares SHA-256 fingerprints of the decoded key bytes and does not embed the plaintext. It runs in every environment, including Development.
+
+The committed values in `appsettings.Development.json` and `docker-compose.yml` are therefore unusable. Removing them from the files is waiting on the repository owner. Until a local override is set, `dotnet run` and `docker compose up` stop at startup. Generate a key and store it outside the repo:
+
+```bash
+dotnet user-secrets set "Jwt:Secret" "$(openssl rand -base64 64 | tr -d '\n')" --project src/Worklane.WebApi
+```
+
+`openssl rand -base64 64` is 64 bytes; the minimum is 32. User-secrets override `appsettings.Development.json` in Development. A process manager can set `Jwt__Secret` instead. `Jwt__PreviousSecrets__0` is an older key still accepted while its tokens expire. New tokens are signed only with `Jwt:Secret` and carry a `kid`.
+
+Data Protection keys (Identity tokens such as password reset) use `SetApplicationName("Worklane")`. Set `DataProtection__KeysPath` to a directory that already exists and is writable. Production and any other non-Development, non-Testing environment refuse to start without it. Production uses `/var/lib/worklane/dataprotection-keys` on a persistent volume (the process runs as uid 1654 and the root filesystem is read-only). Development and Testing may omit the path: Development uses the framework default directory under the user profile, and Testing keeps an ephemeral key ring.
 
 Object-storage credentials (`S3_ROOT_USER`, `S3_ROOT_PASSWORD`, `WL_S3_ACCESS_KEY`, `WL_S3_SECRET_KEY`) are not in the repo. Copy `.env.example` to `.env` and generate them locally. `.env` and `.env.*` are git-ignored; `.env.example` is the exception. Postgres, the API, and the web app publish on `127.0.0.1` only.

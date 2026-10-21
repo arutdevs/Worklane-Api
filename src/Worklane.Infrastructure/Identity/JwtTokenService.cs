@@ -20,7 +20,7 @@ public class JwtTokenService : ITokenService
     public string CreateAccessToken(Guid userId, string email, string displayName)
     {
         var signingCredentials = new SigningCredentials(
-            new SymmetricSecurityKey(Convert.FromBase64String(_settings.Secret)),
+            JwtSigningKeys.Create(_settings).Current,
             SecurityAlgorithms.HmacSha256);
 
         var descriptor = new SecurityTokenDescriptor

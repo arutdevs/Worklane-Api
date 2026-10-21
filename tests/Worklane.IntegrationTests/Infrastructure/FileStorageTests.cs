@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text;
 using FluentAssertions;
 using Microsoft.Extensions.Configuration;
@@ -33,6 +34,7 @@ public class FileStorageTests
         var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
         {
             ["ConnectionStrings:Default"] = "Host=localhost;Database=worklane;Username=worklane;Password=worklane",
+            ["Jwt:Secret"] = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)),
             [key] = value
         }).Build();
 

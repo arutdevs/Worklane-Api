@@ -6,7 +6,6 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi;
 using Serilog;
 using Worklane.Application;
@@ -21,6 +20,7 @@ using Worklane.WebApi.Hubs;
 using Worklane.WebApi.Middleware;
 using Worklane.WebApi.Seed;
 using Worklane.WebApi.Services;
+using Worklane.WebApi.Startup;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -149,7 +149,7 @@ builder.Services.AddCors(options =>
         .WithExposedHeaders("Content-Disposition", "Retry-After"));
 });
 
-var jwtSettings = builder.Configuration.GetSection(JwtSettings.SectionName).Get<JwtSettings>() ?? new JwtSettings();
+builder.Services.AddWorklaneDataProtection(builder.Environment, builder.Configuration);
 
 builder.Services
     .AddAuthentication(options =>
@@ -157,39 +157,15 @@ builder.Services
         options.DefaultAuthenticateScheme = JwtBearerDefaults.AuthenticationScheme;
         options.DefaultChallengeScheme = JwtBearerDefaults.AuthenticationScheme;
     })
-    .AddJwtBearer(options =>
-    {
-        options.MapInboundClaims = false;
-        options.TokenValidationParameters = new TokenValidationParameters
-        {
-            ValidateIssuer = true,
-            ValidIssuer = jwtSettings.Issuer,
-            ValidateAudience = true,
-            ValidAudience = jwtSettings.Audience,
-            ValidateIssuerSigningKey = true,
-            IssuerSigningKey = new SymmetricSecurityKey(Convert.FromBase64String(jwtSettings.Secret)),
-            ValidateLifetime = true,
-            ClockSkew = TimeSpan.FromSeconds(30)
-        };
-
-        options.Events = new JwtBearerEvents
-        {
-            OnMessageReceived = context =>
-            {
-                var accessToken = context.Request.Query["access_token"];
-                var path = context.HttpContext.Request.Path;
-                if (!string.IsNullOrEmpty(accessToken) && path.StartsWithSegments("/hubs"))
-                {
-                    context.Token = accessToken;
-                }
-                return Task.CompletedTask;
-            }
-        };
-    });
+    .AddJwtBearer();
+builder.Services.AddSingleton<IConfigureOptions<JwtBearerOptions>, JwtBearerOptionsSetup>();
 
 builder.Services.AddAuthorization();
 
 var app = builder.Build();
+
+// Fail before migrate or listen when the signing key is missing, short, or leaked.
+_ = app.Services.GetRequiredService<IOptions<JwtSettings>>().Value;
 
 app.UseSerilogRequestLogging();
 app.UseMiddleware<ExceptionHandlingMiddleware>();
