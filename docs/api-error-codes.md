@@ -12,7 +12,7 @@ Reserved names are not overwritten by exception parameters, compared without reg
 
 `not_found` and `unauthorized` are generic for now. Later cards rename them to `<entity>_not_found`, and to `invalid_credentials` / `refresh_token_invalid` (WL-64).
 
-`RequireWorkspaceRoleAttribute`: a non-member gets 404 `not_found` with the same body as a non-existent id. 403 `workspace_access_denied` is only for a member whose role is too low. That filter change ships in WL-88. Until then, a non-member still gets 403 `workspace_access_denied`.
+`RequireWorkspaceRoleAttribute`: a non-member gets 404 `not_found` with the same body as a non-existent id. 403 `workspace_access_denied` is only for a member whose role is too low. Comment edit and delete use that same 404 when the caller is not a member. A member who is not allowed to edit or delete still gets 403 `forbidden`.
 
 `Status` is `emitted` when a current branch sends that code, or `planned (card)` when it is not sent yet. WL-60 codes are emitted by the column-delete PR stacked on this one.
 
@@ -27,7 +27,7 @@ Reserved names are not overwritten by exception parameters, compared without reg
 | `target_column_same_as_source` | 400 | | Target column must be different from the column being deleted. | emitted |
 | `unauthorized` | 401 | | A valid access token is required. | emitted |
 | `forbidden` | 403 | | You do not have permission to perform this action. | emitted |
-| `workspace_access_denied` | 403 | | You do not have sufficient permissions in this workspace. A non-member is 404 `not_found`, same body as a missing id, once WL-88 lands. Until then a non-member still gets this 403. | emitted |
+| `workspace_access_denied` | 403 | | You do not have sufficient permissions in this workspace. A non-member is 404 `not_found`, the same body as a missing id. | emitted |
 | `file_infected` | 403 | | The file was rejected by malware scanning. | planned (WL-73) |
 | `member_manage_forbidden` | 403 | | You do not have permission to manage workspace members. | emitted |
 | `owner_role_owner_only` | 403 | | Only an Owner can grant, change, or remove the Owner role. | emitted |
@@ -52,4 +52,4 @@ Reserved names are not overwritten by exception parameters, compared without reg
 | `rate_limited` | 429 | `scope` | Too many requests. | emitted |
 | `internal_error` | 500 | `traceId` | An unexpected error occurred. | emitted |
 
-`file_empty` is a 0-byte upload. `request_too_large` is a body over the server limit, rejected before the body is read, and has no `maxBytes`. `file_too_large` is one attachment over the per-file limit. `unsupported_file_type` is every rejected upload type, including the generic 415 fallback. `extension` is the filename extension the caller sent, including the leading dot. `rate_limited` carries `scope` and no usage or limit numbers. The wait is only the `Retry-After` header, which CORS exposes. Emitted `scope` is `user` (global limiter, layer 1). Planned scopes use the same code and fields: `workspace_attachments` (WL-88 layer 2), `workspace_ai` (AI quota), `ip` (WL-64 login per IP). WL-62 emits `member_manage_forbidden`, `owner_role_owner_only`, `admin_remove_owner_only`, `cannot_raise_own_role`, `admin_manage_peer_owner_only`, `admin_manages_viewer_member_only`, `admin_grant_owner_only`, and `last_owner`.
+`file_empty` is a 0-byte upload. `request_too_large` is a body over the server limit, rejected before the body is read, and has no `maxBytes`. `file_too_large` is one attachment over the per-file limit. `unsupported_file_type` is every rejected upload type, including the generic 415 fallback. `extension` is the filename extension the caller sent, including the leading dot. `rate_limited` carries `scope` and no usage or limit numbers. The wait is only the `Retry-After` header, which CORS exposes. The body has no `retryAfterSeconds`. Emitted `scope` is `user` (global limiter, layer 1) or `ip` (login, register, and refresh, one bucket per client IP, `RateLimit:Auth`). Planned scopes use the same code and fields: `workspace_attachments` (WL-88 layer 2), `workspace_ai` (AI quota). WL-62 emits `member_manage_forbidden`, `owner_role_owner_only`, `admin_remove_owner_only`, `cannot_raise_own_role`, `admin_manage_peer_owner_only`, `admin_manages_viewer_member_only`, `admin_grant_owner_only`, and `last_owner`.

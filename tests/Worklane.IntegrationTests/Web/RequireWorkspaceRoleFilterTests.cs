@@ -49,6 +49,34 @@ public class RequireWorkspaceRoleFilterTests
     }
 
     [Fact]
+    public async Task NonMember_MatchesMissingResourceNotFound()
+    {
+        var userId = Guid.NewGuid();
+        var missing = await Run(
+            new RequireWorkspaceRoleAttribute(WorkspaceRole.Viewer, WorkspaceResourceType.Project, "projectId"),
+            userId,
+            Guid.NewGuid().ToString(),
+            role: null,
+            projectWorkspaceId: null,
+            routeKey: "projectId");
+        var hidden = await Run(
+            new RequireWorkspaceRoleAttribute(WorkspaceRole.Member),
+            userId,
+            Guid.NewGuid().ToString(),
+            role: null,
+            projectWorkspaceId: null);
+
+        missing.Status.Should().Be(StatusCodes.Status404NotFound);
+        missing.Extensions["code"].Should().Be("not_found");
+        hidden.Status.Should().Be(missing.Status);
+        hidden.Title.Should().Be(missing.Title);
+        hidden.Detail.Should().Be(missing.Detail);
+        hidden.Type.Should().Be(missing.Type);
+        hidden.Instance.Should().Be(missing.Instance);
+        hidden.Extensions.Should().BeEquivalentTo(missing.Extensions);
+    }
+
+    [Fact]
     public async Task InsufficientRole_IsWorkspaceAccessDenied()
     {
         var workspaceId = Guid.NewGuid();

@@ -1,8 +1,10 @@
 using FluentValidation;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Worklane.Application.Auth.Dtos;
 using Worklane.Application.Auth.Interfaces;
+using Worklane.Application.Common.Options;
 
 namespace Worklane.WebApi.Controllers;
 
@@ -29,6 +31,7 @@ public class AuthController : ControllerBase
     }
 
     [HttpPost("register")]
+    [EnableRateLimiting(AuthRateLimitSettings.PolicyName)]
     public async Task<ActionResult<AuthTokensResponse>> Register(RegisterRequest request, CancellationToken cancellationToken)
     {
         await _registerValidator.ValidateAndThrowAsync(request, cancellationToken);
@@ -37,6 +40,7 @@ public class AuthController : ControllerBase
     }
 
     [HttpPost("login")]
+    [EnableRateLimiting(AuthRateLimitSettings.PolicyName)]
     public async Task<ActionResult<AuthTokensResponse>> Login(LoginRequest request, CancellationToken cancellationToken)
     {
         await _loginValidator.ValidateAndThrowAsync(request, cancellationToken);
@@ -45,6 +49,7 @@ public class AuthController : ControllerBase
     }
 
     [HttpPost("refresh")]
+    [EnableRateLimiting(AuthRateLimitSettings.PolicyName)]
     public async Task<ActionResult<AuthTokensResponse>> Refresh(RefreshRequest request, CancellationToken cancellationToken)
     {
         await _refreshValidator.ValidateAndThrowAsync(request, cancellationToken);

@@ -25,6 +25,7 @@ services:
       Jwt__Issuer: "Worklane"
       Jwt__Audience: "WorklaneClient"
       Cors__AllowedOrigins__0: "http://localhost:4200"
+      Cors__AllowedOrigins__1: "http://localhost:8080"
       FileStorage__LocalPath: /var/worklane/attachments
       FileStorage__MaxBytes: "10485760"
     volumes:
@@ -34,15 +35,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-
-  web:
-    build:
-      context: ./web
-      dockerfile: Dockerfile
-    ports:
-      - "127.0.0.1:4200:8080"
-    depends_on:
-      - api
 
 volumes:
   pgdata:

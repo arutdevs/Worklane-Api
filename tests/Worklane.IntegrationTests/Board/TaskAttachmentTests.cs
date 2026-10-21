@@ -54,9 +54,9 @@ public class TaskAttachmentTests : IClassFixture<WorklaneWebApplicationFactory>
         download.Content.Headers.ContentDisposition.FileName.Should().Contain("notes.png");
         (await download.Content.ReadAsByteArrayAsync()).Should().Equal(payload);
 
-        (await outsider.Client.GetAsync($"/api/tasks/{task.Id}/attachments")).StatusCode.Should().Be(HttpStatusCode.Forbidden);
-        (await outsider.Client.GetAsync($"/api/attachments/{file.Id}/download")).StatusCode.Should().Be(HttpStatusCode.Forbidden);
-        (await outsider.Client.DeleteAsync($"/api/attachments/{file.Id}")).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await outsider.Client.GetAsync($"/api/tasks/{task.Id}/attachments")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await outsider.Client.GetAsync($"/api/attachments/{file.Id}/download")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await outsider.Client.DeleteAsync($"/api/attachments/{file.Id}")).StatusCode.Should().Be(HttpStatusCode.NotFound);
         (await member.Client.DeleteAsync($"/api/attachments/{file.Id}")).StatusCode.Should().Be(HttpStatusCode.Forbidden);
 
         (await board.Client.GetAsync($"/api/attachments/{Guid.NewGuid()}/download")).StatusCode.Should().Be(HttpStatusCode.NotFound);

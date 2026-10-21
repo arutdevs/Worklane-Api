@@ -137,10 +137,10 @@ public class TaskCommentTests : IClassFixture<WorklaneWebApplicationFactory>
             .Content.ReadFromJsonAsync<CommentDto>(TestAuthHelper.JsonOptions);
         var outsider = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), "comments-tenant-out@test.com");
 
-        (await outsider.Client.GetAsync($"/api/tasks/{task.Id}/comments")).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await outsider.Client.GetAsync($"/api/tasks/{task.Id}/comments")).StatusCode.Should().Be(HttpStatusCode.NotFound);
         (await outsider.Client.PatchAsJsonAsync($"/api/comments/{created!.Id}", new { body = "Stolen" }))
-            .StatusCode.Should().Be(HttpStatusCode.Forbidden);
-        (await outsider.Client.DeleteAsync($"/api/comments/{created.Id}")).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+            .StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await outsider.Client.DeleteAsync($"/api/comments/{created.Id}")).StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
     [Fact]
@@ -260,7 +260,7 @@ public class TaskCommentTests : IClassFixture<WorklaneWebApplicationFactory>
         var otherAdmin = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), "comments-ws-b@test.com", "Owner B");
 
         (await otherAdmin.Client.PatchAsJsonAsync($"/api/comments/{comment!.Id}", new { body = "Taken" }))
-            .StatusCode.Should().Be(HttpStatusCode.Forbidden);
+            .StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
     [Fact]

@@ -63,7 +63,10 @@ public class WorklaneWebApplicationFactory : WebApplicationFactory<Program>, IAs
                 ["FileStorage:MaxBytes"] = TestMaxUploadBytes.ToString(),
                 ["Jwt:Secret"] = JwtSecret,
                 ["Jwt:PreviousSecrets:0"] = PreviousJwtSecret,
-                ["DataProtection:KeysPath"] = DataProtectionKeysPath
+                ["DataProtection:KeysPath"] = DataProtectionKeysPath,
+                // The suite shares one client IP per factory. Production stays at RateLimit:Auth.
+                ["RateLimit:Auth:PermitLimit"] = "10000",
+                ["RateLimit:Auth:WindowSeconds"] = "60"
             });
         });
     }

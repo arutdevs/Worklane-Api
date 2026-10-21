@@ -323,6 +323,6 @@ public class WorkMetricsTests : IClassFixture<WorklaneWebApplicationFactory>
 
         var res = await outsider.GetAsync($"/api/workspaces/{board.WorkspaceId}/reports/members");
 
-        res.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        res.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 }

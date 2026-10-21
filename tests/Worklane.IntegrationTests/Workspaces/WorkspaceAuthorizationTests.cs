@@ -32,7 +32,7 @@ public class WorkspaceAuthorizationTests : IClassFixture<WorklaneWebApplicationF
 
         var response = await outsider.Client.GetAsync($"/api/workspaces/{owner.Workspace.Id}/members");
 
-        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
     [Fact]
@@ -45,7 +45,7 @@ public class WorkspaceAuthorizationTests : IClassFixture<WorklaneWebApplicationF
             $"/api/workspaces/{owner.Workspace.Id}/projects",
             new CreateProjectRequest("Should Fail", "SF", null));
 
-        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
     [Fact]
@@ -101,7 +101,7 @@ public class WorkspaceAuthorizationTests : IClassFixture<WorklaneWebApplicationF
 
         var archiveResponse = await outsider.Client.DeleteAsync($"/api/projects/{project!.Id}");
 
-        archiveResponse.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        archiveResponse.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 
     [Fact]
@@ -333,8 +333,8 @@ public class WorkspaceAuthorizationTests : IClassFixture<WorklaneWebApplicationF
         var patch = await PatchRole(outsider, owner.Workspace.Id, member.Tokens.User.Id, WorkspaceRole.Owner);
         var delete = await outsider.Client.DeleteAsync($"/api/workspaces/{owner.Workspace.Id}/members/{owner.Tokens.User.Id}");
 
-        patch.StatusCode.Should().Be(HttpStatusCode.Forbidden);
-        delete.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        patch.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        delete.StatusCode.Should().Be(HttpStatusCode.NotFound);
         await AssertRole(owner, owner.Workspace.Id, member.Tokens.User.Id, WorkspaceRole.Member);
         await AssertRole(owner, owner.Workspace.Id, owner.Tokens.User.Id, WorkspaceRole.Owner);
         (await EventCountAsync(owner.Workspace.Id)).Should().Be(before);
