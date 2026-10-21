@@ -76,7 +76,9 @@ public class FileStorageTests
         var checker = StreamingTextChecker.Create(".csv", "a,b\n"u8);
         checker.Accept("aaaa,<scr"u8);
         var act = () => checker.Accept("ipt>x\n"u8);
-        act.Should().Throw<UnsupportedMediaTypeException>();
+        var rejected = act.Should().Throw<UnsupportedMediaTypeException>().Which;
+        rejected.Code.Should().Be("unsupported_file_type");
+        rejected.Params["extension"].Should().Be(".csv");
     }
 
     [Fact]

@@ -60,7 +60,7 @@ Endpoints used:
 |---|---|
 | Create | `POST /api/projects/{projectId}/tasks` — `{ title, description, priority, estimateDays, columnId, assigneeId }` |
 | Move | `POST /api/tasks/{taskId}/move` — `{ toColumnId, toIndex }` |
-| Edit | `PATCH /api/tasks/{taskId}` — any of the create fields |
+| Edit | `PATCH /api/tasks/{taskId}` — any of the create fields. Omit a field to leave it. JSON null clears `description`, `assigneeId`, `dueDate`, and `estimateDays`. JSON null on `title`, `priority`, or `columnId` is rejected. |
 | List | `GET /api/projects/{projectId}/tasks` |
 | Report | `GET /api/workspaces/{id}/reports/members` |
 

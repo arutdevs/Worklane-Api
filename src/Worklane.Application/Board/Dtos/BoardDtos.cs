@@ -13,7 +13,8 @@ public record BoardColumnDto(
     IReadOnlyList<TaskItemDto> Tasks,
     int? WipLimit,
     int TaskCount,
-    bool IsOverWipLimit
+    bool IsOverWipLimit,
+    int ArchivedTaskCount = 0
 );
 
 public record TaskItemDto(
@@ -86,13 +87,13 @@ public record CreateTaskRequest(
 );
 
 public record UpdateTaskRequest(
-    string? Title,
-    string? Description,
-    Guid? AssigneeId,
-    TaskPriority? Priority,
-    DateTimeOffset? DueDate,
-    Guid? ColumnId,
-    double? EstimateDays
+    Optional<string?> Title,
+    Optional<string?> Description,
+    Optional<Guid?> AssigneeId,
+    Optional<TaskPriority?> Priority,
+    Optional<DateTimeOffset?> DueDate,
+    Optional<Guid?> ColumnId,
+    Optional<double?> EstimateDays
 );
 
 public record MoveTaskRequest(Guid ToColumnId, int ToIndex);

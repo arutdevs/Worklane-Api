@@ -52,7 +52,7 @@ public class TaskAttachmentsController : ControllerBase
         var form = await Request.ReadFormAsync(ct);
         var file = form.Files.GetFile("file");
         if (file is null || file.Length <= 0)
-            throw new BadRequestException("A non-empty file is required.");
+            throw new BadRequestException("file_empty", "A non-empty file is required.");
 
         await using var stream = file.OpenReadStream();
         var result = await _attachments.UploadAsync(taskId, file.FileName, file.ContentType, stream, _currentUser.UserId, ct);
