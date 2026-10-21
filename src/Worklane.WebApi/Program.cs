@@ -82,6 +82,7 @@ builder.Services.Configure<CommentRateLimitSettings>(
     builder.Configuration.GetSection(CommentRateLimitSettings.SectionName));
 builder.Services.Configure<AuthRateLimitSettings>(
     builder.Configuration.GetSection(AuthRateLimitSettings.SectionName));
+builder.Services.AddWorklaneForwardedHeaders(builder.Configuration);
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
@@ -125,7 +126,7 @@ builder.Services.AddRateLimiter(options =>
         var permit = settings.PermitLimit < 1 ? 1 : settings.PermitLimit;
         var window = settings.WindowSeconds < 1 ? 1 : settings.WindowSeconds;
         return RateLimitPartition.GetFixedWindowLimiter(
-            ClientIp(httpContext),
+            ForwardedClientIp.PartitionKey(httpContext),
             _ => new FixedWindowRateLimiterOptions
             {
                 PermitLimit = permit,
@@ -148,16 +149,6 @@ builder.Services.AddRateLimiter(options =>
                 QueueLimit = 0,
                 AutoReplenishment = true
             });
-    }
-
-    static string ClientIp(HttpContext httpContext)
-    {
-        var ip = httpContext.Connection.RemoteIpAddress;
-        if (ip is null)
-            return "unknown";
-        if (ip.IsIPv4MappedToIPv6)
-            ip = ip.MapToIPv4();
-        return ip.ToString();
     }
 
     static string RateLimitScope(HttpContext httpContext)
@@ -200,6 +191,9 @@ var app = builder.Build();
 
 // Fail before migrate or listen when the signing key is missing, short, or leaked.
 _ = app.Services.GetRequiredService<IOptions<JwtSettings>>().Value;
+
+// Before the auth limiter, HTTPS redirection, and anything else that reads the peer.
+app.UseWorklaneForwardedHeaders();
 
 app.UseSerilogRequestLogging();
 app.UseMiddleware<ExceptionHandlingMiddleware>();

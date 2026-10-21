@@ -14,7 +14,7 @@ a Kanban board with drag-and-drop, and a dashboard that measures effort per pers
 - **Frontend:** Angular 22 (standalone components) + Bootstrap 5 + ng-bootstrap
 - **i18n:** ngx-translate, English (`en`, default) and Thai (`th`)
 - **Realtime:** SignalR hub at `/hubs/notifications`. Clients join a project group and receive board, comment, attachment, and presence events (see below)
-- **Containers:** Docker Compose — `api` and `postgres`. The Angular app is a separate repository and is not built here. Local S3-compatible storage is a dev-only overlay (`compose.dev.yml`)
+- **Containers:** Docker Compose — `nginx`, `api`, and `postgres`. The Angular app is a separate repository and is not built here. Local S3-compatible storage is a dev-only overlay (`compose.dev.yml`)
 
 ## Run everything
 
@@ -29,7 +29,7 @@ docker compose up
 
 Fill `S3_ROOT_USER`, `S3_ROOT_PASSWORD`, `WL_S3_ACCESS_KEY`, and `WL_S3_SECRET_KEY` before the dev overlay (`openssl rand -hex 24` is enough for those). Then `docker compose -f docker-compose.yml -f compose.dev.yml up`.
 
-`docker compose up` without `compose.dev.yml` starts the API and Postgres. It does not start a web container: this repository has no `./web` tree to build. Serve the Angular app on port **8080**. The API allows origin `http://localhost:8080` (and `http://localhost:4200` for `ng serve`). That compose file is the one a staging or prod deploy should use. RustFS is not in it, and it does not start.
+`docker compose up` without `compose.dev.yml` starts nginx, the API, and Postgres. It does not start the Angular app: this repository has no `./web` tree to build. nginx listens on **127.0.0.1:8080** and proxies to the API. `ng serve` stays on http://localhost:4200. The API allows both origins. That compose file is the one a staging or prod deploy should use. RustFS is not in it, and it does not start.
 
 ห้าม deploy จนกว่า WL-63 (${JWT_SIGNING_KEY:?}) และ WL-71 จะเสร็จ
 
@@ -39,8 +39,9 @@ The dev command above also starts local object storage. This builds and starts t
 
 | Service    | URL                                   |
 |------------|----------------------------------------|
-| Web (Angular, separate repository) | http://localhost:8080 — not started by this compose file |
-| API (Swagger UI in Development) | http://localhost:5000/swagger (container port 8080) |
+| nginx (API proxy) | http://127.0.0.1:8080 — trusted client IP, see below |
+| Web (Angular, separate repository) | http://localhost:4200 via `ng serve`. This compose file does not start it |
+| API direct (Swagger UI in Development) | http://127.0.0.1:5000/swagger (container port 8080). Forwarded headers are ignored |
 | Postgres   | localhost:5432 (user/pass/db: `worklane`) |
 | Object storage (S3 API, localhost only) | http://localhost:9000 |
 
@@ -67,7 +68,7 @@ Keep the image as a literal `name:tag@sha256:…`. Do not wrap it in `${IMAGE:-�
 
 ## Golden path
 
-1. Open http://localhost:8080 → redirected to `/login`. The web app is not part of this compose file; serve it on port 8080. `ng serve` still uses http://localhost:4200, which the API also allows.
+1. Open the Angular app (`ng serve` on http://localhost:4200) → redirected to `/login`. This compose file does not start it. Login calls can go through nginx at http://127.0.0.1:8080, which is the trusted proxy below.
 2. Register a new account (or use the demo login above) → lands in your personal workspace.
 3. Go to **Projects** → create a project (name + key, e.g. `WL`). It starts with
    **To Do / In Progress / Done** columns.
@@ -98,7 +99,7 @@ JSON is camelCase. Enums are strings. `UserRef` is `{ userId, displayName }`. Fr
 
 `TaskActivityDto`: `{ id, taskId, type, actor: UserRef, createdAt, details }`. `type` is `Created`, `Moved`, `Updated`, `CommentAdded`, `CommentEdited`, `CommentDeleted`, `AttachmentAdded`, or `AttachmentDeleted`. A field edit writes **one `Updated` row per changed field**, with `details` `{ field, oldValue, newValue }`. A move's `details` are `{ fromColumnId, fromColumnName, toColumnId, toColumnName }`. Dragging a card inside the same column does not write a row. Changing `columnId` through `PATCH /api/tasks/{id}` is an `Updated` event; only `POST /api/tasks/{id}/move` writes `Moved` and moves the clock. The column must belong to the same project; a column from another project or workspace is **404** and its name is not written into activity. A `CommentAdded` row stores only `{ commentId }`. A `CommentEdited` row stores only `{ commentId, edited: true }`. Neither keeps the comment text. A data migration removes `body`, `oldValue`, and `newValue` from existing rows of both types; running it again is safe, and `Down` cannot restore the text. An assignee must already be a member of the workspace (**400** otherwise). Creating or deleting a comment or file broadcasts `TaskUpdated` with the card's new counts; editing a comment does not, because the counts are unchanged. A broadcast failure after the row is saved is logged and does not change the HTTP result. `JoinProject` requires a current workspace member and rejects an archived project. It checks membership again after joining the group. Removing a member drops that user's connections from every `project:{id}` in the workspace. That removal is in-memory and single-instance: another server process does not see those connections. There is no project-member removal API. The hub sets `CloseOnAuthenticationExpiration`.
 
-`CommentDto`: `{ id, taskId, author: UserRef, body, createdAt, updatedAt }`. `updatedAt` is `null` until the author edits. Only the author can edit. A current member who wrote the comment, or a workspace admin or owner, can delete. A viewer cannot delete, including an author who has been demoted to viewer. Creating a comment uses the `comments` rate-limit policy (60 per minute). Uploads use `attachments` (30 per minute). The two buckets are separate, both partitioned by user subject and workspace. Over the window is **429** with `application/problem+json` and a `Retry-After` header. Login, register, and refresh share an `auth` limit per client IP (`RateLimit:Auth`, 10 requests per 60 seconds unless configured otherwise). Over that window is **429** `rate_limited` with `scope` `ip` and a `Retry-After` header. The body has no `retryAfterSeconds`. Logout is not limited.
+`CommentDto`: `{ id, taskId, author: UserRef, body, createdAt, updatedAt }`. `updatedAt` is `null` until the author edits. Only the author can edit. A current member who wrote the comment, or a workspace admin or owner, can delete. A viewer cannot delete, including an author who has been demoted to viewer. Creating a comment uses the `comments` rate-limit policy (60 per minute). Uploads use `attachments` (30 per minute). The two buckets are separate, both partitioned by user subject and workspace. Over the window is **429** with `application/problem+json` and a `Retry-After` header. Login, register, and refresh share an `auth` limit per resolved client IP (`RateLimit:Auth`, 10 requests per 60 seconds unless configured otherwise). Over that window is **429** `rate_limited` with `scope` `ip` and a `Retry-After` header. The body has no `retryAfterSeconds`. Logout is not limited. Behind nginx the bucket is that client, not the proxy. See [Client IP behind nginx](#client-ip-behind-nginx).
 
 `AttachmentDto`: `{ id, taskId, fileName, contentType, sizeBytes, uploadedBy: UserRef, createdAt }`. Files are stored through `IFileStorage` (local disk at `FileStorage:LocalPath`, default 10 MB per file). The extension allow-list and the leading bytes decide the type; the client `Content-Type` is ignored. Text uploads accept UTF-8, UTF-16 with a BOM, and TIS-620/windows-874 (Excel Thai). HTML and script content is still rejected. A configured `AllowedExtensions` or `AllowedContentTypes` list replaces the built-in default. The upload is streamed. Binary types are identified from the header. Text types (csv, txt, json) are scanned on every chunk, including a short overlap so a marker split between chunks is still rejected, without buffering the file twice. Over the per-file cap is **413**. Kestrel's global body limit is 2 MB. The upload route reads `FileStorageSettings.AttachmentRequestLimit` (`FileStorage:MaxBytes` plus 1 MB of multipart overhead; 11 MB when MaxBytes is the default 10 MB) on each request. A Content-Length above that ceiling is **413** `application/problem+json` with the fixed size-limit sentence, before the body is read. `FileStorage:MaxBytes` and `FileStorage:WorkspaceQuotaBytes` must be greater than 0 or the process refuses to start. A workspace whose stored bytes would pass the quota (the sum of `SizeBytes`) gets **409**. The check that allows the insert runs inside the same transaction as the insert, under `pg_advisory_xact_lock` keyed by the workspace, so two uploads cannot both pass a stale sum. A read before the file is stored only skips work when the workspace is already full. The `attachments` rate-limit policy returns **429**. A disallowed extension or a byte signature that does not match it is **415**, an empty file is **400**. Download is always `application/octet-stream` with `Content-Disposition: attachment`, `X-Content-Type-Options: nosniff`, and `Content-Security-Policy: default-src 'none'; sandbox`. Download and delete resolve the workspace from the attachment id. A current member who uploaded the file, or a workspace admin or owner, can delete. A viewer cannot, including an uploader who has been demoted to viewer. `docker compose` mounts the `attachments` volume at `/var/worklane/attachments`.
 
@@ -183,6 +184,7 @@ worklane/
 │       ├── core/                # services, guards, interceptors, models
 │       ├── shell/               # navbar, sidenav, shell layout
 │       └── features/            # auth, workspaces, projects, board, dashboard
+├── deploy/nginx/default.conf    # loopback API proxy; trusted by ForwardedHeaders
 ├── compose.dev.yml              # local RustFS only; not used for staging/prod
 └── docker-compose.yml
 ```
@@ -211,4 +213,17 @@ dotnet user-secrets set "Jwt:Secret" "$(openssl rand -base64 48 | tr -d '\n')" -
 
 Data Protection keys (Identity tokens such as password reset) use `SetApplicationName("Worklane")`. Set `DataProtection__KeysPath` to a directory that already exists and is writable. Production and any other non-Development, non-Testing environment refuse to start without it. Production uses `/var/lib/worklane/dataprotection-keys` on a persistent volume (the process runs as uid 1654 and the root filesystem is read-only). Development and Testing may omit the path: Development uses the framework default directory under the user profile, and Testing keeps an ephemeral key ring.
 
-Object-storage credentials (`S3_ROOT_USER`, `S3_ROOT_PASSWORD`, `WL_S3_ACCESS_KEY`, `WL_S3_SECRET_KEY`) and `JWT_SIGNING_KEY` are not in the repo. Copy `.env.example` to `.env` and generate them locally. `.env` and `.env.*` are git-ignored; `.env.example` is the exception. Postgres and the API publish on `127.0.0.1` only. This compose file does not publish a web container. Serve the Angular app on port 8080; the API allows that origin.
+Object-storage credentials (`S3_ROOT_USER`, `S3_ROOT_PASSWORD`, `WL_S3_ACCESS_KEY`, `WL_S3_SECRET_KEY`) and `JWT_SIGNING_KEY` are not in the repo. Copy `.env.example` to `.env` and generate them locally. `.env` and `.env.*` are git-ignored; `.env.example` is the exception. Postgres, nginx, and the API publish on `127.0.0.1` only. This compose file does not publish the Angular app. `ng serve` uses http://localhost:4200, which the API allows, and so does http://localhost:8080.
+
+## Client IP behind nginx
+
+nginx is the only proxy the API trusts. It joins the compose `proxy` network at **172.30.20.10** (`172.30.20.0/24`) and publishes **127.0.0.1:8080**. The API is on that network and on `backend`. Postgres is only on `backend`. Compose sets:
+
+- `ForwardedHeaders__KnownProxies__0=172.30.20.10`
+- `ForwardedHeaders__KnownNetworks__0=172.30.20.0/24`
+
+An empty `ForwardedHeaders:KnownProxies` and `KnownNetworks` keeps the framework default (loopback). Any configured value clears that default first, because Docker's nginx address is not loopback, and an empty known-proxy list would trust every peer. `UseForwardedHeaders` runs before the auth rate limiter and honors `X-Forwarded-For` and `X-Forwarded-Proto` from those peers only. One hop is kept.
+
+`CF-Connecting-IP` is the auth client IP only when the TCP peer is in that set. A request that is not from the proxy network keeps the socket address, so a spoofed `X-Forwarded-For` or `CF-Connecting-IP` on **127.0.0.1:5000** does not choose a bucket. The gateway **172.30.20.1** is inside the trusted CIDR, which is why the API port is published on `backend` and not on `proxy`.
+
+`deploy/nginx/default.conf` sends one `X-Forwarded-For` address (the caller’s header when it set one, otherwise the address nginx sees), `X-Forwarded-Proto`, and passes `CF-Connecting-IP` through. It does not append the Docker gateway. Two clients through `:8080` with different `X-Forwarded-For` or `CF-Connecting-IP` values get different auth buckets. The 429 body stays `rate_limited` with `scope` `ip`. The wait is only the `Retry-After` header.

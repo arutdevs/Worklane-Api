@@ -1,6 +1,8 @@
 services:
   postgres:
     image: postgres:16-alpine
+    networks:
+      - backend
     environment:
       POSTGRES_DB: worklane
       POSTGRES_USER: worklane
@@ -26,16 +28,44 @@ services:
       Jwt__Audience: "WorklaneClient"
       Cors__AllowedOrigins__0: "http://localhost:4200"
       Cors__AllowedOrigins__1: "http://localhost:8080"
+      # Replaces the loopback defaults. Only nginx on the proxy network is trusted.
+      # 172.30.20.1 (that network's gateway) is inside the CIDR, so this port stays
+      # on the backend network and does not honor forwarded headers.
+      ForwardedHeaders__KnownProxies__0: "172.30.20.10"
+      ForwardedHeaders__KnownNetworks__0: "172.30.20.0/24"
       FileStorage__LocalPath: /var/worklane/attachments
       FileStorage__MaxBytes: "10485760"
     volumes:
       - attachments:/var/worklane/attachments
     ports:
       - "127.0.0.1:5000:8080"
+    networks:
+      - backend
+      - proxy
     depends_on:
       postgres:
         condition: service_healthy
 
+  # Loopback edge in front of the API. See deploy/nginx/default.conf.
+  nginx:
+    image: nginxinc/nginx-unprivileged:1.28-alpine
+    networks:
+      proxy:
+        ipv4_address: 172.30.20.10
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - ./deploy/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - api
+
 volumes:
   pgdata:
   attachments:
+
+networks:
+  backend:
+  proxy:
+    ipam:
+      config:
+        - subnet: 172.30.20.0/24
