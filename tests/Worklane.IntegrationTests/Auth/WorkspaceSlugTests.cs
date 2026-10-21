@@ -54,4 +54,27 @@ public class WorkspaceSlugTests
         WorkspaceSlug.ForDisplayName(null).Should().Be(WorkspaceSlug.Fallback);
         WorkspaceSlug.ForWorkspaceName(null).Should().Be(WorkspaceSlug.Fallback);
     }
+
+    [Fact]
+    public void Normalize_FullwidthName_IsWorklane()
+    {
+        WorkspaceSlug.Normalize("Ｗｏｒｋｌａｎｅ").Should().Be("worklane");
+        WorkspaceSlug.ForWorkspaceName("Ｗｏｒｋｌａｎｅ").Should().Be("worklane");
+        WorkspaceSlug.ForDisplayName("Ｗｏｒｋｌａｎｅ").Should().Be("worklane-workspace");
+    }
+
+    [Theory]
+    [InlineData("  Worklane  ")]
+    [InlineData("\tＷｏｒｋｌａｎｅ\n")]
+    [InlineData("\u3000Ｗｏｒｋｌａｎｅ\u3000")]
+    public void Normalize_TrimsThenCompatibilityComposes(string value)
+    {
+        WorkspaceSlug.Normalize(value).Should().Be("worklane");
+    }
+
+    [Fact]
+    public void ForDisplayName_TrimsWhitespaceBeforeLowercasing()
+    {
+        WorkspaceSlug.ForDisplayName("  Alice  ").Should().Be("alice-workspace");
+    }
 }

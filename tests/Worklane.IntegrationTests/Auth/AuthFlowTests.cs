@@ -127,6 +127,42 @@ public class AuthFlowTests : IClassFixture<WorklaneWebApplicationFactory>
     }
 
     [Fact]
+    public async Task Register_FullwidthDisplayName_NormalizesSlug()
+    {
+        (await RegisterSlug("Ｗｏｒｋｌａｎｅ")).Should().Be("worklane-workspace");
+    }
+
+    [Fact]
+    public async Task Register_TrimsDisplayName_BeforeSlugging()
+    {
+        var core = "trim" + Guid.NewGuid().ToString("N");
+        (await RegisterSlug($"  {core}  ")).Should().Be(core + "-workspace");
+    }
+
+    [Fact]
+    public async Task CreateWorkspace_FullwidthName_SlugIsWorklane()
+    {
+        var (client, _) = await RegisterAndAuthorize("fullwidth");
+        var created = await client.PostAsJsonAsync("/api/workspaces", new { name = "Ｗｏｒｋｌａｎｅ" });
+        var body = await created.Content.ReadAsStringAsync();
+        created.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        using var doc = JsonDocument.Parse(body);
+        doc.RootElement.GetProperty("slug").GetString().Should().Be("worklane");
+    }
+
+    [Fact]
+    public async Task CreateWorkspace_TrimsName_BeforeSlugging()
+    {
+        var (client, _) = await RegisterAndAuthorize("trim-ws");
+        var core = "trimws" + Guid.NewGuid().ToString("N");
+        var created = await client.PostAsJsonAsync("/api/workspaces", new { name = $"  {core}  " });
+        var body = await created.Content.ReadAsStringAsync();
+        created.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        using var doc = JsonDocument.Parse(body);
+        doc.RootElement.GetProperty("slug").GetString().Should().Be(core);
+    }
+
+    [Fact]
     public async Task CreateWorkspace_ThaiName_KeepsVowelsAndToneMarks()
     {
         var client = _factory.CreateClient();
@@ -141,6 +177,18 @@ public class AuthFlowTests : IClassFixture<WorklaneWebApplicationFactory>
         created.StatusCode.Should().Be(HttpStatusCode.OK, body);
         using var doc = JsonDocument.Parse(body);
         doc.RootElement.GetProperty("slug").GetString().Should().Be(name);
+    }
+
+    private async Task<(HttpClient Client, AuthTokensResponse Tokens)> RegisterAndAuthorize(string prefix)
+    {
+        var client = _factory.CreateClient();
+        var email = $"{prefix}-{Guid.NewGuid():N}@example.com";
+        var response = await client.PostAsJsonAsync("/api/auth/register", new RegisterRequest(email, "Password123!", prefix));
+        var body = await response.Content.ReadAsStringAsync();
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        var tokens = JsonSerializer.Deserialize<AuthTokensResponse>(body, JsonOptions);
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", tokens!.AccessToken);
+        return (client, tokens);
     }
 
     private async Task<string> RegisterSlug(string displayName)

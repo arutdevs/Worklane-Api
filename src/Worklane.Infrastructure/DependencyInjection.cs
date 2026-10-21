@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -21,8 +22,22 @@ public static class DependencyInjection
 {
     public static IServiceCollection AddInfrastructure(this IServiceCollection services, IConfiguration configuration)
     {
-        services.AddDbContext<WorklaneDbContext>(options =>
-            options.UseNpgsql(configuration.GetConnectionString("Default")));
+        services.AddDbContext<WorklaneDbContext>((sp, options) =>
+        {
+            var connection = configuration.GetConnectionString("Default");
+            // Absent or 0 keeps the non-retrying provider. A positive count is what
+            // RegisterAsync has to wrap in CreateExecutionStrategy before BeginTransaction.
+            var maxRetryCount = configuration.GetValue("Database:MaxRetryCount", 0);
+            if (maxRetryCount > 0)
+                options.UseNpgsql(connection, npgsql => npgsql.EnableRetryOnFailure(maxRetryCount));
+            else
+                options.UseNpgsql(connection);
+
+            // Empty in production. Tests register a gate here to force a slug collision.
+            var interceptors = sp.GetServices<ISaveChangesInterceptor>().ToArray();
+            if (interceptors.Length > 0)
+                options.AddInterceptors(interceptors);
+        });
 
         services
             .AddIdentityCore<AppUser>(options =>
