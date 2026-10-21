@@ -57,7 +57,10 @@ public class WorkspaceService : IWorkspaceService
 
     public async Task<WorkspaceDto> CreateWorkspaceAsync(Guid ownerUserId, CreateWorkspaceRequest request, CancellationToken cancellationToken)
     {
-        var slug = await GenerateUniqueSlugAsync(request.Name, cancellationToken);
+        var slug = await WorkspaceSlug.GenerateUniqueAsync(
+            _db.Workspaces,
+            WorkspaceSlug.ForWorkspaceName(request.Name),
+            cancellationToken);
 
         var workspace = new Workspace
         {
@@ -444,25 +447,4 @@ public class WorkspaceService : IWorkspaceService
         }
     }
 
-    private async Task<string> GenerateUniqueSlugAsync(string baseName, CancellationToken cancellationToken)
-    {
-        var lowered = baseName.ToLowerInvariant();
-        var chars = lowered.Select(c => char.IsLetterOrDigit(c) ? c : '-').ToArray();
-        var collapsed = new string(chars);
-        while (collapsed.Contains("--"))
-        {
-            collapsed = collapsed.Replace("--", "-");
-        }
-        var slug = collapsed.Trim('-');
-        var candidate = slug;
-        var suffix = 0;
-
-        while (await _db.Workspaces.AnyAsync(w => w.Slug == candidate, cancellationToken))
-        {
-            suffix++;
-            candidate = $"{slug}-{suffix}";
-        }
-
-        return candidate;
-    }
 }

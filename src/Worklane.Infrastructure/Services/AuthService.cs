@@ -58,7 +58,10 @@ public class AuthService : IAuthService
         {
             Id = Guid.NewGuid(),
             Name = $"{request.DisplayName}'s Workspace",
-            Slug = await GenerateUniqueSlugAsync($"{request.DisplayName}-workspace", cancellationToken),
+            Slug = await WorkspaceSlug.GenerateUniqueAsync(
+                _db.Workspaces,
+                WorkspaceSlug.ForDisplayName(request.DisplayName),
+                cancellationToken),
             Plan = WorkspacePlan.Free,
             CreatedAt = DateTimeOffset.UtcNow
         };
@@ -154,32 +157,5 @@ public class AuthService : IAuthService
             rawRefreshToken,
             DateTimeOffset.UtcNow.AddMinutes(_jwtSettings.AccessTokenExpiryMinutes),
             userDto);
-    }
-
-    private async Task<string> GenerateUniqueSlugAsync(string baseName, CancellationToken cancellationToken)
-    {
-        var slug = Slugify(baseName);
-        var candidate = slug;
-        var suffix = 0;
-
-        while (await _db.Workspaces.AnyAsync(w => w.Slug == candidate, cancellationToken))
-        {
-            suffix++;
-            candidate = $"{slug}-{suffix}";
-        }
-
-        return candidate;
-    }
-
-    private static string Slugify(string value)
-    {
-        var lowered = value.ToLowerInvariant();
-        var chars = lowered.Select(c => char.IsLetterOrDigit(c) ? c : '-').ToArray();
-        var collapsed = new string(chars);
-        while (collapsed.Contains("--"))
-        {
-            collapsed = collapsed.Replace("--", "-");
-        }
-        return collapsed.Trim('-');
     }
 }

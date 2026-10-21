@@ -1,7 +1,10 @@
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text.Json;
 using FluentAssertions;
 using Worklane.Application.Auth.Dtos;
+using Worklane.Infrastructure.Services;
 using Worklane.IntegrationTests.Infrastructure;
 
 namespace Worklane.IntegrationTests.Auth;
@@ -100,4 +103,73 @@ public class AuthFlowTests : IClassFixture<WorklaneWebApplicationFactory>
         var refreshAfterLogout = await client.PostAsJsonAsync("/api/auth/refresh", new RefreshRequest(tokens.RefreshToken));
         refreshAfterLogout.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
+
+    [Fact]
+    public async Task Register_ThaiName_KeepsVowelsAndToneMarks_AndStaysUnique()
+    {
+        var first = await RegisterSlug("พี่น้อง");
+        var second = await RegisterSlug("พี่น้อง");
+        first.Should().Be("พี่น้อง-workspace");
+        second.Should().Be("พี่น้อง-workspace-1");
+    }
+
+    [Fact]
+    public async Task Register_MixedThaiAndEnglish_KeepsMarks()
+    {
+        (await RegisterSlug("ทีม Alpha")).Should().Be("ทีม-alpha-workspace");
+    }
+
+    [Fact]
+    public async Task Register_MarksOrSymbols_FallBackToASafeSlug_AndStayUnique()
+    {
+        (await RegisterSlug("@@@")).Should().Be(WorkspaceSlug.Fallback);
+        (await RegisterSlug("ิ่้๊๋")).Should().Be(WorkspaceSlug.Fallback + "-1");
+    }
+
+    [Fact]
+    public async Task CreateWorkspace_ThaiName_KeepsVowelsAndToneMarks()
+    {
+        var client = _factory.CreateClient();
+        var email = $"slug-{Guid.NewGuid():N}@example.com";
+        var registered = await client.PostAsJsonAsync("/api/auth/register", new RegisterRequest(email, "Password123!", "Erin"));
+        var tokens = await registered.Content.ReadFromJsonAsync<AuthTokensResponse>();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", tokens!.AccessToken);
+
+        const string name = "ห้องไทย";
+        var created = await client.PostAsJsonAsync("/api/workspaces", new { name });
+        var body = await created.Content.ReadAsStringAsync();
+        created.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        using var doc = JsonDocument.Parse(body);
+        doc.RootElement.GetProperty("slug").GetString().Should().Be(name);
+    }
+
+    private async Task<string> RegisterSlug(string displayName)
+    {
+        var client = _factory.CreateClient();
+        var email = $"slug-{Guid.NewGuid():N}@example.com";
+        var response = await client.PostAsJsonAsync(
+            "/api/auth/register",
+            new RegisterRequest(email, "Password123!", displayName));
+        var body = await response.Content.ReadAsStringAsync();
+        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        var tokens = JsonSerializer.Deserialize<AuthTokensResponse>(body, JsonOptions);
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", tokens!.AccessToken);
+
+        var list = await client.GetAsync("/api/workspaces");
+        list.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var doc = JsonDocument.Parse(await list.Content.ReadAsStringAsync());
+        var expectedName = $"{displayName}'s Workspace";
+        foreach (var workspace in doc.RootElement.EnumerateArray())
+        {
+            if (workspace.GetProperty("name").GetString() == expectedName)
+                return workspace.GetProperty("slug").GetString()!;
+        }
+
+        throw new InvalidOperationException($"No workspace named {expectedName}.");
+    }
+
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
 }

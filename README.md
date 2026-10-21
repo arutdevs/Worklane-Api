@@ -14,7 +14,7 @@ a Kanban board with drag-and-drop, and a dashboard that measures effort per pers
 - **Frontend:** Angular 22 (standalone components) + Bootstrap 5 + ng-bootstrap
 - **i18n:** ngx-translate, English (`en`, default) and Thai (`th`)
 - **Realtime:** SignalR hub at `/hubs/notifications`. Clients join a project group and receive board, comment, attachment, and presence events (see below)
-- **Containers:** Docker Compose — `nginx`, `api`, and `postgres`. The Angular app is a separate repository and is not built here. Local S3-compatible storage is a dev-only overlay (`compose.dev.yml`)
+- **Containers:** Docker Compose — `nginx` (API edge), `web` (public Web nginx), `api`, and `postgres`. The Angular app is a separate repository and is not built here. Local S3-compatible storage is a dev-only overlay (`compose.dev.yml`)
 
 ## Run everything
 
@@ -29,7 +29,7 @@ docker compose up
 
 Fill `S3_ROOT_USER`, `S3_ROOT_PASSWORD`, `WL_S3_ACCESS_KEY`, and `WL_S3_SECRET_KEY` before the dev overlay (`openssl rand -hex 24` is enough for those). Then `docker compose -f docker-compose.yml -f compose.dev.yml up`.
 
-`docker compose up` without `compose.dev.yml` starts nginx, the API, and Postgres. It does not start the Angular app: this repository has no `./web` tree to build. nginx listens on **127.0.0.1:8080** and proxies to the API. `ng serve` stays on http://localhost:4200. The API allows both origins. That compose file is the one a staging or prod deploy should use. RustFS is not in it, and it does not start.
+`docker compose up` without `compose.dev.yml` starts the API edge nginx, the Web nginx, the API, and Postgres. It does not start the Angular app: this repository has no `./web` tree to build. The edge listens on **127.0.0.1:8080** and proxies to the API. The Web nginx is `web:8080` on the proxy network and forwards to that edge. `ng serve` stays on http://localhost:4200. The API allows both origins. That compose file is the one a staging or prod deploy should use. RustFS is not in it, and it does not start.
 
 ห้าม deploy จนกว่า WL-63 (${JWT_SIGNING_KEY:?}) และ WL-71 จะเสร็จ
 
@@ -39,7 +39,8 @@ The dev command above also starts local object storage. This builds and starts t
 
 | Service    | URL                                   |
 |------------|----------------------------------------|
-| nginx (API proxy) | http://127.0.0.1:8080 — trusted client IP, see below |
+| nginx (API edge) | http://127.0.0.1:8080 — the only trusted proxy, see below |
+| Web nginx | `web:8080` on the proxy network (172.30.20.3). Not published on the host. Forwards to the edge |
 | Web (Angular, separate repository) | http://localhost:4200 via `ng serve`. This compose file does not start it |
 | API direct (Swagger UI in Development) | http://127.0.0.1:5000/swagger (container port 8080). Forwarded headers are ignored |
 | Postgres   | localhost:5432 (user/pass/db: `worklane`) |
@@ -184,7 +185,8 @@ worklane/
 │       ├── core/                # services, guards, interceptors, models
 │       ├── shell/               # navbar, sidenav, shell layout
 │       └── features/            # auth, workspaces, projects, board, dashboard
-├── deploy/nginx/default.conf    # loopback API proxy; trusted by ForwardedHeaders
+├── deploy/nginx/default.conf    # API edge; the only address ForwardedHeaders trusts
+├── deploy/nginx/web.conf        # public Web nginx; forwards clients to the edge
 ├── compose.dev.yml              # local RustFS only; not used for staging/prod
 └── docker-compose.yml
 ```
@@ -217,18 +219,20 @@ Object-storage credentials (`S3_ROOT_USER`, `S3_ROOT_PASSWORD`, `WL_S3_ACCESS_KE
 
 ## Client IP behind nginx
 
-The Web nginx is the only public edge. This compose file gives that role to the `nginx` service, fixed at **172.30.20.10** on the `proxy` network, and publishes **127.0.0.1:8080**. The API is on that network and on `backend`. Postgres is only on `backend`. Compose sets one trusted proxy and does not set `KnownNetworks`:
+The API trusts one proxy. Compose pins the `nginx` service to **172.30.20.10** on the `proxy` network and publishes it on **127.0.0.1:8080**. That address is the only `KnownProxies` entry. The public Web nginx is the `web` service, pinned at **172.30.20.3** on the same network, reached as `web:8080`. It is not a trusted proxy. It forwards to the edge and sets `X-Forwarded-For` to the client it sees. The edge adopts that header only from **172.30.20.3**, then the API sees the edge at **172.30.20.10** and one client address. Pinning the Web nginx to **172.30.20.10** would take the edge's address, so it is routed through the edge instead. `KnownProxies` stays that single address.
+
+The API is on `proxy` and on `backend`. Postgres is only on `backend`. Compose does not set `KnownNetworks`:
 
 - `ForwardedHeaders__KnownProxies__0=172.30.20.10`
 
-`172.30.20.0/24` and the gateway **172.30.20.1** are not proxies. A `KnownNetworks` prefix wider than one host is rejected at startup. The API port stays on `backend`, so a direct connection to **127.0.0.1:5000** is not the edge. An empty `ForwardedHeaders:KnownProxies` and `KnownNetworks` keeps the framework default (loopback). Any configured proxy clears that default first, because an empty known-proxy list would trust every peer. `ForwardLimit` is 1. `UseForwardedHeaders` runs before the auth rate limiter.
+`172.30.20.0/24`, the gateway **172.30.20.1**, and the Web nginx **172.30.20.3** are not proxies. A direct connection from **172.30.20.3** to the API keeps the socket address, so a spoofed header is ignored. A `KnownNetworks` prefix wider than one host is rejected at startup. A direct connection to **127.0.0.1:5000** is not the edge. An empty `ForwardedHeaders:KnownProxies` and `KnownNetworks` keeps the framework default (loopback). Any configured proxy clears that default first, because an empty known-proxy list would trust every peer. `ForwardLimit` is 1. `UseForwardedHeaders` runs before the auth rate limiter.
 
-Header contract, for this edge and for the Web nginx:
+Header contract, for the edge and for the Web nginx:
 
 ```nginx
 proxy_set_header X-Forwarded-For $remote_addr;
 ```
 
-Do not append `$proxy_add_x_forwarded_for` and do not copy or map `$http_x_forwarded_for`. The header is one address, the TCP peer of the edge. A client-supplied `X-Forwarded-For` does not choose a bucket. If extra hops are forwarded anyway, only the rightmost address counts.
+Do not append `$proxy_add_x_forwarded_for` and do not copy or map `$http_x_forwarded_for`. The header is one address, the TCP peer of that nginx. A client-supplied `X-Forwarded-For` does not choose a bucket. If extra hops are forwarded anyway, only the rightmost address counts.
 
-`CF-Connecting-IP` is the auth client only when the TCP peer is **172.30.20.10** and the value is a single IP. This edge sends an empty `CF-Connecting-IP`, which nginx omits, so the inbound client header is not forwarded. Any other peer keeps the socket address. Two clients get two auth buckets when the edge sees two peers. The 429 body stays `rate_limited` with `scope` `ip`. The wait is only the `Retry-After` header.
+`CF-Connecting-IP` is the auth client only when the TCP peer is **172.30.20.10** and the value is a single IP. Both nginx configs send an empty `CF-Connecting-IP`, which nginx omits, so the inbound client header is not forwarded. Any other peer keeps the socket address. Two clients get two auth buckets. The 429 body stays `rate_limited` with `scope` `ip`. The wait is only the `Retry-After` header.
