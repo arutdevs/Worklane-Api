@@ -1,7 +1,9 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text.Json;
 using FluentAssertions;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
@@ -47,6 +49,12 @@ public class RateLimitAndQuotaTests : IClassFixture<RateLimitAndQuotaFactory>
         blocked.Headers.RetryAfter.Should().NotBeNull();
         blocked.Headers.RetryAfter!.Delta.Should().NotBeNull();
         blocked.Headers.RetryAfter.Delta!.Value.TotalSeconds.Should().BeGreaterThan(0);
+        var limited = JsonDocument.Parse(blockedBody).RootElement;
+        limited.GetProperty("code").GetString().Should().Be("rate_limited");
+        limited.GetProperty("scope").GetString().Should().Be("user");
+        limited.GetProperty("detail").GetString().Should().Be("Too many requests.");
+        limited.GetProperty("status").GetInt32().Should().Be(StatusCodes.Status429TooManyRequests);
+        limited.TryGetProperty("retryAfterSeconds", out _).Should().BeFalse();
 
         (await Upload(board.Client, task.Id, SampleFiles.Png, "still.png")).StatusCode.Should().Be(HttpStatusCode.Created);
         (await Comment(member.Client, task.Id, "member")).StatusCode.Should().Be(HttpStatusCode.Created);
@@ -77,7 +85,11 @@ public class RateLimitAndQuotaTests : IClassFixture<RateLimitAndQuotaFactory>
         var over = await Upload(board.Client, task.Id, SampleFiles.Jpeg, "shot.jpg");
         var body = await over.Content.ReadAsStringAsync();
         over.StatusCode.Should().Be(HttpStatusCode.Conflict, body);
-        body.Should().Contain("quota");
+        var problem = JsonDocument.Parse(body).RootElement;
+        problem.GetProperty("code").GetString().Should().Be("quota_exceeded");
+        problem.GetProperty("usedBytes").GetInt64().Should().Be(SampleFiles.Png.Length);
+        problem.GetProperty("quotaBytes").GetInt64().Should().Be(SampleFiles.Png.Length);
+        problem.GetProperty("fileBytes").GetInt64().Should().Be(SampleFiles.Jpeg.Length);
     }
 
     [Fact]

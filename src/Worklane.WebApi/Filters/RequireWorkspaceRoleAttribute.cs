@@ -40,14 +40,14 @@ public class RequireWorkspaceRoleAttribute : Attribute, IAsyncActionFilter
         var userId = currentUserService.UserId;
         if (userId == Guid.Empty)
         {
-            context.Result = Problem(context, StatusCodes.Status401Unauthorized, "Unauthorized", "A valid access token is required.");
+            context.Result = Problem(context, StatusCodes.Status401Unauthorized, "Unauthorized", "A valid access token is required.", "unauthorized");
             return;
         }
 
         if (!context.RouteData.Values.TryGetValue(_routeParam, out var routeValue) ||
             !Guid.TryParse(routeValue?.ToString(), out var routeId))
         {
-            context.Result = Problem(context, StatusCodes.Status400BadRequest, "Bad Request", $"Route parameter \"{_routeParam}\" is missing or not a valid id.");
+            context.Result = Problem(context, StatusCodes.Status400BadRequest, "Bad Request", $"Route parameter \"{_routeParam}\" is missing or not a valid id.", "invalid_route_id");
             return;
         }
 
@@ -85,7 +85,7 @@ public class RequireWorkspaceRoleAttribute : Attribute, IAsyncActionFilter
 
             if (resolved is null)
             {
-                context.Result = Problem(context, StatusCodes.Status404NotFound, "Not Found", "Resource was not found.");
+                context.Result = Problem(context, StatusCodes.Status404NotFound, "Not Found", "Resource was not found.", "not_found");
                 return;
             }
             workspaceId = resolved.Value;
@@ -94,7 +94,7 @@ public class RequireWorkspaceRoleAttribute : Attribute, IAsyncActionFilter
         var role = await workspaceService.GetUserRoleAsync(workspaceId, userId, context.HttpContext.RequestAborted);
         if (role is null || role < _minimumRole)
         {
-            context.Result = Problem(context, StatusCodes.Status403Forbidden, "Forbidden", "You do not have sufficient permissions in this workspace.");
+            context.Result = Problem(context, StatusCodes.Status403Forbidden, "Forbidden", "You do not have sufficient permissions in this workspace.", "workspace_access_denied");
             return;
         }
 
@@ -103,7 +103,7 @@ public class RequireWorkspaceRoleAttribute : Attribute, IAsyncActionFilter
         await next();
     }
 
-    private static ObjectResult Problem(ActionExecutingContext context, int statusCode, string title, string detail)
+    private static ObjectResult Problem(ActionExecutingContext context, int statusCode, string title, string detail, string code)
     {
         var problemDetails = new ProblemDetails
         {
@@ -112,6 +112,7 @@ public class RequireWorkspaceRoleAttribute : Attribute, IAsyncActionFilter
             Detail = detail,
             Instance = context.HttpContext.Request.Path
         };
+        problemDetails.Extensions["code"] = code;
         return new ObjectResult(problemDetails) { StatusCode = statusCode };
     }
 }

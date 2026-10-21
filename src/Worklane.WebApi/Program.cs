@@ -90,14 +90,17 @@ builder.Services.AddRateLimiter(options =>
         }
 
         context.HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+        var problem = new ProblemDetails
+        {
+            Status = StatusCodes.Status429TooManyRequests,
+            Title = "Too Many Requests",
+            Detail = "Too many requests.",
+            Instance = context.HttpContext.Request.Path
+        };
+        problem.Extensions["code"] = "rate_limited";
+        problem.Extensions["scope"] = "user";
         await context.HttpContext.Response.WriteAsJsonAsync(
-            new ProblemDetails
-            {
-                Status = StatusCodes.Status429TooManyRequests,
-                Title = "Too Many Requests",
-                Detail = "Too many requests for this user and workspace.",
-                Instance = context.HttpContext.Request.Path
-            },
+            problem,
             options: null,
             contentType: "application/problem+json",
             cancellationToken);

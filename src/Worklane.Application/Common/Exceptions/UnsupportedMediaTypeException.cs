@@ -1,12 +1,20 @@
+using System.Net;
+
 namespace Worklane.Application.Common.Exceptions;
 
-public class UnsupportedMediaTypeException : Exception
+public class UnsupportedMediaTypeException : AppException
 {
-    public UnsupportedMediaTypeException(string? contentType)
-        : base($"Content type \"{contentType ?? "(none)"}\" is not allowed.")
+    public override HttpStatusCode StatusCode => HttpStatusCode.UnsupportedMediaType;
+
+    public UnsupportedMediaTypeException(string? extension)
+        : base(
+            "unsupported_file_type",
+            "The file type is not allowed.",
+            ErrorParams.Of(("extension", extension)))
     {
-        ContentType = contentType;
+        Extension = extension;
     }
 
-    public string? ContentType { get; }
+    /// <summary>The filename extension the caller sent, including the leading dot.</summary>
+    public string? Extension { get; }
 }

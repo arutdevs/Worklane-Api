@@ -379,6 +379,7 @@ public class SecurityReviewTests : IClassFixture<WorklaneWebApplicationFactory>
         var badRequestBody = await new StreamReader(badRequestContext.Response.Body).ReadToEndAsync();
         badRequestBody.Should().NotContain(secret);
         badRequestBody.Should().Contain("The request is invalid.");
+        JsonDocument.Parse(badRequestBody).RootElement.GetProperty("code").GetString().Should().Be("invalid_request_body");
 
         var tooLarge = new ExceptionHandlingMiddleware(
             _ => throw new InvalidDataException(secret, new BadHttpRequestException(secret, StatusCodes.Status413PayloadTooLarge)),
@@ -390,6 +391,7 @@ public class SecurityReviewTests : IClassFixture<WorklaneWebApplicationFactory>
         var tooLargeBody = await new StreamReader(tooLargeContext.Response.Body).ReadToEndAsync();
         tooLargeBody.Should().NotContain(secret);
         tooLargeBody.Should().Contain("The request body exceeds the size limit.");
+        JsonDocument.Parse(tooLargeBody).RootElement.GetProperty("code").GetString().Should().Be("request_too_large");
 
         var validation = new ExceptionHandlingMiddleware(
             _ => throw new FluentValidation.ValidationException("Body is required."),
@@ -399,6 +401,7 @@ public class SecurityReviewTests : IClassFixture<WorklaneWebApplicationFactory>
         validationContext.Response.Body.Position = 0;
         var validationBody = await new StreamReader(validationContext.Response.Body).ReadToEndAsync();
         validationBody.Should().Contain("Body is required.");
+        JsonDocument.Parse(validationBody).RootElement.GetProperty("code").GetString().Should().Be("validation_failed");
     }
 
     [Fact]
@@ -418,7 +421,9 @@ public class SecurityReviewTests : IClassFixture<WorklaneWebApplicationFactory>
                 new BadHttpRequestException("no marker text", StatusCodes.Status413PayloadTooLarge)));
         var typedContext = new ActionContext(new DefaultHttpContext(), new RouteData(), new ActionDescriptor(), typed);
         var result = ExceptionHandlingMiddleware.InvalidModelStateResponse(typedContext, _ => new BadRequestResult());
-        result.Should().BeOfType<ObjectResult>().Which.StatusCode.Should().Be(StatusCodes.Status413PayloadTooLarge);
+        var tooLargeResult = result.Should().BeOfType<ObjectResult>().Subject;
+        tooLargeResult.StatusCode.Should().Be(StatusCodes.Status413PayloadTooLarge);
+        tooLargeResult.Value.Should().BeOfType<ProblemDetails>().Which.Extensions["code"].Should().Be("request_too_large");
     }
 
     [Fact]
@@ -571,8 +576,9 @@ public class RestrictedExtensionTests : IClassFixture<RestrictedExtensionFactory
         var board = await BoardTestSetup.CreateAsync(_factory, "ext-owner@test.com");
         var task = await BoardTestSetup.CreateTaskAsync(board, "Text only");
 
-        (await Upload(board.Client, task.Id, SampleFiles.Png, "image/png", "shot.png"))
-            .StatusCode.Should().Be(HttpStatusCode.UnsupportedMediaType);
+        await TaskAttachmentTests.AssertUnsupportedFileType(
+            await Upload(board.Client, task.Id, SampleFiles.Png, "image/png", "shot.png"),
+            ".png");
         (await Upload(board.Client, task.Id, SampleFiles.Text, "application/octet-stream", "note.txt"))
             .StatusCode.Should().Be(HttpStatusCode.Created);
     }
@@ -641,7 +647,11 @@ public class KestrelUploadLimitTests : IClassFixture<KestrelUploadFactory>
             file.Headers.ContentType = new MediaTypeHeaderValue("image/png");
             form.Add(file, "file", "mid.png");
             var raised = await board.Client.PostAsync($"/api/tasks/{task.Id}/attachments", form);
-            raised.StatusCode.Should().Be(HttpStatusCode.UnsupportedMediaType);
+            var raisedBody = await raised.Content.ReadAsStringAsync();
+            raised.StatusCode.Should().Be(HttpStatusCode.UnsupportedMediaType, raisedBody);
+            var raisedProblem = JsonDocument.Parse(raisedBody).RootElement;
+            raisedProblem.GetProperty("code").GetString().Should().Be("unsupported_file_type");
+            raisedProblem.GetProperty("extension").GetString().Should().Be(".png");
         }
 
         var overFile = new byte[settings.MaxBytes + 1];
@@ -655,6 +665,9 @@ public class KestrelUploadLimitTests : IClassFixture<KestrelUploadFactory>
             var cappedBody = await capped.Content.ReadAsStringAsync();
             capped.StatusCode.Should().Be(HttpStatusCode.RequestEntityTooLarge, cappedBody);
             cappedBody.Should().Contain("File exceeds the maximum size");
+            var cappedProblem = JsonDocument.Parse(cappedBody).RootElement;
+            cappedProblem.GetProperty("code").GetString().Should().Be("file_too_large");
+            cappedProblem.GetProperty("maxBytes").GetInt64().Should().Be(settings.MaxBytes);
         }
 
         var overEndpoint = new byte[transportLimit + 1];
@@ -677,16 +690,21 @@ public class KestrelUploadLimitTests : IClassFixture<KestrelUploadFactory>
             upload.Content.Headers.ContentType!.MediaType.Should().Be("application/problem+json");
             uploadBody.Should().Contain("exceeds the size limit");
             uploadBody.Should().NotContain("File exceeds the maximum size");
+            JsonDocument.Parse(uploadBody).RootElement.GetProperty("code").GetString().Should().Be("request_too_large");
         }
 
         var loginBody = new ByteArrayContent(overGlobal);
         loginBody.Headers.ContentType = new MediaTypeHeaderValue("application/json");
         var login = await board.Client.PostAsync("/api/auth/login", loginBody);
-        login.StatusCode.Should().Be(HttpStatusCode.RequestEntityTooLarge);
+        var loginText = await login.Content.ReadAsStringAsync();
+        login.StatusCode.Should().Be(HttpStatusCode.RequestEntityTooLarge, loginText);
         login.Content.Headers.ContentType!.MediaType.Should().Be("application/problem+json");
+        JsonDocument.Parse(loginText).RootElement.GetProperty("code").GetString().Should().Be("request_too_large");
 
+        // The oversized login closes the connection. A new client checks that a small body is not 413.
+        using var fresh = _factory.CreateClient();
         var small = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
-        (await board.Client.PostAsync("/api/auth/login", small)).StatusCode.Should().NotBe(HttpStatusCode.RequestEntityTooLarge);
+        (await fresh.PostAsync("/api/auth/login", small)).StatusCode.Should().NotBe(HttpStatusCode.RequestEntityTooLarge);
     }
 }
 
