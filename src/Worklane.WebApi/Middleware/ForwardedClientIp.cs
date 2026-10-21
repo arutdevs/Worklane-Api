@@ -7,10 +7,11 @@ namespace Worklane.WebApi.Middleware;
 /// <summary>
 /// Resolves the address the auth limiter partitions on. <see cref="Capture"/> runs before
 /// <c>UseForwardedHeaders</c> and remembers <c>CF-Connecting-IP</c> only when the TCP peer
-/// is a configured proxy. <see cref="Apply"/> runs after forwarded headers, so
+/// is a configured proxy. Deploy trusts one edge address in <c>KnownProxies</c> and does
+/// not trust a network. <see cref="Apply"/> runs after forwarded headers, so
 /// <c>X-Forwarded-Proto</c> still updates the scheme, and overwrites the client address
-/// with that Cloudflare header. A peer that is not in <c>KnownProxies</c> or
-/// <c>KnownNetworks</c> keeps its socket address; spoofed headers are ignored.
+/// with that Cloudflare header. Any other peer keeps its socket address. Forwarded
+/// headers are one hop: extra <c>X-Forwarded-For</c> values to the left are not a client.
 /// </summary>
 internal static class ForwardedClientIp
 {

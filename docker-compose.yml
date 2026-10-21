@@ -28,11 +28,10 @@ services:
       Jwt__Audience: "WorklaneClient"
       Cors__AllowedOrigins__0: "http://localhost:4200"
       Cors__AllowedOrigins__1: "http://localhost:8080"
-      # Replaces the loopback defaults. Only nginx on the proxy network is trusted.
-      # 172.30.20.1 (that network's gateway) is inside the CIDR, so this port stays
-      # on the backend network and does not honor forwarded headers.
+      # Replaces the loopback defaults. Trust only the edge container below.
+      # Not the proxy-network gateway (172.30.20.1) and not 172.30.20.0/24.
+      # ForwardLimit is 1 in the API. Do not set KnownNetworks.
       ForwardedHeaders__KnownProxies__0: "172.30.20.10"
-      ForwardedHeaders__KnownNetworks__0: "172.30.20.0/24"
       FileStorage__LocalPath: /var/worklane/attachments
       FileStorage__MaxBytes: "10485760"
     volumes:
@@ -46,7 +45,8 @@ services:
       postgres:
         condition: service_healthy
 
-  # Loopback edge in front of the API. See deploy/nginx/default.conf.
+  # Loopback edge in front of the API. This fixed address is the only trusted proxy.
+  # See deploy/nginx/default.conf.
   nginx:
     image: nginxinc/nginx-unprivileged:1.28-alpine
     networks:

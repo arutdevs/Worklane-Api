@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
@@ -191,6 +192,8 @@ var app = builder.Build();
 
 // Fail before migrate or listen when the signing key is missing, short, or leaked.
 _ = app.Services.GetRequiredService<IOptions<JwtSettings>>().Value;
+// A KnownNetworks prefix wider than one host, or a proxy that is not an IP, fails here.
+_ = app.Services.GetRequiredService<IOptions<ForwardedHeadersOptions>>().Value;
 
 // Before the auth limiter, HTTPS redirection, and anything else that reads the peer.
 app.UseWorklaneForwardedHeaders();
