@@ -47,19 +47,19 @@ public static class WorkspaceMembershipPolicy
             return;
 
         if (actorRole != WorkspaceRole.Admin)
-            Deny("You do not have permission to manage workspace members.");
+            Deny("member_manage_forbidden", "You do not have permission to manage workspace members.");
 
         if (targetRole == WorkspaceRole.Owner || newRole == WorkspaceRole.Owner)
-            Deny("Only an Owner can grant, change, or remove the Owner role.");
+            Deny("owner_role_owner_only", "Only an Owner can grant, change, or remove the Owner role.");
 
         if (isSelf)
         {
             if (newRole is null)
-                Deny("Only an Owner can remove an Admin.");
+                Deny("admin_remove_owner_only", "Only an Owner can remove an Admin.");
 
             // Same role is a no-op. A higher role would be a self-promotion.
             if (newRole > targetRole)
-                Deny("You cannot raise your own role.");
+                Deny("cannot_raise_own_role", "You cannot raise your own role.");
 
             return;
         }
@@ -67,17 +67,17 @@ public static class WorkspaceMembershipPolicy
         if (targetRole == WorkspaceRole.Admin)
         {
             if (!AdminMayManagePeerAdmins)
-                Deny("Only an Owner can change or remove another Admin.");
+                Deny("admin_manage_peer_owner_only", "Only an Owner can change or remove another Admin.");
 
             return;
         }
 
         if (targetRole is not (WorkspaceRole.Viewer or WorkspaceRole.Member))
-            Deny("An Admin can only manage Viewers and Members.");
+            Deny("admin_manages_viewer_member_only", "An Admin can only manage Viewers and Members.");
 
         if (newRole == WorkspaceRole.Admin && !AdminMayGrantAdmin)
-            Deny("Only an Owner can grant the Admin role.");
+            Deny("admin_grant_owner_only", "Only an Owner can grant the Admin role.");
     }
 
-    private static void Deny(string message) => throw new ForbiddenAccessException(message);
+    private static void Deny(string code, string message) => throw new ForbiddenAccessException(code, message);
 }

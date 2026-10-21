@@ -1,7 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
+using System.Text.Json;
 using FluentAssertions;
-using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Worklane.Application.Common.Exceptions;
@@ -84,7 +84,8 @@ public class WorkspaceAuthorizationTests : IClassFixture<WorklaneWebApplicationF
             $"/api/workspaces/{owner.Workspace.Id}/members/{owner.Tokens.User.Id}",
             new UpdateMemberRoleRequest(WorkspaceRole.Admin));
 
-        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        await AssertProblem(response, HttpStatusCode.Conflict, "Conflict", "last_owner",
+            "Cannot remove or demote the last Owner of a workspace.");
     }
 
     [Fact]
@@ -111,7 +112,7 @@ public class WorkspaceAuthorizationTests : IClassFixture<WorklaneWebApplicationF
         var before = await EventCountAsync(owner.Workspace.Id);
         var response = await PatchRole(admin, owner.Workspace.Id, admin.Tokens.User.Id, WorkspaceRole.Owner);
 
-        await AssertForbidden(response, "Owner");
+        await AssertForbidden(response, "owner_role_owner_only", "Owner");
         await AssertRole(owner, owner.Workspace.Id, admin.Tokens.User.Id, WorkspaceRole.Admin);
         (await EventCountAsync(owner.Workspace.Id)).Should().Be(before);
     }
@@ -124,7 +125,7 @@ public class WorkspaceAuthorizationTests : IClassFixture<WorklaneWebApplicationF
         var before = await EventCountAsync(owner.Workspace.Id);
         var response = await PatchRole(admin, owner.Workspace.Id, member.Tokens.User.Id, WorkspaceRole.Owner);
 
-        await AssertForbidden(response, "Owner");
+        await AssertForbidden(response, "owner_role_owner_only", "Owner");
         await AssertRole(owner, owner.Workspace.Id, member.Tokens.User.Id, WorkspaceRole.Member);
         (await EventCountAsync(owner.Workspace.Id)).Should().Be(before);
     }
@@ -152,7 +153,7 @@ public class WorkspaceAuthorizationTests : IClassFixture<WorklaneWebApplicationF
             },
             whenForbidden: async () =>
             {
-                await AssertForbidden(response, "Admin");
+                await AssertForbidden(response, "admin_grant_owner_only", "Admin");
                 await AssertRole(owner, owner.Workspace.Id, member.Tokens.User.Id, WorkspaceRole.Member);
                 (await EventCountAsync(owner.Workspace.Id)).Should().Be(before);
             });
@@ -165,12 +166,12 @@ public class WorkspaceAuthorizationTests : IClassFixture<WorklaneWebApplicationF
         var before = await EventCountAsync(owner.Workspace.Id);
 
         var demote = await PatchRole(admin, owner.Workspace.Id, owner.Tokens.User.Id, WorkspaceRole.Viewer);
-        await AssertForbidden(demote, "Owner");
+        await AssertForbidden(demote, "owner_role_owner_only", "Owner");
         demote.StatusCode.Should().NotBe(HttpStatusCode.Conflict);
         await AssertRole(owner, owner.Workspace.Id, owner.Tokens.User.Id, WorkspaceRole.Owner);
 
         var remove = await admin.Client.DeleteAsync($"/api/workspaces/{owner.Workspace.Id}/members/{owner.Tokens.User.Id}");
-        await AssertForbidden(remove, "Owner");
+        await AssertForbidden(remove, "owner_role_owner_only", "Owner");
         remove.StatusCode.Should().NotBe(HttpStatusCode.Conflict);
         await AssertRole(owner, owner.Workspace.Id, owner.Tokens.User.Id, WorkspaceRole.Owner);
         (await EventCountAsync(owner.Workspace.Id)).Should().Be(before);
@@ -199,8 +200,8 @@ public class WorkspaceAuthorizationTests : IClassFixture<WorklaneWebApplicationF
             },
             whenForbidden: async () =>
             {
-                await AssertForbidden(demote, "another Admin");
-                await AssertForbidden(remove, "another Admin");
+                await AssertForbidden(demote, "admin_manage_peer_owner_only", "another Admin");
+                await AssertForbidden(remove, "admin_manage_peer_owner_only", "another Admin");
                 await AssertRole(owner, owner.Workspace.Id, peer.Tokens.User.Id, WorkspaceRole.Admin);
                 (await EventCountAsync(owner.Workspace.Id)).Should().Be(before);
             });
@@ -234,6 +235,20 @@ public class WorkspaceAuthorizationTests : IClassFixture<WorklaneWebApplicationF
         removed.OldRole.Should().Be(WorkspaceRole.Member);
         removed.NewRole.Should().BeNull();
         removed.OccurredAt.Should().BeCloseTo(DateTimeOffset.UtcNow, TimeSpan.FromSeconds(10));
+    }
+
+    [Fact]
+    public async Task Admin_CannotRemoveSelf()
+    {
+        var (owner, admin, _) = await WorkspaceWithAdminAsync();
+        var before = await EventCountAsync(owner.Workspace.Id);
+
+        var response = await admin.Client.DeleteAsync(
+            $"/api/workspaces/{owner.Workspace.Id}/members/{admin.Tokens.User.Id}");
+
+        await AssertForbidden(response, "admin_remove_owner_only", "Only an Owner can remove an Admin.");
+        await AssertRole(owner, owner.Workspace.Id, admin.Tokens.User.Id, WorkspaceRole.Admin);
+        (await EventCountAsync(owner.Workspace.Id)).Should().Be(before);
     }
 
     [Fact]
@@ -302,10 +317,8 @@ public class WorkspaceAuthorizationTests : IClassFixture<WorklaneWebApplicationF
 
         var response = await owner.Client.DeleteAsync($"/api/workspaces/{owner.Workspace.Id}/members/{owner.Tokens.User.Id}");
 
-        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
-        var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(TestAuthHelper.JsonOptions);
-        problem!.Title.Should().Be("Conflict");
-        problem.Detail.Should().Be("Cannot remove or demote the last Owner of a workspace.");
+        await AssertProblem(response, HttpStatusCode.Conflict, "Conflict", "last_owner",
+            "Cannot remove or demote the last Owner of a workspace.");
         await AssertRole(owner, owner.Workspace.Id, owner.Tokens.User.Id, WorkspaceRole.Owner);
         (await EventCountAsync(owner.Workspace.Id)).Should().Be(0);
     }
@@ -337,7 +350,7 @@ public class WorkspaceAuthorizationTests : IClassFixture<WorklaneWebApplicationF
 
         var response = await PatchRole(ownerElsewhere, owner.Workspace.Id, member.Tokens.User.Id, WorkspaceRole.Owner);
 
-        await AssertForbidden(response, "Owner");
+        await AssertForbidden(response, "owner_role_owner_only", "Owner");
         await AssertRole(owner, owner.Workspace.Id, member.Tokens.User.Id, WorkspaceRole.Member);
         await AssertRole(ownerElsewhere, ownerElsewhere.Workspace.Id, ownerElsewhere.Tokens.User.Id, WorkspaceRole.Owner);
         (await EventCountAsync(owner.Workspace.Id)).Should().Be(before);
@@ -394,14 +407,14 @@ public class WorkspaceAuthorizationTests : IClassFixture<WorklaneWebApplicationF
             $"/api/workspaces/{owner.Workspace.Id}/invitations",
             new InviteMemberRequest(existing.Tokens.User.Email, WorkspaceRole.Admin));
 
-        await AssertForbidden(existingResponse, "Admin");
+        await AssertForbidden(existingResponse, "admin_grant_owner_only", "Admin");
         await AssertRole(owner, owner.Workspace.Id, existing.Tokens.User.Id, null);
 
         var pendingEmail = $"pending-{Guid.NewGuid():N}@example.com";
         var pendingResponse = await admin.Client.PostAsJsonAsync(
             $"/api/workspaces/{owner.Workspace.Id}/invitations",
             new InviteMemberRequest(pendingEmail, WorkspaceRole.Admin));
-        await AssertForbidden(pendingResponse, "Admin");
+        await AssertForbidden(pendingResponse, "admin_grant_owner_only", "Admin");
 
         using (var scope = _factory.Services.CreateScope())
         {
@@ -451,7 +464,7 @@ public class WorkspaceAuthorizationTests : IClassFixture<WorklaneWebApplicationF
             "/api/invitations/accept",
             new AcceptInvitationRequest(token));
 
-        await AssertForbidden(accept, "Admin");
+        await AssertForbidden(accept, "admin_grant_owner_only", "Admin");
         await AssertRole(second, owner.Workspace.Id, invitee.Tokens.User.Id, null);
 
         using var scope = _factory.Services.CreateScope();
@@ -593,13 +606,23 @@ public class WorkspaceAuthorizationTests : IClassFixture<WorklaneWebApplicationF
         role.Should().Be(expected);
     }
 
-    private static async Task AssertForbidden(HttpResponseMessage response, string detailFragment)
+    private static Task AssertForbidden(HttpResponseMessage response, string code, string detailFragment)
+        => AssertProblem(response, HttpStatusCode.Forbidden, "Forbidden", code, detailFragment);
+
+    private static async Task AssertProblem(
+        HttpResponseMessage response,
+        HttpStatusCode status,
+        string title,
+        string code,
+        string detailFragment)
     {
-        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
-        var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(TestAuthHelper.JsonOptions);
-        problem!.Status.Should().Be(403);
-        problem.Title.Should().Be("Forbidden");
-        problem.Detail.Should().Contain(detailFragment);
+        response.StatusCode.Should().Be(status);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var problem = document.RootElement;
+        problem.GetProperty("status").GetInt32().Should().Be((int)status);
+        problem.GetProperty("title").GetString().Should().Be(title);
+        problem.GetProperty("code").GetString().Should().Be(code);
+        problem.GetProperty("detail").GetString().Should().Contain(detailFragment);
     }
 
     private async Task<List<WorkspaceMembershipEvent>> EventsAsync(Guid workspaceId)
@@ -692,6 +715,30 @@ public class WorkspaceMembershipPolicyTests
         Deny(Member, Viewer, Member, isSelf: false);
     }
 
+    [Fact]
+    public void EachForbiddenRule_ThrowsItsCode()
+    {
+        ExpectCode(Member, Viewer, Member, isSelf: false, "member_manage_forbidden");
+        ExpectCode(Admin, Member, Owner, isSelf: false, "owner_role_owner_only");
+        ExpectCode(Admin, Owner, newRole: null, isSelf: false, "owner_role_owner_only");
+        ExpectCode(Admin, Admin, newRole: null, isSelf: true, "admin_remove_owner_only");
+        // Owner is rejected before this branch. A self change to a higher non-Owner role is the one that uses it.
+        ExpectCode(Admin, Member, Admin, isSelf: true, "cannot_raise_own_role");
+
+        if (!WorkspaceMembershipPolicy.AdminMayManagePeerAdmins)
+            ExpectCode(Admin, Admin, Member, isSelf: false, "admin_manage_peer_owner_only");
+
+        // No named role falls through: Owner and Admin return above, and Viewer and Member are allowed.
+        ExpectCode(Admin, (WorkspaceRole)99, Viewer, isSelf: false, "admin_manages_viewer_member_only");
+
+        if (!WorkspaceMembershipPolicy.AdminMayGrantAdmin)
+        {
+            ExpectCode(Admin, Viewer, Admin, isSelf: false, "admin_grant_owner_only");
+            var invite = () => WorkspaceMembershipPolicy.EnsureCanInvite(Admin, Admin);
+            invite.Should().Throw<ForbiddenAccessException>().Which.Code.Should().Be("admin_grant_owner_only");
+        }
+    }
+
     private static void Allow(WorkspaceRole actor, WorkspaceRole target, WorkspaceRole? newRole, bool isSelf)
         => Expect(allowed: true, actor, target, newRole, isSelf);
 
@@ -705,6 +752,12 @@ public class WorkspaceMembershipPolicyTests
             act.Should().NotThrow();
         else
             act.Should().Throw<ForbiddenAccessException>();
+    }
+
+    private static void ExpectCode(WorkspaceRole actor, WorkspaceRole target, WorkspaceRole? newRole, bool isSelf, string code)
+    {
+        var act = () => WorkspaceMembershipPolicy.EnsureCanManage(actor, target, newRole, isSelf);
+        act.Should().Throw<ForbiddenAccessException>().Which.Code.Should().Be(code);
     }
 
     private static void ExpectInvite(bool allowed, WorkspaceRole actor, WorkspaceRole role)

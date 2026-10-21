@@ -341,7 +341,9 @@ public class WorkspaceService : IWorkspaceService
             .SingleOrDefaultAsync(m => m.WorkspaceId == workspaceId && m.UserId == actorUserId, cancellationToken);
 
         if (actor is null)
-            throw new ForbiddenAccessException("You do not have permission to manage workspace members.");
+            throw new ForbiddenAccessException(
+                "member_manage_forbidden",
+                "You do not have permission to manage workspace members.");
 
         return actor;
     }
@@ -436,7 +438,9 @@ public class WorkspaceService : IWorkspaceService
 
         if (otherOwnerCount == 0)
         {
-            throw new ConflictException("Cannot remove or demote the last Owner of a workspace.");
+            throw new ConflictException(
+                "last_owner",
+                "Cannot remove or demote the last Owner of a workspace.");
         }
     }
 
