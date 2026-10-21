@@ -71,7 +71,7 @@ public class WorkspacesController : ControllerBase
     public async Task<IActionResult> UpdateMemberRole(Guid id, Guid userId, UpdateMemberRoleRequest request, CancellationToken cancellationToken)
     {
         await _updateRoleValidator.ValidateAndThrowAsync(request, cancellationToken);
-        await _workspaceService.UpdateMemberRoleAsync(id, userId, request.Role, cancellationToken);
+        await _workspaceService.UpdateMemberRoleAsync(id, _currentUser.UserId, userId, request.Role, cancellationToken);
         return NoContent();
     }
 
@@ -79,7 +79,7 @@ public class WorkspacesController : ControllerBase
     [RequireWorkspaceRole(WorkspaceRole.Admin)]
     public async Task<IActionResult> RemoveMember(Guid id, Guid userId, CancellationToken cancellationToken)
     {
-        await _workspaceService.RemoveMemberAsync(id, userId, cancellationToken);
+        await _workspaceService.RemoveMemberAsync(id, _currentUser.UserId, userId, cancellationToken);
         return NoContent();
     }
 }

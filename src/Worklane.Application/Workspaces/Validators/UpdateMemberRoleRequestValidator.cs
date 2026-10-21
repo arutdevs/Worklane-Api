@@ -7,6 +7,8 @@ public class UpdateMemberRoleRequestValidator : AbstractValidator<UpdateMemberRo
 {
     public UpdateMemberRoleRequestValidator()
     {
+        // Owner and Admin stay legal here. Whether this caller may assign them is decided
+        // by WorkspaceMembershipPolicy from their membership in the route workspace.
         RuleFor(x => x.Role).IsInEnum();
     }
 }

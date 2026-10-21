@@ -135,9 +135,9 @@ public class RequireWorkspaceRoleFilterTests
             throw new NotImplementedException();
         public Task AcceptInvitationAsync(Guid acceptingUserId, string token, CancellationToken cancellationToken) =>
             throw new NotImplementedException();
-        public Task UpdateMemberRoleAsync(Guid workspaceId, Guid targetUserId, WorkspaceRole newRole, CancellationToken cancellationToken) =>
+        public Task UpdateMemberRoleAsync(Guid workspaceId, Guid actorUserId, Guid targetUserId, WorkspaceRole newRole, CancellationToken cancellationToken) =>
             throw new NotImplementedException();
-        public Task RemoveMemberAsync(Guid workspaceId, Guid targetUserId, CancellationToken cancellationToken) =>
+        public Task RemoveMemberAsync(Guid workspaceId, Guid actorUserId, Guid targetUserId, CancellationToken cancellationToken) =>
             throw new NotImplementedException();
     }
 }

@@ -27,18 +27,18 @@ Reserved names are not overwritten by exception parameters, compared without reg
 | `forbidden` | 403 | | You do not have permission to perform this action. | emitted |
 | `workspace_access_denied` | 403 | | You do not have sufficient permissions in this workspace. A non-member is 404 `not_found`, same body as a missing id, once WL-88 lands. Until then a non-member still gets this 403. | emitted |
 | `file_infected` | 403 | | The file was rejected by malware scanning. | planned (WL-73) |
-| `member_manage_forbidden` | 403 | | You do not have permission to manage workspace members. | planned (WL-62) |
-| `owner_role_owner_only` | 403 | | Only an Owner can grant, change, or remove the Owner role. | planned (WL-62) |
-| `admin_remove_owner_only` | 403 | | Only an Owner can remove an Admin. | planned (WL-62) |
-| `cannot_raise_own_role` | 403 | | You cannot raise your own role. | planned (WL-62) |
-| `admin_manage_peer_owner_only` | 403 | | Only an Owner can change or remove another Admin. | planned (WL-62) |
-| `admin_manages_viewer_member_only` | 403 | | An Admin can only manage Viewers and Members. | planned (WL-62) |
-| `admin_grant_owner_only` | 403 | | Only an Owner can grant the Admin role. | planned (WL-62) |
+| `member_manage_forbidden` | 403 | | You do not have permission to manage workspace members. | emitted |
+| `owner_role_owner_only` | 403 | | Only an Owner can grant, change, or remove the Owner role. | emitted |
+| `admin_remove_owner_only` | 403 | | Only an Owner can remove an Admin. | emitted |
+| `cannot_raise_own_role` | 403 | | You cannot raise your own role. | emitted |
+| `admin_manage_peer_owner_only` | 403 | | Only an Owner can change or remove another Admin. | emitted |
+| `admin_manages_viewer_member_only` | 403 | | An Admin can only manage Viewers and Members. | emitted |
+| `admin_grant_owner_only` | 403 | | Only an Owner can grant the Admin role. | emitted |
 | `not_found` | 404 | | Resource was not found. | emitted |
 | `target_column_not_found` | 404 | | Target column was not found in this project. | emitted |
 | `conflict` | 409 | | The request conflicts with the current state. | emitted |
 | `registration_failed` | 409 | | Identity's error text, joined with spaces and not translated. A later change to 400 `validation_failed` with `fieldCodes` is waiting on Tech Lead and frontend confirmation, and on a separate PO card. Until `registration_failed` is emitted, this path returns `conflict` with that text. | planned |
-| `last_owner` | 409 | | Cannot remove or demote the last Owner of a workspace. Until `last_owner` is emitted, this path returns `conflict` with that sentence. | planned |
+| `last_owner` | 409 | | Cannot remove or demote the last Owner of a workspace. | emitted |
 | `quota_exceeded` | 409 | `usedBytes`, `quotaBytes`, `fileBytes` when the size is known. `plan` is planned. | This workspace has used {usedBytes} of {quotaBytes} bytes. | emitted |
 | `column_has_active_cards` | 409 | `activeTaskCount`, `archivedTaskCount` | Column has {active} card(s) and {archived} archived card(s). Provide targetColumnId to move them first. | emitted |
 | `column_has_archived_cards` | 409 | `activeTaskCount`, `archivedTaskCount` | Column has {archived} archived card(s). Choose a column to move them to. | emitted |
@@ -50,4 +50,4 @@ Reserved names are not overwritten by exception parameters, compared without reg
 | `rate_limited` | 429 | `scope` | Too many requests. | emitted |
 | `internal_error` | 500 | `traceId` | An unexpected error occurred. | emitted |
 
-`file_empty` is a 0-byte upload. `request_too_large` is a body over the server limit, rejected before the body is read, and has no `maxBytes`. `file_too_large` is one attachment over the per-file limit. `unsupported_file_type` is every rejected upload type, including the generic 415 fallback. `extension` is the filename extension the caller sent, including the leading dot. `rate_limited` carries `scope` and no usage or limit numbers. The wait is only the `Retry-After` header, which CORS exposes. Emitted `scope` is `user` (global limiter, layer 1). Planned scopes use the same code and fields: `workspace_attachments` (WL-88 layer 2), `workspace_ai` (AI quota), `ip` (WL-64 login per IP). WL-62 sentences are the ones on `cursor/wl-62-member-role-guard-4be8`; that branch still sends them as `forbidden`.
+`file_empty` is a 0-byte upload. `request_too_large` is a body over the server limit, rejected before the body is read, and has no `maxBytes`. `file_too_large` is one attachment over the per-file limit. `unsupported_file_type` is every rejected upload type, including the generic 415 fallback. `extension` is the filename extension the caller sent, including the leading dot. `rate_limited` carries `scope` and no usage or limit numbers. The wait is only the `Retry-After` header, which CORS exposes. Emitted `scope` is `user` (global limiter, layer 1). Planned scopes use the same code and fields: `workspace_attachments` (WL-88 layer 2), `workspace_ai` (AI quota), `ip` (WL-64 login per IP). WL-62 emits `member_manage_forbidden`, `owner_role_owner_only`, `admin_remove_owner_only`, `cannot_raise_own_role`, `admin_manage_peer_owner_only`, `admin_manages_viewer_member_only`, `admin_grant_owner_only`, and `last_owner`.
