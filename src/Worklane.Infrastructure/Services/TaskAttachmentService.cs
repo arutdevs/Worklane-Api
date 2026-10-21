@@ -91,7 +91,7 @@ public class TaskAttachmentService : ITaskAttachmentService
         }
 
         if (headerRead <= 0)
-            throw new BadRequestException("A non-empty file is required.");
+            throw new BadRequestException("file_empty", "A non-empty file is required.");
 
         if (headerRead == headerCapacity && headerCapacity == _settings.MaxBytes)
         {
@@ -108,8 +108,10 @@ public class TaskAttachmentService : ITaskAttachmentService
         // the quota decision. InsertWithinWorkspaceQuotaAsync holds
         // pg_advisory_xact_lock for this workspace across the re-check and the insert.
         var used = await WorkspaceUsageAsync(workspaceId, cancellationToken);
+        // The header buffer holds the whole file when the read stopped early.
+        long? knownFileBytes = headerRead < header.Length ? headerRead : null;
         if (used >= _settings.WorkspaceQuotaBytes)
-            throw new ConflictException("Workspace storage quota exceeded.");
+            throw QuotaExceeded(used, knownFileBytes);
 
         var attachmentId = Guid.NewGuid();
         var attachment = new TaskAttachment
@@ -132,7 +134,7 @@ public class TaskAttachmentService : ITaskAttachmentService
         if (size <= 0)
         {
             await _storage.DeleteAsync(attachment.StorageKey, cancellationToken);
-            throw new BadRequestException("A non-empty file is required.");
+            throw new BadRequestException("file_empty", "A non-empty file is required.");
         }
 
         try
@@ -172,7 +174,7 @@ public class TaskAttachmentService : ITaskAttachmentService
         await WorkspaceQuotaLock.AcquireAsync(_db.Database, workspaceId, cancellationToken);
         var usedNow = await WorkspaceUsageAsync(workspaceId, cancellationToken);
         if (usedNow + size > _settings.WorkspaceQuotaBytes)
-            throw new ConflictException("Workspace storage quota exceeded.");
+            throw QuotaExceeded(usedNow, size);
 
         attachment.SizeBytes = size;
         _db.TaskAttachments.Add(attachment);
@@ -260,6 +262,22 @@ public class TaskAttachmentService : ITaskAttachmentService
     private bool ContentTypeAllowed(string contentType) =>
         _settings.AllowedContentTypes.Any(allowed =>
             string.Equals(NormalizeContentType(allowed), contentType, StringComparison.Ordinal));
+
+    private ConflictException QuotaExceeded(long usedBytes, long? fileBytes)
+    {
+        var parameters = new Dictionary<string, object?>
+        {
+            ["usedBytes"] = usedBytes,
+            ["quotaBytes"] = _settings.WorkspaceQuotaBytes
+        };
+        if (fileBytes is long bytes)
+            parameters["fileBytes"] = bytes;
+
+        return new ConflictException(
+            "quota_exceeded",
+            $"This workspace has used {usedBytes} of {_settings.WorkspaceQuotaBytes} bytes.",
+            parameters);
+    }
 
     private async Task<long> WorkspaceUsageAsync(Guid workspaceId, CancellationToken cancellationToken)
     {

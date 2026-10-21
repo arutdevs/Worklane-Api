@@ -1,9 +1,16 @@
+using System.Net;
+
 namespace Worklane.Application.Common.Exceptions;
 
-public class PayloadTooLargeException : Exception
+public class PayloadTooLargeException : AppException
 {
+    public override HttpStatusCode StatusCode => HttpStatusCode.RequestEntityTooLarge;
+
     public PayloadTooLargeException(long maxBytes)
-        : base($"File exceeds the maximum size of {maxBytes} bytes.")
+        : base(
+            "file_too_large",
+            $"File exceeds the maximum size of {maxBytes} bytes.",
+            ErrorParams.Of(("maxBytes", maxBytes)))
     {
         MaxBytes = maxBytes;
     }
