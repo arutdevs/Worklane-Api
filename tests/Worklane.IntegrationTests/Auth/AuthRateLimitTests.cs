@@ -5,9 +5,12 @@ using FluentAssertions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Worklane.IntegrationTests.Infrastructure;
+using Worklane.WebApi.Startup;
 
 namespace Worklane.IntegrationTests.Auth;
 
@@ -81,7 +84,7 @@ public class AuthRateLimitTests : IClassFixture<AuthRateLimitFactory>
     }
 
     [Fact]
-    public async Task ClientsBehindTrustedNetwork_WithDifferentCfConnectingIp_GetSeparateBuckets()
+    public async Task CfConnectingIp_IsHonouredOnlyFromTheTrustedProxy()
     {
         var client = _factory.CreateClient();
         const string sharedForwardedFor = "203.0.113.80";
@@ -94,7 +97,7 @@ public class AuthRateLimitTests : IClassFixture<AuthRateLimitFactory>
                 client,
                 "/api/auth/login",
                 new { email = "nobody@example.com", password = "WrongPassword1" },
-                AuthRateLimitFactory.TrustedNetworkPeer,
+                AuthRateLimitFactory.TrustedProxy,
                 sharedForwardedFor,
                 first);
             attempt.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
@@ -104,7 +107,7 @@ public class AuthRateLimitTests : IClassFixture<AuthRateLimitFactory>
             client,
             "/api/auth/login",
             new { email = "nobody@example.com", password = "WrongPassword1" },
-            AuthRateLimitFactory.TrustedNetworkPeer,
+            AuthRateLimitFactory.TrustedProxy,
             sharedForwardedFor,
             first);
         await AssertRateLimited(blocked);
@@ -113,10 +116,43 @@ public class AuthRateLimitTests : IClassFixture<AuthRateLimitFactory>
             client,
             "/api/auth/login",
             new { email = "nobody@example.com", password = "WrongPassword1" },
-            AuthRateLimitFactory.TrustedNetworkPeer,
+            AuthRateLimitFactory.TrustedProxy,
             sharedForwardedFor,
             second);
         otherClient.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+
+        // Same subnet as the proxy, not the proxy. A configured /24 would have trusted it.
+        const string neighbor = "10.50.0.8";
+        const string otherNeighbor = "10.50.0.9";
+        for (var i = 0; i < 3; i++)
+        {
+            var attempt = await Post(
+                client,
+                "/api/auth/login",
+                new { email = "nobody@example.com", password = "WrongPassword1" },
+                neighbor,
+                $"203.0.113.{100 + i}",
+                $"198.51.100.{100 + i}");
+            attempt.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        }
+
+        var neighborBlocked = await Post(
+            client,
+            "/api/auth/login",
+            new { email = "nobody@example.com", password = "WrongPassword1" },
+            neighbor,
+            "203.0.113.199",
+            "198.51.100.199");
+        await AssertRateLimited(neighborBlocked);
+
+        var otherNeighborResponse = await Post(
+            client,
+            "/api/auth/login",
+            new { email = "nobody@example.com", password = "WrongPassword1" },
+            otherNeighbor,
+            "203.0.113.100",
+            "198.51.100.100");
+        otherNeighborResponse.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 
     [Fact]
@@ -157,6 +193,164 @@ public class AuthRateLimitTests : IClassFixture<AuthRateLimitFactory>
             spoofedForwardedFor,
             spoofedCf);
         otherPeerResponse.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task SpoofedSingleValueForwardedFor_FromUntrustedPeer_StillHitsTheLimit()
+    {
+        var client = _factory.CreateClient();
+        const string peer = "198.51.100.40";
+        const string otherPeer = "198.51.100.41";
+
+        for (var i = 0; i < 3; i++)
+        {
+            var attempt = await Post(
+                client,
+                "/api/auth/login",
+                new { email = "nobody@example.com", password = "WrongPassword1" },
+                peer,
+                $"203.0.113.{i + 1}",
+                $"198.51.100.{i + 70}");
+            attempt.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        }
+
+        var blocked = await Post(
+            client,
+            "/api/auth/login",
+            new { email = "nobody@example.com", password = "WrongPassword1" },
+            peer,
+            "203.0.113.250");
+        await AssertRateLimited(blocked);
+
+        var other = await Post(
+            client,
+            "/api/auth/login",
+            new { email = "nobody@example.com", password = "WrongPassword1" },
+            otherPeer,
+            "203.0.113.1");
+        other.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task SpoofedMultiValueForwardedFor_FromUntrustedPeer_FallsBackToTheRemoteAddress()
+    {
+        var client = _factory.CreateClient();
+        const string peer = "198.51.100.42";
+        const string otherPeer = "198.51.100.43";
+
+        for (var i = 0; i < 3; i++)
+        {
+            var attempt = await Post(
+                client,
+                "/api/auth/login",
+                new { email = "nobody@example.com", password = "WrongPassword1" },
+                peer,
+                $"1.2.3.{i + 1}, 203.0.113.{i + 20}");
+            attempt.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        }
+
+        var blocked = await Post(
+            client,
+            "/api/auth/login",
+            new { email = "nobody@example.com", password = "WrongPassword1" },
+            peer,
+            "9.9.9.9, 8.8.8.8, 203.0.113.77");
+        await AssertRateLimited(blocked);
+
+        var other = await Post(
+            client,
+            "/api/auth/login",
+            new { email = "nobody@example.com", password = "WrongPassword1" },
+            otherPeer,
+            "1.2.3.1, 203.0.113.20");
+        other.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task ExtraHopsFromTrustedProxy_DoNotBypassTheClientBucket()
+    {
+        var client = _factory.CreateClient();
+        const string clientA = "203.0.113.30";
+        const string clientB = "203.0.113.31";
+
+        for (var i = 0; i < 3; i++)
+        {
+            var forwardedFor = i % 2 == 0
+                ? $"1.2.3.{i + 1}, {clientA}"
+                : $"1.2.3.{i + 1}, 9.9.9.{i + 1}, {clientA}";
+            var attempt = await Post(
+                client,
+                "/api/auth/login",
+                new { email = "nobody@example.com", password = "WrongPassword1" },
+                AuthRateLimitFactory.TrustedProxy,
+                forwardedFor,
+                $"8.8.8.{i + 1}, 7.7.7.{i + 1}");
+            attempt.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        }
+
+        var blocked = await Post(
+            client,
+            "/api/auth/login",
+            new { email = "nobody@example.com", password = "WrongPassword1" },
+            AuthRateLimitFactory.TrustedProxy,
+            $"4.4.4.4, 5.5.5.5, {clientA}",
+            "6.6.6.6, 203.0.113.99");
+        await AssertRateLimited(blocked);
+
+        var otherClient = await Post(
+            client,
+            "/api/auth/login",
+            new { email = "nobody@example.com", password = "WrongPassword1" },
+            AuthRateLimitFactory.TrustedProxy,
+            $"4.4.4.4, 5.5.5.5, {clientB}");
+        otherClient.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public void ForwardLimit_IsOne_AndTheProxyNetworkIsNotTrusted()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var options = scope.ServiceProvider.GetRequiredService<IOptions<ForwardedHeadersOptions>>().Value;
+        options.ForwardLimit.Should().Be(1);
+        options.KnownProxies.Should().ContainSingle()
+            .Which.Should().Be(IPAddress.Parse(AuthRateLimitFactory.TrustedProxy));
+        options.KnownIPNetworks.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task IPv4MappedTrustedProxy_HonoursOneHop_AndDoesNotShareTheProxyBucket()
+    {
+        var client = _factory.CreateClient();
+        var mappedProxy = "::ffff:" + AuthRateLimitFactory.TrustedProxy;
+        const string first = "203.0.113.120";
+        const string second = "203.0.113.121";
+
+        for (var i = 0; i < 3; i++)
+        {
+            var attempt = await Post(
+                client,
+                "/api/auth/login",
+                new { email = "nobody@example.com", password = "WrongPassword1" },
+                mappedProxy,
+                first);
+            attempt.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        }
+
+        var blocked = await Post(
+            client,
+            "/api/auth/login",
+            new { email = "nobody@example.com", password = "WrongPassword1" },
+            mappedProxy,
+            first);
+        await AssertRateLimited(blocked);
+
+        var otherClient = await Post(
+            client,
+            "/api/auth/login",
+            new { email = "nobody@example.com", password = "WrongPassword1" },
+            mappedProxy,
+            second);
+        otherClient.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
 
     private static async Task AssertRateLimited(HttpResponseMessage response)
@@ -200,7 +394,6 @@ public class AuthRateLimitTests : IClassFixture<AuthRateLimitFactory>
 public class AuthRateLimitFactory : WorklaneWebApplicationFactory
 {
     public const string TrustedProxy = "10.50.0.1";
-    public const string TrustedNetworkPeer = "10.60.0.8";
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
@@ -212,7 +405,6 @@ public class AuthRateLimitFactory : WorklaneWebApplicationFactory
                 ["RateLimit:Auth:PermitLimit"] = "3",
                 ["RateLimit:Auth:WindowSeconds"] = "60",
                 ["ForwardedHeaders:KnownProxies:0"] = TrustedProxy,
-                ["ForwardedHeaders:KnownNetworks:0"] = "10.60.0.0/24",
             });
         });
         builder.ConfigureServices(services =>
@@ -242,4 +434,62 @@ internal sealed class ClientIpFromHeaderStartupFilter : IStartupFilter
         });
         next(app);
     };
+}
+
+public class EdgeProxyContractTests
+{
+    private const string EdgeIp = "172.30.20.10";
+
+    [Fact]
+    public void Nginx_OverwritesForwardedForWithThePeer_AndDropsClientCfConnectingIp()
+    {
+        var conf = File.ReadAllText(Path.Combine(RepoRoot(), "deploy/nginx/default.conf"));
+        var directives = conf.Split('\n')
+            .Select(line => line.Trim())
+            .Where(line => line.Length > 0 && !line.StartsWith('#'))
+            .ToArray();
+
+        directives.Should().Contain("proxy_set_header X-Forwarded-For $remote_addr;");
+        directives.Should().Contain("proxy_set_header CF-Connecting-IP \"\";");
+        directives.Should().NotContain(line =>
+            line.Contains("$http_x_forwarded_for", StringComparison.Ordinal)
+            || line.Contains("$proxy_add_x_forwarded_for", StringComparison.Ordinal)
+            || line.Contains("$http_cf_connecting_ip", StringComparison.Ordinal)
+            || line.Contains("wl_forwarded_for", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Compose_TrustsOnlyTheFixedEdgeAddress()
+    {
+        var compose = File.ReadAllText(Path.Combine(RepoRoot(), "docker-compose.yml"));
+        compose.Should().Contain($"ForwardedHeaders__KnownProxies__0: \"{EdgeIp}\"");
+        compose.Should().Contain($"ipv4_address: {EdgeIp}");
+        compose.Should().NotContain("ForwardedHeaders__KnownNetworks");
+    }
+
+    [Fact]
+    public void WideKnownNetwork_IsRejected()
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["ForwardedHeaders:KnownProxies:0"] = EdgeIp,
+            ["ForwardedHeaders:KnownNetworks:0"] = "172.30.20.0/24",
+        }).Build();
+        var services = new ServiceCollection();
+        services.AddWorklaneForwardedHeaders(config);
+        using var provider = services.BuildServiceProvider();
+
+        var act = () => _ = provider.GetRequiredService<IOptions<ForwardedHeadersOptions>>().Value;
+        act.Should().Throw<InvalidOperationException>().WithMessage("*172.30.20.0/24*");
+    }
+
+    private static string RepoRoot()
+    {
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (root is not null && !File.Exists(Path.Combine(root.FullName, "Worklane.slnx")))
+            root = root.Parent;
+        if (root is null)
+            throw new InvalidOperationException("Could not locate the repository root.");
+        return root.FullName;
+    }
 }

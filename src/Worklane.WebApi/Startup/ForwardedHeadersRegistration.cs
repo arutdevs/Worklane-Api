@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Sockets;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.Options;
 using Worklane.WebApi.Middleware;
@@ -17,6 +18,9 @@ public static class ForwardedHeadersRegistration
         services.Configure<ForwardedHeadersOptions>(options =>
         {
             options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+            // One hop, from the right. "spoof, client" from a trusted proxy is the client.
+            // A wider limit would walk a trusted network into the caller-supplied address.
+            options.ForwardLimit = 1;
 
             var proxies = ReadList(configuration, KnownProxiesKey);
             var networks = ReadList(configuration, KnownNetworksKey);
@@ -42,6 +46,13 @@ public static class ForwardedHeadersRegistration
                 {
                     throw new InvalidOperationException(
                         $"ForwardedHeaders:KnownNetworks value '{value}' is not a CIDR prefix.");
+                }
+
+                var hostPrefix = network.BaseAddress.AddressFamily == AddressFamily.InterNetwork ? 32 : 128;
+                if (network.PrefixLength != hostPrefix)
+                {
+                    throw new InvalidOperationException(
+                        $"ForwardedHeaders:KnownNetworks value '{value}' trusts more than one address. Put that proxy in {KnownProxiesKey}.");
                 }
 
                 parsedNetworks.Add(network);

@@ -217,13 +217,18 @@ Object-storage credentials (`S3_ROOT_USER`, `S3_ROOT_PASSWORD`, `WL_S3_ACCESS_KE
 
 ## Client IP behind nginx
 
-nginx is the only proxy the API trusts. It joins the compose `proxy` network at **172.30.20.10** (`172.30.20.0/24`) and publishes **127.0.0.1:8080**. The API is on that network and on `backend`. Postgres is only on `backend`. Compose sets:
+The Web nginx is the only public edge. This compose file gives that role to the `nginx` service, fixed at **172.30.20.10** on the `proxy` network, and publishes **127.0.0.1:8080**. The API is on that network and on `backend`. Postgres is only on `backend`. Compose sets one trusted proxy and does not set `KnownNetworks`:
 
 - `ForwardedHeaders__KnownProxies__0=172.30.20.10`
-- `ForwardedHeaders__KnownNetworks__0=172.30.20.0/24`
 
-An empty `ForwardedHeaders:KnownProxies` and `KnownNetworks` keeps the framework default (loopback). Any configured value clears that default first, because Docker's nginx address is not loopback, and an empty known-proxy list would trust every peer. `UseForwardedHeaders` runs before the auth rate limiter and honors `X-Forwarded-For` and `X-Forwarded-Proto` from those peers only. One hop is kept.
+`172.30.20.0/24` and the gateway **172.30.20.1** are not proxies. A `KnownNetworks` prefix wider than one host is rejected at startup. The API port stays on `backend`, so a direct connection to **127.0.0.1:5000** is not the edge. An empty `ForwardedHeaders:KnownProxies` and `KnownNetworks` keeps the framework default (loopback). Any configured proxy clears that default first, because an empty known-proxy list would trust every peer. `ForwardLimit` is 1. `UseForwardedHeaders` runs before the auth rate limiter.
 
-`CF-Connecting-IP` is the auth client IP only when the TCP peer is in that set. A request that is not from the proxy network keeps the socket address, so a spoofed `X-Forwarded-For` or `CF-Connecting-IP` on **127.0.0.1:5000** does not choose a bucket. The gateway **172.30.20.1** is inside the trusted CIDR, which is why the API port is published on `backend` and not on `proxy`.
+Header contract, for this edge and for the Web nginx:
 
-`deploy/nginx/default.conf` sends one `X-Forwarded-For` address (the caller’s header when it set one, otherwise the address nginx sees), `X-Forwarded-Proto`, and passes `CF-Connecting-IP` through. It does not append the Docker gateway. Two clients through `:8080` with different `X-Forwarded-For` or `CF-Connecting-IP` values get different auth buckets. The 429 body stays `rate_limited` with `scope` `ip`. The wait is only the `Retry-After` header.
+```nginx
+proxy_set_header X-Forwarded-For $remote_addr;
+```
+
+Do not append `$proxy_add_x_forwarded_for` and do not copy or map `$http_x_forwarded_for`. The header is one address, the TCP peer of the edge. A client-supplied `X-Forwarded-For` does not choose a bucket. If extra hops are forwarded anyway, only the rightmost address counts.
+
+`CF-Connecting-IP` is the auth client only when the TCP peer is **172.30.20.10** and the value is a single IP. This edge sends an empty `CF-Connecting-IP`, which nginx omits, so the inbound client header is not forwarded. Any other peer keeps the socket address. Two clients get two auth buckets when the edge sees two peers. The 429 body stays `rate_limited` with `scope` `ip`. The wait is only the `Retry-After` header.
