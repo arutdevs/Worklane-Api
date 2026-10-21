@@ -9,6 +9,7 @@ internal static class WorkspaceSlug
 {
     public const string Fallback = "workspace";
     public const int MaxLength = 100;
+    public const string UniqueIndexName = "IX_Workspaces_Slug";
 
     public static string ForDisplayName(string? displayName)
     {
@@ -18,21 +19,22 @@ internal static class WorkspaceSlug
 
     public static string ForWorkspaceName(string? name) => Normalize(name) ?? Fallback;
 
-    public static async Task<string> GenerateUniqueAsync(
+    public static async Task<UniqueSlug> GenerateUniqueAsync(
         IQueryable<Workspace> workspaces,
         string baseSlug,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        int minimumSuffix = 0)
     {
         var slug = Fit(baseSlug, 0);
-        var candidate = slug;
-        var suffix = 0;
+        var suffix = minimumSuffix < 0 ? 0 : minimumSuffix;
+        var candidate = suffix == 0 ? slug : Fit(slug, suffix);
         while (await workspaces.AnyAsync(w => w.Slug == candidate, cancellationToken))
         {
             suffix++;
             candidate = Fit(slug, suffix);
         }
 
-        return candidate;
+        return new UniqueSlug(candidate, suffix);
     }
 
     internal static string? Normalize(string? value)
@@ -40,7 +42,7 @@ internal static class WorkspaceSlug
         if (string.IsNullOrWhiteSpace(value))
             return null;
 
-        var lowered = value.Trim().ToLowerInvariant();
+        var lowered = value.Trim().Normalize(NormalizationForm.FormKC).ToLowerInvariant();
         var builder = new StringBuilder(lowered.Length);
         var pendingDash = false;
         foreach (var c in lowered)
@@ -101,4 +103,6 @@ internal static class WorkspaceSlug
 
         return false;
     }
+
+    internal readonly record struct UniqueSlug(string Value, int Suffix);
 }

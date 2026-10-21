@@ -57,10 +57,10 @@ public class WorkspaceService : IWorkspaceService
 
     public async Task<WorkspaceDto> CreateWorkspaceAsync(Guid ownerUserId, CreateWorkspaceRequest request, CancellationToken cancellationToken)
     {
-        var slug = await WorkspaceSlug.GenerateUniqueAsync(
+        var slug = (await WorkspaceSlug.GenerateUniqueAsync(
             _db.Workspaces,
             WorkspaceSlug.ForWorkspaceName(request.Name),
-            cancellationToken);
+            cancellationToken)).Value;
 
         var workspace = new Workspace
         {

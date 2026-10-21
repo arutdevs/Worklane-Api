@@ -1,7 +1,10 @@
 using System.Security.Cryptography;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Testcontainers.PostgreSql;
 
 namespace Worklane.IntegrationTests.Infrastructure;
@@ -68,6 +71,12 @@ public class WorklaneWebApplicationFactory : WebApplicationFactory<Program>, IAs
                 ["RateLimit:Auth:PermitLimit"] = "10000",
                 ["RateLimit:Auth:WindowSeconds"] = "60"
             });
+        });
+
+        builder.ConfigureTestServices(services =>
+        {
+            services.AddSingleton<WorkspaceInsertGate>();
+            services.AddSingleton<ISaveChangesInterceptor>(sp => sp.GetRequiredService<WorkspaceInsertGate>());
         });
     }
 }
