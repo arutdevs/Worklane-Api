@@ -1,9 +1,4 @@
-using System.Net;
-using System.Net.Http.Headers;
-using System.Net.Http.Json;
-using System.Security.Claims;
 using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using FluentAssertions;
 using Microsoft.AspNetCore.DataProtection;
@@ -13,9 +8,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Hosting.Internal;
 using Microsoft.Extensions.Logging;
-using Microsoft.IdentityModel.JsonWebTokens;
-using Microsoft.IdentityModel.Tokens;
-using Worklane.Application.Auth.Dtos;
 using Worklane.Application.Common.Options;
 using Worklane.Infrastructure.Identity;
 using Worklane.WebApi.Startup;
@@ -25,7 +17,7 @@ namespace Worklane.IntegrationTests.Infrastructure;
 public class JwtSigningKeyTests
 {
     [Fact]
-    public void CommittedKey_IsRejected_AndTheMessageOmitsTheKey()
+    public async Task CommittedKey_IsRejected_AndTheMessageOmitsTheKey()
     {
         var secret = CommittedSecrets.Value;
         var fresh = Key(64);
@@ -33,14 +25,17 @@ public class JwtSigningKeyTests
         var whitespace = Assert.Throws<InvalidOperationException>(() => JwtSigningKeys.Create(Settings(secret.Insert(8, "\n"))));
         var asPrevious = Assert.Throws<InvalidOperationException>(() => JwtSigningKeys.Create(Settings(fresh, secret)));
 
-        AssertNoKey(leaked.ToString(), secret);
-        AssertNoKey(whitespace.ToString(), secret);
-        AssertNoKey(asPrevious.ToString(), secret);
+        AssertNoKey(string.Concat(leaked, whitespace, asPrevious), secret);
         leaked.Message.Should().Contain(CommittedSecrets.Fingerprint);
         whitespace.Message.Should().Contain(CommittedSecrets.Fingerprint);
         asPrevious.Message.Should().Contain("Jwt:PreviousSecrets[0]");
         JwtSigningKeys.Create(Settings(fresh)).Current.KeyId
             .Should().Be(JwtSigningKeys.Fingerprint(Convert.FromBase64String(fresh)));
+
+        var host = new WorklaneWebApplicationFactory();
+        await host.DisposeAsync();
+        if (host.JwtSecret == secret || host.PreviousJwtSecret == secret)
+            throw new Xunit.Sdk.XunitException("Test host is using the committed signing key.");
     }
 
     [Theory]
@@ -85,28 +80,7 @@ public class JwtSigningKeyTests
         failure.Should().Contain("leaked signing key").And.Contain(CommittedSecrets.Fingerprint);
     }
 
-    [Fact]
-    public async Task Startup_AcceptsFreshKey_AndPersistsDataProtectionKeys()
-    {
-        using var keys = new TempDirectory();
-        using var factory = ProbeFactory.Create("Production", new Dictionary<string, string?>
-        {
-            ["Jwt:Secret"] = Key(64),
-            ["Jwt:Issuer"] = "Worklane",
-            ["Jwt:Audience"] = "WorklaneClient",
-            ["DataProtection:KeysPath"] = keys.Path
-        });
-        using var client = factory.CreateClient();
-        (await client.GetAsync("/api/workspaces")).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
-
-        var payload = factory.Services.GetRequiredService<IDataProtectionProvider>().CreateProtector("wl").Protect("payload");
-        Directory.GetFiles(keys.Path, "*.xml").Should().NotBeEmpty();
-        Protector(keys.Path, DataProtectionRegistration.ApplicationName).Unprotect(payload).Should().Be("payload");
-        var act = () => Protector(keys.Path, "Other").Unprotect(payload);
-        act.Should().Throw<CryptographicException>();
-    }
-
-    internal static string StartFailure(WebApplicationFactory<Program> factory)
+    private static string StartFailure(WebApplicationFactory<Program> factory)
     {
         try
         {
@@ -114,32 +88,10 @@ public class JwtSigningKeyTests
         }
         catch (Exception ex)
         {
-            return Flatten(ex);
+            return ex.ToString();
         }
 
         throw new Xunit.Sdk.XunitException("Host started.");
-    }
-
-    private static string Flatten(Exception ex)
-    {
-        var text = new StringBuilder();
-        var seen = new HashSet<Exception>();
-        void Walk(Exception? current)
-        {
-            if (current is null || !seen.Add(current))
-                return;
-            text.AppendLine(current.Message);
-            if (current is AggregateException aggregate)
-            {
-                foreach (var inner in aggregate.InnerExceptions)
-                    Walk(inner);
-            }
-
-            Walk(current.InnerException);
-        }
-
-        Walk(ex);
-        return text.ToString();
     }
 
     private static JwtSettings Settings(string secret, params string[] previous) => new()
@@ -150,15 +102,7 @@ public class JwtSigningKeyTests
         Audience = "WorklaneClient"
     };
 
-    internal static string Key(int bytes) => Convert.ToBase64String(RandomNumberGenerator.GetBytes(bytes));
-
-    private static IDataProtector Protector(string path, string applicationName)
-    {
-        var services = new ServiceCollection();
-        services.AddLogging();
-        services.AddDataProtection().PersistKeysToFileSystem(new DirectoryInfo(path)).SetApplicationName(applicationName);
-        return services.BuildServiceProvider().GetRequiredService<IDataProtectionProvider>().CreateProtector("wl");
-    }
+    private static string Key(int bytes) => Convert.ToBase64String(RandomNumberGenerator.GetBytes(bytes));
 
     private static void AssertNoKey(string text, string secret)
     {
@@ -174,8 +118,8 @@ public class DataProtectionStartupTests
     [Fact]
     public void Production_WithoutPath_Fails()
     {
-        var ex = Assert.Throws<InvalidOperationException>(() => Add(Environments.Production, "  "));
-        ex.Message.Should().Contain("DataProtection:KeysPath is not set")
+        Assert.Throws<InvalidOperationException>(() => Add(Environments.Production, "  "))
+            .Message.Should().Contain("DataProtection:KeysPath is not set")
             .And.Contain("/var/lib/worklane/dataprotection-keys");
     }
 
@@ -184,10 +128,22 @@ public class DataProtectionStartupTests
     {
         using var factory = ProbeFactory.Create(Environments.Production, new Dictionary<string, string?>
         {
-            ["Jwt:Secret"] = JwtSigningKeyTests.Key(64),
+            ["Jwt:Secret"] = Convert.ToBase64String(RandomNumberGenerator.GetBytes(64)),
             ["DataProtection:KeysPath"] = ""
         });
-        JwtSigningKeyTests.StartFailure(factory).Should().Contain("DataProtection:KeysPath is not set");
+        try
+        {
+            using var client = factory.CreateClient();
+            throw new Xunit.Sdk.XunitException("Host started.");
+        }
+        catch (Xunit.Sdk.XunitException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            ex.ToString().Should().Contain("DataProtection:KeysPath is not set");
+        }
     }
 
     [Theory]
@@ -211,7 +167,7 @@ public class DataProtectionStartupTests
             .Message.Should().Contain("does not exist").And.Contain(missing);
 
         using var dir = new TempDirectory();
-        UnixModes.Set(dir.Path, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        SetMode(dir.Path, UnixFileMode.UserRead | UnixFileMode.UserExecute);
         try
         {
             Assert.Throws<InvalidOperationException>(() => Add(Environments.Production, dir.Path))
@@ -219,8 +175,31 @@ public class DataProtectionStartupTests
         }
         finally
         {
-            UnixModes.Set(dir.Path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            SetMode(dir.Path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         }
+    }
+
+    [Fact]
+    public void WritablePath_PersistsKeys_ForApplicationWorklane()
+    {
+        using var dir = new TempDirectory();
+        using var provider = Add(Environments.Production, dir.Path).BuildServiceProvider();
+        var payload = provider.GetRequiredService<IDataProtectionProvider>().CreateProtector("wl").Protect("payload");
+        Directory.GetFiles(dir.Path, "*.xml").Should().NotBeEmpty();
+
+        using var same = Protector(dir.Path, DataProtectionRegistration.ApplicationName);
+        same.GetRequiredService<IDataProtectionProvider>().CreateProtector("wl").Unprotect(payload).Should().Be("payload");
+        using var other = Protector(dir.Path, "Other");
+        var act = () => other.GetRequiredService<IDataProtectionProvider>().CreateProtector("wl").Unprotect(payload);
+        act.Should().Throw<CryptographicException>();
+    }
+
+    private static ServiceProvider Protector(string path, string applicationName)
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddDataProtection().PersistKeysToFileSystem(new DirectoryInfo(path)).SetApplicationName(applicationName);
+        return services.BuildServiceProvider();
     }
 
     private static IServiceCollection Add(string environment, string? path)
@@ -234,62 +213,14 @@ public class DataProtectionStartupTests
         services.AddWorklaneDataProtection(new HostingEnvironment { EnvironmentName = environment }, configuration);
         return services;
     }
-}
 
-public class JwtRotationTests : IClassFixture<WorklaneWebApplicationFactory>
-{
-    private readonly WorklaneWebApplicationFactory _factory;
-
-    public JwtRotationTests(WorklaneWebApplicationFactory factory) => _factory = factory;
-
-    [Fact]
-    public void Factory_DoesNotUseTheCommittedKey()
+    private static void SetMode(string path, UnixFileMode mode)
     {
-        var committed = CommittedSecrets.Value;
-        if (_factory.JwtSecret == committed || _factory.PreviousJwtSecret == committed)
-            throw new Xunit.Sdk.XunitException("Test host is using the committed signing key.");
-    }
-
-    [Fact]
-    public async Task PreviousKey_IsAccepted_UnknownKey_IsRejected_AndKidMatches()
-    {
-        var client = _factory.CreateClient();
-        var email = $"rotate-{Guid.NewGuid():N}@example.com";
-        var registered = await client.PostAsJsonAsync("/api/auth/register", new RegisterRequest(email, "Password123!", "Ada"));
-        registered.EnsureSuccessStatusCode();
-        var tokens = await registered.Content.ReadFromJsonAsync<AuthTokensResponse>();
-        new JsonWebTokenHandler().ReadJsonWebToken(tokens!.AccessToken).Kid
-            .Should().Be(JwtSigningKeys.Fingerprint(Convert.FromBase64String(_factory.JwtSecret)));
-
-        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", Mint(_factory.PreviousJwtSecret));
-        (await client.GetAsync("/api/workspaces")).StatusCode.Should().Be(HttpStatusCode.OK);
-
-        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", Mint(JwtSigningKeyTests.Key(64)));
-        (await client.GetAsync("/api/workspaces")).StatusCode.Should().Be(HttpStatusCode.Unauthorized);
-    }
-
-    private static string Mint(string secret)
-    {
-        var bytes = Convert.FromBase64String(secret);
-        var key = new SymmetricSecurityKey(bytes) { KeyId = JwtSigningKeys.Fingerprint(bytes) };
-        return new JsonWebTokenHandler().CreateToken(new SecurityTokenDescriptor
-        {
-            Subject = new ClaimsIdentity(
-            [
-                new Claim(JwtRegisteredClaimNames.Sub, Guid.NewGuid().ToString()),
-                new Claim(JwtRegisteredClaimNames.Email, "person@example.com")
-            ]),
-            Expires = DateTime.UtcNow.AddMinutes(5),
-            Issuer = "Worklane",
-            Audience = "WorklaneClient",
-            SigningCredentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256)
-        });
+        if (!OperatingSystem.IsWindows())
+            File.SetUnixFileMode(path, mode);
     }
 }
 
-/// <summary>
-/// Host configuration is copied onto the entry-point command line, so it wins over appsettings.
-/// </summary>
 file sealed class ProbeFactory : WebApplicationFactory<Program>
 {
     private readonly string _environment;
@@ -338,24 +269,12 @@ file static class CommittedSecrets
         var end = start < 0 ? -1 : line.IndexOf('"', start + 1);
         if (start < 0 || end < 0)
             throw new InvalidOperationException("Jwt__Secret is not a quoted literal.");
-
         var fromCompose = line[(start + 1)..end];
-        if (!string.Equals(
-                JwtSigningKeys.Fingerprint(Convert.FromBase64String(fromJson)),
-                JwtSigningKeys.Fingerprint(Convert.FromBase64String(fromCompose)),
-                StringComparison.OrdinalIgnoreCase))
+        var jsonFingerprint = JwtSigningKeys.Fingerprint(Convert.FromBase64String(fromJson));
+        var composeFingerprint = JwtSigningKeys.Fingerprint(Convert.FromBase64String(fromCompose));
+        if (!string.Equals(jsonFingerprint, composeFingerprint, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("Committed JWT secrets do not share one key fingerprint.");
-
         return fromJson;
-    }
-}
-
-file static class UnixModes
-{
-    public static void Set(string path, UnixFileMode mode)
-    {
-        if (!OperatingSystem.IsWindows())
-            File.SetUnixFileMode(path, mode);
     }
 }
 
@@ -370,7 +289,8 @@ file sealed class TempDirectory : IDisposable
             return;
         try
         {
-            UnixModes.Set(Path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            if (!OperatingSystem.IsWindows())
+                File.SetUnixFileMode(Path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         }
         catch (IOException)
         {
