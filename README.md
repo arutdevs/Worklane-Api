@@ -20,10 +20,14 @@ a Kanban board with drag-and-drop, and a dashboard that measures effort per pers
 
 ```bash
 cp .env.example .env
-# Fill S3_ROOT_USER, S3_ROOT_PASSWORD, WL_S3_ACCESS_KEY, and WL_S3_SECRET_KEY.
-# Example: openssl rand -hex 24
-docker compose -f docker-compose.yml -f compose.dev.yml up
+# JWT signing key. .env is git-ignored. Compose will not start while JWT_SIGNING_KEY is empty.
+printf 'JWT_SIGNING_KEY=%s\n' "$(openssl rand -base64 48 | tr -d '\n')" >> .env
+docker compose up
 ```
+
+`JWT_SIGNING_KEY` in `.env.example` is an empty placeholder. The `printf` line writes a generated key after it. Compose uses the shell environment before the env file, so export the same value if you prefer not to append: `export JWT_SIGNING_KEY="$(openssl rand -base64 48 | tr -d '\n')"`.
+
+Fill `S3_ROOT_USER`, `S3_ROOT_PASSWORD`, `WL_S3_ACCESS_KEY`, and `WL_S3_SECRET_KEY` before the dev overlay (`openssl rand -hex 24` is enough for those). Then `docker compose -f docker-compose.yml -f compose.dev.yml up`.
 
 `docker compose up` without `compose.dev.yml` starts the API and Postgres. It does not start a web container: this repository has no `./web` tree to build. Serve the Angular app on port **8080**. The API allows origin `http://localhost:8080` (and `http://localhost:4200` for `ng serve`). That compose file is the one a staging or prod deploy should use. RustFS is not in it, and it does not start.
 
@@ -130,7 +134,10 @@ Every workspace-scoped endpoint is guarded by a `[RequireWorkspaceRole(...)]` ac
 **Backend:**
 
 ```bash
-# Postgres must be reachable at the connection string in appsettings.json
+# Postgres must be reachable at the connection string in appsettings.json.
+# Development ships no signing key. Set one with user-secrets, or export Jwt__Secret.
+dotnet user-secrets set "Jwt:Secret" "$(openssl rand -base64 48 | tr -d '\n')" --project src/Worklane.WebApi
+# export Jwt__Secret="$(openssl rand -base64 48 | tr -d '\n')"
 dotnet run --project src/Worklane.WebApi
 ```
 
@@ -194,14 +201,14 @@ Components do **not** carry their own stylesheets — the single theme definitio
 
 The API refuses to start when `Jwt:Secret` (or any `Jwt:PreviousSecrets` entry) is missing, not valid base64, shorter than 32 bytes, or matches a signing key that was committed to this repository. The check compares SHA-256 fingerprints of the decoded key bytes and does not embed the plaintext. It runs in every environment, including Development.
 
-The committed values in `appsettings.Development.json` and `docker-compose.yml` are therefore unusable. Removing them from the files is waiting on the repository owner. Until a local override is set, `dotnet run` and `docker compose up` stop at startup. Generate a key and store it outside the repo:
+`appsettings.Development.json` and `docker-compose.yml` do not contain a signing key. Compose sets `Jwt__Secret` from `${JWT_SIGNING_KEY:?}` and stops if that variable is empty. Put a generated value in `.env` (see above) or export it. For `dotnet run` in Development, user-secrets override the empty `Jwt:Secret`:
 
 ```bash
-dotnet user-secrets set "Jwt:Secret" "$(openssl rand -base64 64 | tr -d '\n')" --project src/Worklane.WebApi
+dotnet user-secrets set "Jwt:Secret" "$(openssl rand -base64 48 | tr -d '\n')" --project src/Worklane.WebApi
 ```
 
-`openssl rand -base64 64` is 64 bytes; the minimum is 32. User-secrets override `appsettings.Development.json` in Development. A process manager can set `Jwt__Secret` instead. `Jwt__PreviousSecrets__0` is an older key still accepted while its tokens expire. New tokens are signed only with `Jwt:Secret` and carry a `kid`.
+`openssl rand -base64 48` is 48 bytes; the minimum is 32. A process manager can set `Jwt__Secret` instead of user-secrets. `Jwt__PreviousSecrets__0` is an older key still accepted while its tokens expire. New tokens are signed only with `Jwt:Secret` and carry a `kid`.
 
 Data Protection keys (Identity tokens such as password reset) use `SetApplicationName("Worklane")`. Set `DataProtection__KeysPath` to a directory that already exists and is writable. Production and any other non-Development, non-Testing environment refuse to start without it. Production uses `/var/lib/worklane/dataprotection-keys` on a persistent volume (the process runs as uid 1654 and the root filesystem is read-only). Development and Testing may omit the path: Development uses the framework default directory under the user profile, and Testing keeps an ephemeral key ring.
 
-Object-storage credentials (`S3_ROOT_USER`, `S3_ROOT_PASSWORD`, `WL_S3_ACCESS_KEY`, `WL_S3_SECRET_KEY`) are not in the repo. Copy `.env.example` to `.env` and generate them locally. `.env` and `.env.*` are git-ignored; `.env.example` is the exception. Postgres and the API publish on `127.0.0.1` only. This compose file does not publish a web container. Serve the Angular app on port 8080; the API allows that origin.
+Object-storage credentials (`S3_ROOT_USER`, `S3_ROOT_PASSWORD`, `WL_S3_ACCESS_KEY`, `WL_S3_SECRET_KEY`) and `JWT_SIGNING_KEY` are not in the repo. Copy `.env.example` to `.env` and generate them locally. `.env` and `.env.*` are git-ignored; `.env.example` is the exception. Postgres and the API publish on `127.0.0.1` only. This compose file does not publish a web container. Serve the Angular app on port 8080; the API allows that origin.

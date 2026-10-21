@@ -17,25 +17,57 @@ namespace Worklane.IntegrationTests.Infrastructure;
 public class JwtSigningKeyTests
 {
     [Fact]
-    public async Task CommittedKey_IsRejected_AndTheMessageOmitsTheKey()
+    public async Task GeneratedKey_IsAccepted_AndAMarkedFingerprintIsRejectedWithoutEchoingTheKey()
     {
-        var secret = CommittedSecrets.Value;
+        var secret = Key(48);
         var fresh = Key(64);
-        var leaked = Assert.Throws<InvalidOperationException>(() => JwtSigningKeys.Create(Settings(secret)));
-        var whitespace = Assert.Throws<InvalidOperationException>(() => JwtSigningKeys.Create(Settings(secret.Insert(8, "\n"))));
-        var asPrevious = Assert.Throws<InvalidOperationException>(() => JwtSigningKeys.Create(Settings(fresh, secret)));
+        var fingerprint = JwtSigningKeys.Fingerprint(Convert.FromBase64String(secret));
+        JwtSigningKeys.LeakedFingerprints.Add(fingerprint);
+        try
+        {
+            var leaked = Assert.Throws<InvalidOperationException>(() => JwtSigningKeys.Create(Settings(secret)));
+            var whitespace = Assert.Throws<InvalidOperationException>(() => JwtSigningKeys.Create(Settings(secret.Insert(8, "\n"))));
+            var asPrevious = Assert.Throws<InvalidOperationException>(() => JwtSigningKeys.Create(Settings(fresh, secret)));
 
-        AssertNoKey(string.Concat(leaked, whitespace, asPrevious), secret);
-        leaked.Message.Should().Contain(CommittedSecrets.Fingerprint);
-        whitespace.Message.Should().Contain(CommittedSecrets.Fingerprint);
-        asPrevious.Message.Should().Contain("Jwt:PreviousSecrets[0]");
+            AssertNoKey(string.Concat(leaked, whitespace, asPrevious), secret);
+            leaked.Message.Should().Contain(fingerprint);
+            whitespace.Message.Should().Contain(fingerprint);
+            asPrevious.Message.Should().Contain("Jwt:PreviousSecrets[0]");
+        }
+        finally
+        {
+            JwtSigningKeys.LeakedFingerprints.Remove(fingerprint);
+        }
+
         JwtSigningKeys.Create(Settings(fresh)).Current.KeyId
             .Should().Be(JwtSigningKeys.Fingerprint(Convert.FromBase64String(fresh)));
+        JwtSigningKeys.LeakedFingerprints.Should().Contain(
+            "6478a52cc5de53f75fc5b15ccda93afa869c601533c7b5c6894d963e0a839ff4");
 
         var host = new WorklaneWebApplicationFactory();
         await host.DisposeAsync();
-        if (host.JwtSecret == secret || host.PreviousJwtSecret == secret)
-            throw new Xunit.Sdk.XunitException("Test host is using the committed signing key.");
+        Convert.FromBase64String(host.JwtSecret).Length.Should().BeGreaterThanOrEqualTo(JwtSigningKeys.MinimumBytes);
+        host.JwtSecret.Should().NotBe(host.PreviousJwtSecret);
+    }
+
+    [Fact]
+    public void Repo_DoesNotCommitASigningKey()
+    {
+        var root = RepoRoot.Find();
+        using var doc = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "src/Worklane.WebApi/appsettings.Development.json")));
+        var fromJson = doc.RootElement.GetProperty("Jwt").GetProperty("Secret").GetString();
+        string.IsNullOrEmpty(fromJson).Should().BeTrue();
+
+        var compose = File.ReadAllText(Path.Combine(root, "docker-compose.yml"));
+        compose.Should().Contain("Jwt__Secret: \"${JWT_SIGNING_KEY:?}\"");
+        var example = File.ReadAllText(Path.Combine(root, ".env.example"));
+        example.Should().Contain("JWT_SIGNING_KEY=");
+        foreach (var line in example.Split('\n'))
+        {
+            if (!line.StartsWith("JWT_SIGNING_KEY=", StringComparison.Ordinal))
+                continue;
+            line["JWT_SIGNING_KEY=".Length..].Trim().Should().BeEmpty();
+        }
     }
 
     [Theory]
@@ -66,18 +98,27 @@ public class JwtSigningKeyTests
     [Theory]
     [InlineData("Development")]
     [InlineData("Production")]
-    public void Startup_RejectsCommittedKey_AndDoesNotLogIt(string environment)
+    public void Startup_RejectsGeneratedLeakedKey_AndDoesNotLogIt(string environment)
     {
-        using var keys = new TempDirectory();
-        var secret = CommittedSecrets.Value;
-        using var factory = ProbeFactory.Create(environment, new Dictionary<string, string?>
+        var secret = Key(48);
+        var fingerprint = JwtSigningKeys.Fingerprint(Convert.FromBase64String(secret));
+        JwtSigningKeys.LeakedFingerprints.Add(fingerprint);
+        try
         {
-            ["Jwt:Secret"] = secret,
-            ["DataProtection:KeysPath"] = keys.Path
-        });
-        var failure = StartFailure(factory);
-        AssertNoKey(failure, secret);
-        failure.Should().Contain("leaked signing key").And.Contain(CommittedSecrets.Fingerprint);
+            using var keys = new TempDirectory();
+            using var factory = ProbeFactory.Create(environment, new Dictionary<string, string?>
+            {
+                ["Jwt:Secret"] = secret,
+                ["DataProtection:KeysPath"] = keys.Path
+            });
+            var failure = StartFailure(factory);
+            AssertNoKey(failure, secret);
+            failure.Should().Contain("leaked signing key").And.Contain(fingerprint);
+        }
+        finally
+        {
+            JwtSigningKeys.LeakedFingerprints.Remove(fingerprint);
+        }
     }
 
     private static string StartFailure(WebApplicationFactory<Program> factory)
@@ -238,43 +279,22 @@ file sealed class ProbeFactory : WebApplicationFactory<Program>
     {
         var values = new Dictionary<string, string?>(_settings) { [HostDefaults.EnvironmentKey] = _environment };
         builder.ConfigureHostConfiguration(config => config.AddInMemoryCollection(values));
+        // Later than appsettings, so an empty Development secret does not hide the value under test.
+        builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(_settings));
         return base.CreateHost(builder);
     }
 }
 
-file static class CommittedSecrets
+file static class RepoRoot
 {
-    public static string Value { get; } = Read();
-    public static string Fingerprint { get; } = JwtSigningKeys.Fingerprint(Convert.FromBase64String(Value));
-
-    private static string Read()
+    public static string Find()
     {
         var root = new DirectoryInfo(AppContext.BaseDirectory);
         while (root is not null && !File.Exists(Path.Combine(root.FullName, "Worklane.slnx")))
             root = root.Parent;
         if (root is null)
             throw new InvalidOperationException("Could not locate the repository root.");
-
-        using var doc = JsonDocument.Parse(File.ReadAllText(Path.Combine(root.FullName, "src/Worklane.WebApi/appsettings.Development.json")));
-        var fromJson = doc.RootElement.GetProperty("Jwt").GetProperty("Secret").GetString();
-        if (string.IsNullOrEmpty(fromJson))
-            throw new InvalidOperationException("Development Jwt:Secret is empty.");
-
-        var compose = File.ReadAllText(Path.Combine(root.FullName, "docker-compose.yml"));
-        var index = compose.IndexOf("Jwt__Secret:", StringComparison.Ordinal);
-        if (index < 0)
-            throw new InvalidOperationException("docker-compose.yml has no Jwt__Secret entry.");
-        var line = compose[index..].Split('\n', 2)[0];
-        var start = line.IndexOf('"');
-        var end = start < 0 ? -1 : line.IndexOf('"', start + 1);
-        if (start < 0 || end < 0)
-            throw new InvalidOperationException("Jwt__Secret is not a quoted literal.");
-        var fromCompose = line[(start + 1)..end];
-        var jsonFingerprint = JwtSigningKeys.Fingerprint(Convert.FromBase64String(fromJson));
-        var composeFingerprint = JwtSigningKeys.Fingerprint(Convert.FromBase64String(fromCompose));
-        if (!string.Equals(jsonFingerprint, composeFingerprint, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Committed JWT secrets do not share one key fingerprint.");
-        return fromJson;
+        return root.FullName;
     }
 }
 

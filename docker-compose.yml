@@ -21,7 +21,7 @@ services:
       dockerfile: src/Worklane.WebApi/Dockerfile
     environment:
       ConnectionStrings__Default: "Host=postgres;Port=5432;Database=worklane;Username=worklane;Password=worklane"
-      Jwt__Secret: "6LdegTmRWObE4KGnB1uPaec64/FAnw3/jRT6iAmnPXdIVcnrFclpAzweH9k04K+3rUuydKzohCZREEGz/lmlPg=="
+      Jwt__Secret: "${JWT_SIGNING_KEY:?}"
       Jwt__Issuer: "Worklane"
       Jwt__Audience: "WorklaneClient"
       Cors__AllowedOrigins__0: "http://localhost:4200"
