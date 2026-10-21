@@ -245,15 +245,15 @@ public class DeleteColumnArchivedTests : IClassFixture<WorklaneWebApplicationFac
     }
 
     [Fact]
-    public async Task OtherWorkspaceUser_Is403AndColumnRemains()
+    public async Task OtherWorkspaceUser_IsNotFoundAndColumnRemains()
     {
         var board = await BoardTestSetup.CreateAsync(_factory, "wl60-tenant@test.com");
         var outsider = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), "wl60-tenant-out@test.com");
 
         var response = await DeleteColumn(outsider.Client, board.Done.Id);
         var body = await response.Content.ReadAsStringAsync();
-        response.StatusCode.Should().Be(HttpStatusCode.Forbidden, body);
-        JsonDocument.Parse(body).RootElement.GetProperty("code").GetString().Should().Be("workspace_access_denied");
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound, body);
+        JsonDocument.Parse(body).RootElement.GetProperty("code").GetString().Should().Be("not_found");
         (await Columns(board)).Should().Contain(c => c.Id == board.Done.Id);
     }
 

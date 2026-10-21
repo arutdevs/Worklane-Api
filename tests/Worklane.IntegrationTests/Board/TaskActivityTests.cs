@@ -99,6 +99,6 @@ public class TaskActivityTests : IClassFixture<WorklaneWebApplicationFactory>
 
         var response = await outsider.Client.GetAsync($"/api/tasks/{task.Id}/activity");
 
-        response.StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
     }
 }

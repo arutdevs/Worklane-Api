@@ -20,8 +20,9 @@ public static class JwtSigningKeys
 {
     public const int MinimumBytes = 32;
 
-    // SHA-256 of the key bytes committed for local dev. The plaintext is not stored.
-    private static readonly HashSet<string> LeakedFingerprints = new(StringComparer.OrdinalIgnoreCase)
+    // SHA-256 of the key bytes that used to be committed for local dev.
+    // The plaintext is not stored. Tests may add a generated key's fingerprint here.
+    internal static readonly HashSet<string> LeakedFingerprints = new(StringComparer.OrdinalIgnoreCase)
     {
         "6478a52cc5de53f75fc5b15ccda93afa869c601533c7b5c6894d963e0a839ff4"
     };

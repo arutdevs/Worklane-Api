@@ -45,15 +45,20 @@ public class SecurityReviewTests : IClassFixture<WorklaneWebApplicationFactory>
     public async Task Cors_ExposesContentDispositionAndRetryAfter()
     {
         var client = _factory.CreateClient();
-        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/auth/login");
-        request.Headers.TryAddWithoutValidation("Origin", "http://localhost:4200");
-        request.Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
+        foreach (var origin in new[] { "http://localhost:4200", "http://localhost:8080" })
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, "/api/auth/login");
+            request.Headers.TryAddWithoutValidation("Origin", origin);
+            request.Content = new StringContent("{}", System.Text.Encoding.UTF8, "application/json");
 
-        var response = await client.SendAsync(request);
-        response.Headers.TryGetValues("Access-Control-Expose-Headers", out var exposed).Should().BeTrue();
-        var header = string.Join(',', exposed ?? []);
-        header.Should().Contain("Content-Disposition");
-        header.Should().Contain("Retry-After");
+            var response = await client.SendAsync(request);
+            response.Headers.TryGetValues("Access-Control-Allow-Origin", out var allowed).Should().BeTrue();
+            allowed.Should().ContainSingle().Which.Should().Be(origin);
+            response.Headers.TryGetValues("Access-Control-Expose-Headers", out var exposed).Should().BeTrue();
+            var header = string.Join(',', exposed ?? []);
+            header.Should().Contain("Content-Disposition");
+            header.Should().Contain("Retry-After");
+        }
     }
 
     [Fact]

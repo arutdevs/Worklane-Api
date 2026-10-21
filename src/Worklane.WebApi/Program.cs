@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Net;
 using System.Text;
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
@@ -79,6 +80,8 @@ builder.Services.Configure<AttachmentRateLimitSettings>(
     builder.Configuration.GetSection(AttachmentRateLimitSettings.SectionName));
 builder.Services.Configure<CommentRateLimitSettings>(
     builder.Configuration.GetSection(CommentRateLimitSettings.SectionName));
+builder.Services.Configure<AuthRateLimitSettings>(
+    builder.Configuration.GetSection(AuthRateLimitSettings.SectionName));
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
@@ -99,7 +102,7 @@ builder.Services.AddRateLimiter(options =>
             Instance = context.HttpContext.Request.Path
         };
         problem.Extensions["code"] = "rate_limited";
-        problem.Extensions["scope"] = "user";
+        problem.Extensions["scope"] = RateLimitScope(context.HttpContext);
         await context.HttpContext.Response.WriteAsJsonAsync(
             problem,
             options: null,
@@ -116,6 +119,21 @@ builder.Services.AddRateLimiter(options =>
         var settings = httpContext.RequestServices.GetRequiredService<IOptions<CommentRateLimitSettings>>().Value;
         return FixedWindow(httpContext, settings.PermitLimit, settings.WindowSeconds);
     });
+    options.AddPolicy(AuthRateLimitSettings.PolicyName, httpContext =>
+    {
+        var settings = httpContext.RequestServices.GetRequiredService<IOptions<AuthRateLimitSettings>>().Value;
+        var permit = settings.PermitLimit < 1 ? 1 : settings.PermitLimit;
+        var window = settings.WindowSeconds < 1 ? 1 : settings.WindowSeconds;
+        return RateLimitPartition.GetFixedWindowLimiter(
+            ClientIp(httpContext),
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = permit,
+                Window = TimeSpan.FromSeconds(window),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            });
+    });
 
     static RateLimitPartition<string> FixedWindow(HttpContext httpContext, int permitLimit, int windowSeconds)
     {
@@ -131,6 +149,22 @@ builder.Services.AddRateLimiter(options =>
                 AutoReplenishment = true
             });
     }
+
+    static string ClientIp(HttpContext httpContext)
+    {
+        var ip = httpContext.Connection.RemoteIpAddress;
+        if (ip is null)
+            return "unknown";
+        if (ip.IsIPv4MappedToIPv6)
+            ip = ip.MapToIPv4();
+        return ip.ToString();
+    }
+
+    static string RateLimitScope(HttpContext httpContext)
+    {
+        var policy = httpContext.GetEndpoint()?.Metadata.GetMetadata<EnableRateLimitingAttribute>()?.PolicyName;
+        return string.Equals(policy, AuthRateLimitSettings.PolicyName, StringComparison.Ordinal) ? "ip" : "user";
+    }
 });
 
 builder.Services.AddSignalR()
@@ -142,7 +176,7 @@ builder.Services.AddSingleton<IRealtimeGroupMembership, SignalRGroupMembership>(
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("Web", policy => policy
-        .WithOrigins(builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? new[] { "http://localhost:4200" })
+        .WithOrigins(builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? new[] { "http://localhost:4200", "http://localhost:8080" })
         .AllowAnyHeader()
         .AllowAnyMethod()
         .AllowCredentials()

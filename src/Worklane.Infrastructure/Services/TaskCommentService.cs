@@ -95,11 +95,15 @@ public class TaskCommentService : ITaskCommentService
     {
         var comment = await _db.TaskComments
             .Include(c => c.Task)
+            .ThenInclude(t => t.Project)
             .FirstOrDefaultAsync(c => c.Id == commentId, cancellationToken)
             ?? throw new NotFoundException(nameof(TaskComment), commentId);
 
         if (comment.AuthorId != userId)
+        {
+            await RejectNonMemberAsync(comment.Task.Project.WorkspaceId, userId, cancellationToken);
             throw new ForbiddenAccessException("Only the author can edit this comment.");
+        }
 
         var body = request.Body.Trim();
         if (body == comment.Body)
@@ -140,7 +144,10 @@ public class TaskCommentService : ITaskCommentService
             ?? throw new NotFoundException(nameof(TaskComment), commentId);
 
         if (!await CanModerateAsync(comment.Task.Project.WorkspaceId, comment.AuthorId, userId, cancellationToken))
+        {
+            await RejectNonMemberAsync(comment.Task.Project.WorkspaceId, userId, cancellationToken);
             throw new ForbiddenAccessException("Only the author or a workspace admin can delete this comment.");
+        }
 
         var projectId = comment.Task.ProjectId;
         var taskId = comment.TaskId;
@@ -182,6 +189,17 @@ public class TaskCommentService : ITaskCommentService
             .Where(c => c.Id == commentId)
             .Select(c => (Guid?)c.Task.Project.WorkspaceId)
             .SingleOrDefaultAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// A caller who is not a member gets the same not-found message as a missing comment.
+    /// A member whose role is too low falls through to the handler's own 403.
+    /// </summary>
+    private async Task RejectNonMemberAsync(Guid workspaceId, Guid userId, CancellationToken cancellationToken)
+    {
+        var role = await _workspaces.GetUserRoleAsync(workspaceId, userId, cancellationToken);
+        if (role is null)
+            throw new NotFoundException("Resource was not found.");
     }
 
     private async Task<bool> CanModerateAsync(Guid workspaceId, Guid authorId, Guid userId, CancellationToken cancellationToken)

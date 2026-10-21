@@ -10,6 +10,12 @@ docker compose version
 # The image check below does not depend on this: any "$" in services.*.image fails.
 export S3_IMAGE='rustfs/rustfs:bypass@sha256:9ca95595aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 
+# Jwt__Secret is ${JWT_SIGNING_KEY:?}. .env.example leaves that placeholder empty.
+# A render-only value lets config succeed; it is not a signing key and is not deployed.
+if [ -z "${JWT_SIGNING_KEY:-}" ]; then
+  export JWT_SIGNING_KEY='render-only'
+fi
+
 forbidden_re='rustfs|seaweedfs|9ca95595|ab024bfe|4e61d15f|http://s3:9000|RequireHttps.*false'
 fail=0
 

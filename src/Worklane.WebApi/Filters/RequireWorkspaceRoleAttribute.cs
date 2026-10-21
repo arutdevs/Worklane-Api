@@ -85,14 +85,22 @@ public class RequireWorkspaceRoleAttribute : Attribute, IAsyncActionFilter
 
             if (resolved is null)
             {
-                context.Result = Problem(context, StatusCodes.Status404NotFound, "Not Found", "Resource was not found.", "not_found");
+                context.Result = NotFound(context);
                 return;
             }
             workspaceId = resolved.Value;
         }
 
         var role = await workspaceService.GetUserRoleAsync(workspaceId, userId, context.HttpContext.RequestAborted);
-        if (role is null || role < _minimumRole)
+        // A non-member and a missing id must be indistinguishable. A member whose
+        // role is too low still gets 403 with its own code.
+        if (role is null)
+        {
+            context.Result = NotFound(context);
+            return;
+        }
+
+        if (role < _minimumRole)
         {
             context.Result = Problem(context, StatusCodes.Status403Forbidden, "Forbidden", "You do not have sufficient permissions in this workspace.", "workspace_access_denied");
             return;
@@ -102,6 +110,9 @@ public class RequireWorkspaceRoleAttribute : Attribute, IAsyncActionFilter
 
         await next();
     }
+
+    private static ObjectResult NotFound(ActionExecutingContext context) =>
+        Problem(context, StatusCodes.Status404NotFound, "Not Found", "Resource was not found.", "not_found");
 
     private static ObjectResult Problem(ActionExecutingContext context, int statusCode, string title, string detail, string code)
     {
