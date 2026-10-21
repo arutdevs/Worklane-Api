@@ -39,6 +39,8 @@ public sealed class OptionalJsonConverter<T> : JsonConverter<Optional<T>>
 
     public override void Write(Utf8JsonWriter writer, Optional<T> value, JsonSerializerOptions options)
     {
+        // An unspecified Optional serializes as JSON null. A C# client that re-sends
+        // that null would clear the field. This converter is only used for incoming requests.
         if (!value.IsSpecified || value.Value is null)
         {
             writer.WriteNullValue();

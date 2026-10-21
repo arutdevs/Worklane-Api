@@ -51,6 +51,7 @@ builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>
 {
     options.SwaggerDoc("v1", new OpenApiInfo { Title = "Worklane API", Version = "v1" });
+    options.SchemaFilter<Worklane.WebApi.Swagger.OptionalSchemaFilter>();
 
     var securityScheme = new OpenApiSecurityScheme
     {

@@ -146,6 +146,8 @@ public class SecurityReviewTests : IClassFixture<WorklaneWebApplicationFactory>
             assigneeId = outsider.Tokens.User.Id
         });
         rejected.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var rejectedBody = await rejected.Content.ReadFromJsonAsync<JsonElement>(TestAuthHelper.JsonOptions);
+        rejectedBody.GetProperty("code").GetString().Should().Be("assignee_not_member");
 
         var accepted = await board.Client.PostAsJsonAsync($"/api/projects/{board.Project.Id}/tasks", new
         {
@@ -156,8 +158,10 @@ public class SecurityReviewTests : IClassFixture<WorklaneWebApplicationFactory>
         accepted.StatusCode.Should().Be(HttpStatusCode.Created);
 
         var task = (await accepted.Content.ReadFromJsonAsync<TaskItemDto>(TestAuthHelper.JsonOptions))!;
-        (await board.Client.PatchAsJsonAsync($"/api/tasks/{task.Id}", new { assigneeId = outsider.Tokens.User.Id }))
-            .StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var patched = await board.Client.PatchAsJsonAsync($"/api/tasks/{task.Id}", new { assigneeId = outsider.Tokens.User.Id });
+        patched.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        var patchedBody = await patched.Content.ReadFromJsonAsync<JsonElement>(TestAuthHelper.JsonOptions);
+        patchedBody.GetProperty("code").GetString().Should().Be("assignee_not_member");
         var reloaded = await (await board.Client.GetAsync($"/api/tasks/{task.Id}"))
             .Content.ReadFromJsonAsync<TaskItemDto>(TestAuthHelper.JsonOptions);
         reloaded!.AssigneeId.Should().Be(board.User.Tokens.User.Id);
