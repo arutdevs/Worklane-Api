@@ -196,6 +196,50 @@ public class AuthRateLimitTests : IClassFixture<AuthRateLimitFactory>
     }
 
     [Fact]
+    public async Task WebNginxAddress_IsNotTrusted_AndSpoofedForwardedForIsIgnored()
+    {
+        var client = _factory.CreateClient();
+        const string webNginx = "172.30.20.3";
+        const string otherPeer = "172.30.20.4";
+        const string spoofed = "203.0.113.77";
+
+        for (var i = 0; i < 3; i++)
+        {
+            var attempt = await Post(
+                client,
+                "/api/auth/login",
+                new { email = "nobody@example.com", password = "WrongPassword1" },
+                webNginx,
+                $"198.51.100.{i + 1}");
+            attempt.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        }
+
+        var blocked = await Post(
+            client,
+            "/api/auth/login",
+            new { email = "nobody@example.com", password = "WrongPassword1" },
+            webNginx,
+            spoofed);
+        await AssertRateLimited(blocked);
+
+        var otherPeerResponse = await Post(
+            client,
+            "/api/auth/login",
+            new { email = "nobody@example.com", password = "WrongPassword1" },
+            otherPeer,
+            spoofed);
+        otherPeerResponse.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+
+        var throughTrustedProxy = await Post(
+            client,
+            "/api/auth/login",
+            new { email = "nobody@example.com", password = "WrongPassword1" },
+            AuthRateLimitFactory.TrustedProxy,
+            spoofed);
+        throughTrustedProxy.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
     public async Task SpoofedSingleValueForwardedFor_FromUntrustedPeer_StillHitsTheLimit()
     {
         var client = _factory.CreateClient();
@@ -451,19 +495,75 @@ public class EdgeProxyContractTests
 
         directives.Should().Contain("proxy_set_header X-Forwarded-For $remote_addr;");
         directives.Should().Contain("proxy_set_header CF-Connecting-IP \"\";");
+        directives.Should().Contain("set_real_ip_from 172.30.20.3;");
+        directives.Should().Contain("real_ip_header X-Forwarded-For;");
         directives.Should().NotContain(line =>
             line.Contains("$http_x_forwarded_for", StringComparison.Ordinal)
             || line.Contains("$proxy_add_x_forwarded_for", StringComparison.Ordinal)
             || line.Contains("$http_cf_connecting_ip", StringComparison.Ordinal)
-            || line.Contains("wl_forwarded_for", StringComparison.Ordinal));
+            || line.Contains("wl_forwarded_for", StringComparison.Ordinal)
+            || line.Contains("172.30.20.0/24", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void WebNginx_ForwardsThePeerToTheEdge_AndDropsClientCfConnectingIp()
+    {
+        var conf = File.ReadAllText(Path.Combine(RepoRoot(), "deploy/nginx/web.conf"));
+        var directives = conf.Split('\n')
+            .Select(line => line.Trim())
+            .Where(line => line.Length > 0 && !line.StartsWith('#'))
+            .ToArray();
+
+        directives.Should().Contain("proxy_pass http://172.30.20.10:8080;");
+        directives.Should().Contain("proxy_set_header X-Forwarded-For $remote_addr;");
+        directives.Should().Contain("proxy_set_header CF-Connecting-IP \"\";");
+        directives.Should().NotContain(line =>
+            line.Contains("api:8080", StringComparison.Ordinal)
+            || line.Contains("$http_x_forwarded_for", StringComparison.Ordinal)
+            || line.Contains("$proxy_add_x_forwarded_for", StringComparison.Ordinal)
+            || line.Contains("$http_cf_connecting_ip", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ComposeEdgeAddress_MatchesKnownProxies_AndWebNginxIsPinnedApartFromIt()
+    {
+        var compose = File.ReadAllText(Path.Combine(RepoRoot(), "docker-compose.yml"));
+        var edgeConf = File.ReadAllText(Path.Combine(RepoRoot(), "deploy/nginx/default.conf"));
+        var webConf = File.ReadAllText(Path.Combine(RepoRoot(), "deploy/nginx/web.conf"));
+
+        var proxies = System.Text.RegularExpressions.Regex.Matches(
+            compose,
+            "ForwardedHeaders__KnownProxies__\\d+:\\s*\"([^\"]+)\"");
+        proxies.Should().ContainSingle();
+        var trusted = proxies[0].Groups[1].Value;
+
+        var edgeIp = Ipv4ForService(compose, "nginx");
+        var webIp = Ipv4ForService(compose, "web");
+        edgeIp.Should().Be(trusted);
+        webIp.Should().NotBe(trusted);
+
+        var upstream = System.Text.RegularExpressions.Regex.Match(
+            webConf,
+            "proxy_pass http://([^:;]+):8080;");
+        upstream.Success.Should().BeTrue();
+        upstream.Groups[1].Value.Should().Be(trusted);
+
+        var realIps = System.Text.RegularExpressions.Regex.Matches(
+            edgeConf,
+            @"set_real_ip_from\s+([^;]+);");
+        realIps.Should().ContainSingle();
+        realIps[0].Groups[1].Value.Trim().Should().Be(webIp);
+
+        compose.Should().NotContain("ForwardedHeaders__KnownNetworks");
     }
 
     [Fact]
     public void Compose_TrustsOnlyTheFixedEdgeAddress()
     {
         var compose = File.ReadAllText(Path.Combine(RepoRoot(), "docker-compose.yml"));
-        compose.Should().Contain($"ForwardedHeaders__KnownProxies__0: \"{EdgeIp}\"");
-        compose.Should().Contain($"ipv4_address: {EdgeIp}");
+        var trusted = Ipv4ForService(compose, "nginx");
+        compose.Should().Contain($"ForwardedHeaders__KnownProxies__0: \"{trusted}\"");
+        compose.Should().NotContain("ForwardedHeaders__KnownProxies__1");
         compose.Should().NotContain("ForwardedHeaders__KnownNetworks");
     }
 
@@ -491,5 +591,40 @@ public class EdgeProxyContractTests
         if (root is null)
             throw new InvalidOperationException("Could not locate the repository root.");
         return root.FullName;
+    }
+
+    private static string Ipv4ForService(string compose, string service)
+    {
+        var lines = compose.Split('\n');
+        var inService = false;
+        string? ip = null;
+        foreach (var raw in lines)
+        {
+            var line = raw.TrimEnd('\r');
+            if (line.Length == 0 || line.TrimStart().StartsWith('#'))
+                continue;
+
+            if (System.Text.RegularExpressions.Regex.IsMatch(line, $"^  {service}:\\s*$"))
+            {
+                inService = true;
+                ip = null;
+                continue;
+            }
+
+            if (inService && System.Text.RegularExpressions.Regex.IsMatch(line, "^  [A-Za-z0-9_-]+:\\s*$"))
+                break;
+
+            if (!inService)
+                continue;
+
+            var match = System.Text.RegularExpressions.Regex.Match(line, @"^\s+ipv4_address:\s*(""[^""]+""|\S+)\s*$");
+            if (!match.Success)
+                continue;
+
+            ip = match.Groups[1].Value.Trim('"');
+        }
+
+        ip.Should().NotBeNull($"service {service} should pin an ipv4_address");
+        return ip!;
     }
 }

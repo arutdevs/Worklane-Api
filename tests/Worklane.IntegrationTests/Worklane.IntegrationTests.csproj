@@ -33,6 +33,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\..\src\Worklane.Infrastructure\Worklane.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\Worklane.WebApi\Worklane.WebApi.csproj" />
   </ItemGroup>
 
