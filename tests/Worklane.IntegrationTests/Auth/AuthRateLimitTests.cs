@@ -44,7 +44,7 @@ public class AuthRateLimitTests : IClassFixture<AuthRateLimitFactory>
         const string shared = "10.8.0.3";
         var email = $"limited-{Guid.NewGuid():N}@example.com";
         (await Post(client, "/api/auth/register", new { email, password = "Password123!", displayName = "Ada" }, shared))
-            .StatusCode.Should().Be(HttpStatusCode.OK);
+            .StatusCode.Should().Be(HttpStatusCode.Created);
         (await Post(client, "/api/auth/login", new { email, password = "WrongPassword1" }, shared))
             .StatusCode.Should().Be(HttpStatusCode.Unauthorized);
         (await Post(client, "/api/auth/refresh", new { refreshToken = "not-a-real-token" }, shared))

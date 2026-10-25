@@ -37,6 +37,12 @@ public class WorklaneDbContext : IdentityDbContext<AppUser, IdentityRole<Guid>, 
 
         builder.ApplyConfigurationsFromAssembly(typeof(WorklaneDbContext).Assembly);
 
+        // RequireUniqueEmail is an application check and loses a signup race. The username
+        // index already matches the email, and this makes the email itself unique as well.
+        builder.Entity<AppUser>().HasIndex(u => u.NormalizedEmail)
+            .IsUnique()
+            .HasDatabaseName("EmailIndex");
+
         // Fail closed. A query with no workspace pinned returns no rows, so a forgotten
         // SetWorkspace cannot leak every tenant. Callers that must run before a tenant
         // is pinned (membership lookup, "my workspaces", invitation accept, id-to-workspace

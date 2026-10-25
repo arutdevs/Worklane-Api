@@ -55,18 +55,29 @@ public class WorkspaceService : IWorkspaceService
             .ToList();
     }
 
-    public async Task<WorkspaceDto> CreateWorkspaceAsync(Guid ownerUserId, CreateWorkspaceRequest request, CancellationToken cancellationToken)
+    public Task<WorkspaceDto> CreateWorkspaceAsync(Guid ownerUserId, CreateWorkspaceRequest request, CancellationToken cancellationToken)
     {
-        var slug = (await WorkspaceSlug.GenerateUniqueAsync(
-            _db.Workspaces,
-            WorkspaceSlug.ForWorkspaceName(request.Name),
-            cancellationToken)).Value;
+        return DbRetry.ExecuteAsync(
+            _db,
+            ct => WorkspaceSlug.InsertAsync(
+                _db,
+                WorkspaceSlug.ForWorkspaceName(request.Name),
+                (slug, token) => InsertWorkspaceAsync(ownerUserId, request.Name, slug, token),
+                ct),
+            cancellationToken);
+    }
 
+    private async Task<WorkspaceDto> InsertWorkspaceAsync(
+        Guid ownerUserId,
+        string name,
+        WorkspaceSlug.UniqueSlug slug,
+        CancellationToken cancellationToken)
+    {
         var workspace = new Workspace
         {
             Id = Guid.NewGuid(),
-            Name = request.Name,
-            Slug = slug,
+            Name = name,
+            Slug = slug.Value,
             Plan = WorkspacePlan.Free,
             CreatedAt = DateTimeOffset.UtcNow
         };
@@ -126,9 +137,7 @@ public class WorkspaceService : IWorkspaceService
                     .AnyAsync(m => m.WorkspaceId == workspaceId && m.UserId == existingUser.Id, cancellationToken);
 
                 if (alreadyMember)
-                {
-                    throw new ConflictException("This user is already a member of the workspace.");
-                }
+                    throw UniqueConstraintConflicts.WorkspaceMemberExists();
 
                 _db.WorkspaceMembers.Add(new WorkspaceMember
                 {
@@ -161,8 +170,7 @@ public class WorkspaceService : IWorkspaceService
             await _db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
 
-            var relativeLink = $"/invitations/accept?token={invitation.Token}";
-            absoluteLink = $"{_frontendSettings.BaseUrl.TrimEnd('/')}{relativeLink}";
+            absoluteLink = InviteLinks.ForToken(_frontendSettings.BaseUrl, invitation.Token);
             _logger.LogInformation("Invitation created for {Email} to workspace {WorkspaceId}: {InviteLink}", request.Email, workspaceId, absoluteLink);
         }
 

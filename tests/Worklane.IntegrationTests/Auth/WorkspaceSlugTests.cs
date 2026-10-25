@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using FluentAssertions;
 using Worklane.Infrastructure.Services;
 
@@ -53,6 +54,30 @@ public class WorkspaceSlugTests
     {
         WorkspaceSlug.ForDisplayName(null).Should().Be(WorkspaceSlug.Fallback);
         WorkspaceSlug.ForWorkspaceName(null).Should().Be(WorkspaceSlug.Fallback);
+    }
+
+    [Theory]
+    [InlineData("ทีมงานน้ำ")]
+    [InlineData("สำนักงาน")]
+    [InlineData("จำกัด")]
+    public void Normalize_KeepsThaiSaraAm(string name)
+    {
+        name.Should().Contain("\u0E33");
+        "\u0E33".Normalize(NormalizationForm.FormKC).Should().Be("\u0E4D\u0E32");
+
+        var slug = WorkspaceSlug.Normalize(name);
+        slug.Should().Be(name);
+        slug.Should().Contain("\u0E33");
+        slug.Should().NotContain("\u0E4D");
+        WorkspaceSlug.ForWorkspaceName(name).Should().Be(name);
+        WorkspaceSlug.ForDisplayName(name).Should().Be(name + "-workspace");
+    }
+
+    [Fact]
+    public void Normalize_FoldsFullwidthAsciiBesideThaiSaraAm()
+    {
+        WorkspaceSlug.Normalize("สำนักงานＷ").Should().Be("สำนักงานw");
+        WorkspaceSlug.Normalize("Ｗำ").Should().Be("wำ");
     }
 
     [Fact]

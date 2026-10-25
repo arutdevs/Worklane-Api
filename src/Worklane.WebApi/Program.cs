@@ -190,8 +190,10 @@ builder.Services.AddAuthorization();
 
 var app = builder.Build();
 
-// Fail before migrate or listen when the signing key is missing, short, or leaked.
+// Fail before migrate or listen when the signing key is missing, short, or leaked,
+// or when Frontend:BaseUrl is missing or loopback outside Development.
 _ = app.Services.GetRequiredService<IOptions<JwtSettings>>().Value;
+_ = app.Services.GetRequiredService<IOptions<FrontendSettings>>().Value;
 // A KnownNetworks prefix wider than one host, or a proxy that is not an IP, fails here.
 _ = app.Services.GetRequiredService<IOptions<ForwardedHeadersOptions>>().Value;
 

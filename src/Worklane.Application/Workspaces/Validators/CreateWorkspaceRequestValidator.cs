@@ -7,6 +7,10 @@ public class CreateWorkspaceRequestValidator : AbstractValidator<CreateWorkspace
 {
     public CreateWorkspaceRequestValidator()
     {
-        RuleFor(x => x.Name).NotEmpty().MaximumLength(200);
+        RuleFor(x => x.Name)
+            .Must(static name => !string.IsNullOrWhiteSpace(name))
+            .WithErrorCode("not_empty")
+            .WithMessage("'{PropertyName}' must not be empty.")
+            .MaximumLength(200);
     }
 }

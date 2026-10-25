@@ -28,6 +28,8 @@ services:
       Jwt__Audience: "WorklaneClient"
       Cors__AllowedOrigins__0: "http://localhost:4200"
       Cors__AllowedOrigins__1: "http://localhost:8080"
+      # Public origin of the web app. Required. Loopback is rejected outside Development.
+      Frontend__BaseUrl: "${FRONTEND_BASE_URL:?}"
       # Replaces the loopback defaults. Trust only the edge container below.
       # Not the proxy-network gateway (172.30.20.1) and not 172.30.20.0/24.
       # ForwardLimit is 1 in the API. Do not set KnownNetworks.

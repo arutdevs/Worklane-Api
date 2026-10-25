@@ -12,7 +12,10 @@ public class UpdateTaskValidator : AbstractValidator<UpdateTaskRequest>
             .WithErrorCode("not_nullable")
             .WithMessage("This field can't be cleared.");
         RuleFor(x => x.Title.Value)
-            .NotEmpty().MaximumLength(500)
+            .Must(static title => !string.IsNullOrWhiteSpace(title))
+            .WithErrorCode("not_empty")
+            .WithMessage("'{PropertyName}' must not be empty.")
+            .MaximumLength(500)
             .When(x => x.Title.IsSpecified && x.Title.Value is not null)
             .OverridePropertyName(nameof(UpdateTaskRequest.Title));
 

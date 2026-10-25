@@ -74,7 +74,7 @@ Keep the image as a literal `name:tag@sha256:…`. Do not wrap it in `${IMAGE:-�
 1. Open the Angular app (`ng serve` on http://localhost:4200) → redirected to `/login`. This compose file does not start it. Login calls can go through nginx at http://127.0.0.1:8080, which is the trusted proxy below.
 2. Register a new account (or use the demo login above) → lands in your personal workspace.
 3. Go to **Projects** → create a project (name + key, e.g. `WL`). It starts with
-   **To Do / In Progress / Done** columns.
+   **To Do / In Progress / Done**, or **ต้องทำ / กำลังทำ / เสร็จแล้ว** when the account locale is Thai.
 4. Open the board → add cards, drag them between columns, give them an estimate in days.
    Entering **In Progress** starts the clock; reaching **Done** stops it.
 5. Open **Dashboard** → estimated against actual man-days, per person.
@@ -83,11 +83,29 @@ Keep the image as a literal `name:tag@sha256:…`. Do not wrap it in `${IMAGE:-�
    > full duration to each. Work that falls on Saturday or Sunday counts as **0 working days**
    > (WL-35 — this rule stays), and there is no holiday calendar. Read it as a trend.
 6. Go to **Workspace settings** → invite a member by email + role.
-   - If the invited email already has an account, they're added directly.
-   - Otherwise a pending invitation is created. With Gmail SMTP configured the link is emailed;
-     it is always logged to the API console as well. The app has an `/invitations/accept` page:
+   - If the invited email already has an account, they're added directly and the response
+     has no `inviteLink`.
+   - Otherwise a pending invitation is created. The response includes `inviteLink`
+     (`Frontend:BaseUrl` + `/invitations/accept?token=...`) so the owner can copy it.
+     Mail delivery stays best-effort and is not required. The app has an `/invitations/accept` page:
      a signed-in user accepts immediately, and a signed-out user is sent through login or
      register and then back to accept. `POST /api/invitations/accept { token }` is the same call.
+
+## Signup locale and extra workspaces
+
+`POST /api/auth/register` returns **201** with the same token body as login. A second registration of the same email returns **409** `email_already_registered`, including when the two requests race. The user, membership, workspace, and refresh token are one transaction; the loser rolls back, so a failed race leaves no extra rows.
+
+The personal workspace name and the columns of projects that user later creates follow one locale. English is the default.
+
+1. `preferredLanguage` on the register body, when it is not blank, wins. A primary language tag of `th` (`th`, `th-TH`) selects Thai. Any other explicit value, including `en` and `en-US`, selects English and does not consult the header.
+2. When the field is omitted, the `Accept-Language` header is used. Ranges are ordered by quality. Unsupported tags are skipped. The first remaining `th` or `en` range wins, so `th-TH,en;q=0.8` is Thai and `en-US,th;q=0.8` is English.
+3. Otherwise the locale is `en`.
+
+Thai seeds the workspace as `เวิร์กสเปซของ {displayName}` and project columns `ต้องทำ`, `กำลังทำ`, `เสร็จแล้ว`. English stays `{displayName}'s Workspace` and `To Do`, `In Progress`, `Done`. The stored `preferredLanguage` is only `th` or `en`.
+
+`POST /api/workspaces` (bearer auth) creates another workspace. Body is `{ "name": string }`, required, at most 200 characters; blank or whitespace is **400** `validation_failed`. The caller becomes `Owner`. The slug comes from the name with the same normalization and suffix retry as signup (`name`, then `name-1`, …). Eight lost races return **409** `workspace_slug_unavailable`. The response is the workspace object with `myRole` `Owner`. A caller only sees workspaces they belong to.
+
+`Frontend:BaseUrl` has no code default. Development may omit it or use a loopback origin (`appsettings.Development.json` uses `http://localhost:4200`; `./run-local.sh` points it at the published web port). Any other environment must set an absolute `http` or `https` URL that is not a loopback host, or the process refuses to start. `docker-compose.yml` reads `FRONTEND_BASE_URL`.
 
 ## Board API added for the card detail
 

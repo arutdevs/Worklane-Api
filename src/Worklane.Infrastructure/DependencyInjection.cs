@@ -54,7 +54,10 @@ public static class DependencyInjection
             .ValidateOnStart();
         services.AddSingleton<IValidateOptions<JwtSettings>, JwtSettingsValidator>();
         services.Configure<EmailSettings>(configuration.GetSection(EmailSettings.SectionName));
-        services.Configure<FrontendSettings>(configuration.GetSection(FrontendSettings.SectionName));
+        services.AddOptions<FrontendSettings>()
+            .Bind(configuration.GetSection(FrontendSettings.SectionName))
+            .ValidateOnStart();
+        services.AddSingleton<IValidateOptions<FrontendSettings>, FrontendSettingsValidator>();
         services.AddOptions<FileStorageSettings>()
             .Configure<IConfiguration>((settings, config) =>
             {

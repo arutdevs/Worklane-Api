@@ -10,6 +10,7 @@ using Microsoft.Extensions.Hosting.Internal;
 using Microsoft.Extensions.Logging;
 using Worklane.Application.Common.Options;
 using Worklane.Infrastructure.Identity;
+using Worklane.Infrastructure.Services;
 using Worklane.WebApi.Startup;
 
 namespace Worklane.IntegrationTests.Infrastructure;
@@ -93,6 +94,64 @@ public class JwtSigningKeyTests
             throw new Xunit.Sdk.XunitException("Failure text contained the rejected signing key.");
 
         JwtSigningKeys.Create(Settings(Key(32))).Current.Key.Should().HaveCount(32);
+    }
+
+    [Fact]
+    public void FrontendBaseUrl_IsNotHardcodedAsALocalhostFallback()
+    {
+        new FrontendSettings().BaseUrl.Should().BeEmpty();
+        FrontendSettingsValidator.Problem("http://localhost:4200", requirePublicHost: true)
+            .Should().Contain("loopback");
+        FrontendSettingsValidator.Problem("http://127.0.0.1:8080", requirePublicHost: true)
+            .Should().Contain("loopback");
+        FrontendSettingsValidator.Problem("", requirePublicHost: true)
+            .Should().Contain("required");
+        FrontendSettingsValidator.Problem("http://localhost:4200", requirePublicHost: false).Should().BeNull();
+        FrontendSettingsValidator.Problem("", requirePublicHost: false).Should().BeNull();
+        FrontendSettingsValidator.Problem("https://app.worklane.test", requirePublicHost: true).Should().BeNull();
+        FrontendSettingsValidator.Problem("not a url", requirePublicHost: false)
+            .Should().Contain("absolute http");
+
+        var root = RepoRoot.Find();
+        using var production = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "src/Worklane.WebApi/appsettings.json")));
+        production.RootElement.GetProperty("Frontend").GetProperty("BaseUrl").GetString().Should().BeEmpty();
+        using var development = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, "src/Worklane.WebApi/appsettings.Development.json")));
+        development.RootElement.GetProperty("Frontend").GetProperty("BaseUrl").GetString().Should().Be("http://localhost:4200");
+
+        var source = File.ReadAllText(Path.Combine(root, "src/Worklane.Application/Common/Options/FrontendSettings.cs"));
+        source.Should().NotContain("localhost");
+        File.ReadAllText(Path.Combine(root, "docker-compose.yml"))
+            .Should().Contain("Frontend__BaseUrl: \"${FRONTEND_BASE_URL:?}\"");
+        File.ReadAllText(Path.Combine(root, "compose.local.yml"))
+            .Should().Contain("Frontend__BaseUrl: \"http://127.0.0.1:${WORKLANE_WEB_PORT:-4200}\"");
+    }
+
+    [Fact]
+    public void Production_WithoutFrontendBaseUrl_FailsBeforeListen()
+    {
+        using var keys = new TempDirectory();
+        using var factory = ProbeFactory.Create(Environments.Production, new Dictionary<string, string?>
+        {
+            ["Jwt:Secret"] = Key(64),
+            ["DataProtection:KeysPath"] = keys.Path,
+            ["Frontend:BaseUrl"] = "  "
+        });
+        StartFailure(factory).Should().Contain("Frontend:BaseUrl is required outside Development.");
+    }
+
+    [Theory]
+    [InlineData("http://localhost:4200")]
+    [InlineData("http://127.0.0.1:8080")]
+    public void Production_RejectsLoopbackFrontendBaseUrl(string baseUrl)
+    {
+        using var keys = new TempDirectory();
+        using var factory = ProbeFactory.Create(Environments.Production, new Dictionary<string, string?>
+        {
+            ["Jwt:Secret"] = Key(64),
+            ["DataProtection:KeysPath"] = keys.Path,
+            ["Frontend:BaseUrl"] = baseUrl
+        });
+        StartFailure(factory).Should().Contain("must not use a loopback host");
     }
 
     [Theory]
@@ -273,7 +332,12 @@ file sealed class ProbeFactory : WebApplicationFactory<Program>
         _settings = settings;
     }
 
-    public static ProbeFactory Create(string environment, Dictionary<string, string?> settings) => new(environment, settings);
+    public static ProbeFactory Create(string environment, Dictionary<string, string?> settings)
+    {
+        if (!settings.ContainsKey("Frontend:BaseUrl"))
+            settings["Frontend:BaseUrl"] = "https://app.worklane.test";
+        return new ProbeFactory(environment, settings);
+    }
 
     protected override IHost CreateHost(IHostBuilder builder)
     {

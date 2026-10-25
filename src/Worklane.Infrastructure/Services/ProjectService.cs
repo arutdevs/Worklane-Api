@@ -9,13 +9,6 @@ namespace Worklane.Infrastructure.Services;
 
 public class ProjectService : IProjectService
 {
-    private static readonly (string Name, int Order, bool IsDone, bool IsInProgress)[] DefaultColumns =
-    [
-        ("To Do", 1000, false, false),
-        ("In Progress", 2000, false, true),
-        ("Done", 3000, true, false),
-    ];
-
     private readonly WorklaneDbContext _db;
 
     public ProjectService(WorklaneDbContext db)
@@ -38,9 +31,7 @@ public class ProjectService : IProjectService
             .AnyAsync(p => p.WorkspaceId == workspaceId && p.Key == request.Key, cancellationToken);
 
         if (keyTaken)
-        {
-            throw new ConflictException($"Project key \"{request.Key}\" is already used in this workspace.");
-        }
+            throw UniqueConstraintConflicts.ProjectKeyTaken();
 
         var project = new Project
         {
@@ -56,17 +47,22 @@ public class ProjectService : IProjectService
 
         _db.Projects.Add(project);
 
-        // Seed default columns for every new project
-        foreach (var (name, order, isDone, isInProgress) in DefaultColumns)
+        var language = await _db.Users
+            .AsNoTracking()
+            .Where(u => u.Id == createdByUserId)
+            .Select(u => u.PreferredLanguage)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        foreach (var column in WorkspaceLocale.ColumnsFor(language))
         {
             _db.BoardColumns.Add(new BoardColumn
             {
                 Id = Guid.NewGuid(),
                 ProjectId = project.Id,
-                Name = name,
-                Order = order,
-                IsDone = isDone,
-                IsInProgress = isInProgress
+                Name = column.Name,
+                Order = column.Order,
+                IsDone = column.IsDone,
+                IsInProgress = column.IsInProgress
             });
         }
 
