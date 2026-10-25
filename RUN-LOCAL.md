@@ -48,6 +48,8 @@ docker compose -f docker-compose.yml -f compose.local.yml up --build --detach --
 
 ล็อกอินของหน้าเว็บยิงไปที่ API ผ่าน nginx ของ image เว็บ (`/api` บนพอร์ตเดียวกับหน้าเว็บ) พอร์ต 4200 คือค่า `WORKLANE_WEB_PORT`
 
+ลิงก์เชิญในคำตอบของ `POST /api/workspaces/{id}/invitations` ใช้ `Frontend__BaseUrl` สคริปต์โลคัลตั้งค่านี้เป็น `http://127.0.0.1:$WORKLANE_WEB_PORT` ดังนั้นเปลี่ยนพอร์ตเว็บแล้วลิงก์ตามพอร์ตนั้น ไม่ชี้ไปที่พอร์ตที่ฮาร์ดโค้ดไว้
+
 ## หยุดและล้างข้อมูล
 
 หยุดคอนเทนเนอร์ แต่เก็บ volume ของฐานข้อมูล:

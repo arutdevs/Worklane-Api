@@ -5,6 +5,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.FileProviders;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Hosting.Internal;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Worklane.Application.Common.Exceptions;
@@ -41,6 +42,9 @@ public class FileStorageTests
         var services = new ServiceCollection();
         services.AddSingleton<IConfiguration>(config);
         services.AddLogging();
+        // Frontend validation asks the host environment. This container is not a generic host;
+        // Development matches the rule that an omitted BaseUrl is allowed there.
+        services.AddSingleton<IHostEnvironment>(new HostingEnvironment { EnvironmentName = Environments.Development });
         services.AddInfrastructure(config);
         using var provider = services.BuildServiceProvider();
 

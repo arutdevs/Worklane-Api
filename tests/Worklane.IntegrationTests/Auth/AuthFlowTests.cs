@@ -26,7 +26,7 @@ public class AuthFlowTests : IClassFixture<WorklaneWebApplicationFactory>
 
         var response = await client.PostAsJsonAsync("/api/auth/register", new RegisterRequest(email, "Password123!", "Alice"));
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        response.StatusCode.Should().Be(HttpStatusCode.Created);
         var tokens = await response.Content.ReadFromJsonAsync<AuthTokensResponse>();
         tokens.Should().NotBeNull();
         tokens!.User.Email.Should().Be(email);
@@ -43,7 +43,11 @@ public class AuthFlowTests : IClassFixture<WorklaneWebApplicationFactory>
 
         var response = await client.PostAsJsonAsync("/api/auth/register", new RegisterRequest(email, "Password123!", "Alice Again"));
 
-        response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        var body = await response.Content.ReadAsStringAsync();
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict, body);
+        using var doc = JsonDocument.Parse(body);
+        doc.RootElement.GetProperty("code").GetString().Should().Be("email_already_registered");
+        doc.RootElement.GetProperty("detail").GetString().Should().Be("An account with this email already exists.");
     }
 
     [Fact]
@@ -185,7 +189,7 @@ public class AuthFlowTests : IClassFixture<WorklaneWebApplicationFactory>
         var email = $"{prefix}-{Guid.NewGuid():N}@example.com";
         var response = await client.PostAsJsonAsync("/api/auth/register", new RegisterRequest(email, "Password123!", prefix));
         var body = await response.Content.ReadAsStringAsync();
-        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        response.StatusCode.Should().Be(HttpStatusCode.Created, body);
         var tokens = JsonSerializer.Deserialize<AuthTokensResponse>(body, JsonOptions);
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", tokens!.AccessToken);
         return (client, tokens);
@@ -199,7 +203,7 @@ public class AuthFlowTests : IClassFixture<WorklaneWebApplicationFactory>
             "/api/auth/register",
             new RegisterRequest(email, "Password123!", displayName));
         var body = await response.Content.ReadAsStringAsync();
-        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        response.StatusCode.Should().Be(HttpStatusCode.Created, body);
         var tokens = JsonSerializer.Deserialize<AuthTokensResponse>(body, JsonOptions);
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", tokens!.AccessToken);
 

@@ -66,8 +66,8 @@ public class SignupTransactionTests : IClassFixture<WorklaneWebApplicationFactor
 
         var bodyA = await first.Content.ReadAsStringAsync();
         var bodyB = await second.Content.ReadAsStringAsync();
-        first.StatusCode.Should().Be(HttpStatusCode.OK, bodyA);
-        second.StatusCode.Should().Be(HttpStatusCode.OK, bodyB);
+        first.StatusCode.Should().Be(HttpStatusCode.Created, bodyA);
+        second.StatusCode.Should().Be(HttpStatusCode.Created, bodyB);
         gate.Arrivals.Should().Be(2);
 
         var slugA = await WorkspaceSlugOf(clientA, bodyA, $"{display}'s Workspace");
@@ -153,7 +153,7 @@ public class SignupTransactionTests : IClassFixture<WorklaneWebApplicationFactor
             "/api/auth/register",
             new RegisterRequest(email, "Password123!", display));
         var body = await response.Content.ReadAsStringAsync();
-        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        response.StatusCode.Should().Be(HttpStatusCode.Created, body);
     }
 
     private async Task WithWorkspaceInsertTrigger(string name, string raiseSql, Func<WorklaneDbContext, Task> action)
@@ -276,7 +276,7 @@ public class RetryingSignupTests : IClassFixture<RetryingDatabaseFactory>
             "/api/auth/register",
             new RegisterRequest(email, "Password123!", "Retry User"));
         var body = await response.Content.ReadAsStringAsync();
-        response.StatusCode.Should().Be(HttpStatusCode.OK, body);
+        response.StatusCode.Should().Be(HttpStatusCode.Created, body);
 
         (await db.Users.AnyAsync(u => u.Email == email)).Should().BeTrue();
         (await db.Workspaces.AnyAsync(w => w.Name == "Retry User's Workspace")).Should().BeTrue();

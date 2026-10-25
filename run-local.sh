@@ -25,24 +25,28 @@ import secrets
 path = pathlib.Path(".env")
 text = path.read_text()
 lines = text.splitlines()
-filled = False
-for line in lines:
-    if line.startswith("JWT_SIGNING_KEY=") and line.split("=", 1)[1].strip():
-        filled = True
-        break
-if filled:
+has_jwt = any(line.startswith("JWT_SIGNING_KEY=") and line.split("=", 1)[1].strip() for line in lines)
+out = list(lines)
+changed = False
+if not has_jwt:
+    key = base64.b64encode(secrets.token_bytes(48)).decode()
+    replaced = False
+    rewritten = []
+    for line in out:
+        if line.startswith("JWT_SIGNING_KEY=") and not replaced:
+            rewritten.append("JWT_SIGNING_KEY=" + key)
+            replaced = True
+        else:
+            rewritten.append(line)
+    if not replaced:
+        rewritten.append("JWT_SIGNING_KEY=" + key)
+    out = rewritten
+    changed = True
+if not any(line.startswith("FRONTEND_BASE_URL=") and line.split("=", 1)[1].strip() for line in out):
+    out.append("FRONTEND_BASE_URL=http://127.0.0.1:4200")
+    changed = True
+if not changed:
     raise SystemExit(0)
-key = base64.b64encode(secrets.token_bytes(48)).decode()
-replaced = False
-out = []
-for line in lines:
-    if line.startswith("JWT_SIGNING_KEY=") and not replaced:
-        out.append("JWT_SIGNING_KEY=" + key)
-        replaced = True
-    else:
-        out.append(line)
-if not replaced:
-    out.append("JWT_SIGNING_KEY=" + key)
 path.write_text("\n".join(out) + "\n")
 os.chmod(path, 0o600)
 PY

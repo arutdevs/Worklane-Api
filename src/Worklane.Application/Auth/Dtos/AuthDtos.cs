@@ -1,6 +1,6 @@
 namespace Worklane.Application.Auth.Dtos;
 
-public record RegisterRequest(string Email, string Password, string DisplayName);
+public record RegisterRequest(string Email, string Password, string DisplayName, string? PreferredLanguage = null);
 
 public record LoginRequest(string Email, string Password);
 

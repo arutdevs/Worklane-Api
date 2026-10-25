@@ -69,7 +69,8 @@ public class WorklaneWebApplicationFactory : WebApplicationFactory<Program>, IAs
                 ["DataProtection:KeysPath"] = DataProtectionKeysPath,
                 // The suite shares one client IP per factory. Production stays at RateLimit:Auth.
                 ["RateLimit:Auth:PermitLimit"] = "10000",
-                ["RateLimit:Auth:WindowSeconds"] = "60"
+                ["RateLimit:Auth:WindowSeconds"] = "60",
+                ["Frontend:BaseUrl"] = "http://web.test"
             });
         });
 

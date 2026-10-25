@@ -4,8 +4,11 @@ public class FrontendSettings
 {
     public const string SectionName = "Frontend";
 
-    /// <summary>Origin the Angular app is served from — used to build absolute links (e.g.
-    /// an invitation accept link) that have to work from outside the browser session,
-    /// such as when clicked from an email client.</summary>
-    public string BaseUrl { get; set; } = "http://localhost:4200";
+    /// <summary>
+    /// Origin the Angular app is served from. Invitation links are this origin plus
+    /// <c>/invitations/accept?token=</c>. There is no code default: Development may omit it
+    /// (the link is then path-only) or set a loopback origin, and every other environment
+    /// must set an absolute http(s) URL whose host is not a loopback address.
+    /// </summary>
+    public string BaseUrl { get; set; } = "";
 }

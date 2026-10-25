@@ -4,6 +4,7 @@ using Worklane.Domain.Entities;
 using Worklane.Domain.Enums;
 using Worklane.Infrastructure.Identity;
 using Worklane.Infrastructure.Persistence;
+using Worklane.Infrastructure.Services;
 
 namespace Worklane.WebApi.Seed;
 
@@ -134,29 +135,22 @@ public static class DevSeeder
             .Where(c => c.ProjectId == project.Id)
             .ToDictionaryAsync(c => c.Name, c => c);
 
-        var defaults = new (string Name, int Order, bool IsDone, bool IsInProgress)[]
-        {
-            ("To Do", 1000, false, false),
-            ("In Progress", 2000, false, true),
-            ("Done", 3000, true, false),
-        };
-
         var added = false;
-        foreach (var (name, order, isDone, isInProgress) in defaults)
+        foreach (var columnSeed in WorkspaceLocale.EnglishColumns)
         {
-            if (byName.ContainsKey(name)) continue;
+            if (byName.ContainsKey(columnSeed.Name)) continue;
 
             var column = new BoardColumn
             {
                 Id = Guid.NewGuid(),
                 ProjectId = project.Id,
-                Name = name,
-                Order = order,
-                IsDone = isDone,
-                IsInProgress = isInProgress
+                Name = columnSeed.Name,
+                Order = columnSeed.Order,
+                IsDone = columnSeed.IsDone,
+                IsInProgress = columnSeed.IsInProgress
             };
             db.BoardColumns.Add(column);
-            byName[name] = column;
+            byName[columnSeed.Name] = column;
             added = true;
         }
 

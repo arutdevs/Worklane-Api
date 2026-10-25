@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Worklane.Application.Common.Exceptions;
+using Worklane.Infrastructure.Persistence;
 
 namespace Worklane.WebApi.Middleware;
 
@@ -35,6 +36,18 @@ public class ExceptionHandlingMiddleware
 
     private async Task HandleAsync(HttpContext context, Exception exception)
     {
+        if (UniqueConstraintConflicts.Translate(exception) is { } conflict)
+        {
+            _logger.LogWarning(
+                exception,
+                "Unique constraint {ConstraintName} on {Method} {Path} mapped to {Code}",
+                UniqueConstraintConflicts.ConstraintName(exception) ?? "(unnamed)",
+                context.Request.Method,
+                context.Request.Path,
+                conflict.Code);
+            exception = conflict;
+        }
+
         var statusCode = exception switch
         {
             AppException client => client.StatusCode,

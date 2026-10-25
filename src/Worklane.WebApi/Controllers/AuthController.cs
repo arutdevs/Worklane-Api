@@ -35,8 +35,8 @@ public class AuthController : ControllerBase
     public async Task<ActionResult<AuthTokensResponse>> Register(RegisterRequest request, CancellationToken cancellationToken)
     {
         await _registerValidator.ValidateAndThrowAsync(request, cancellationToken);
-        var result = await _authService.RegisterAsync(request, cancellationToken);
-        return Ok(result);
+        var result = await _authService.RegisterAsync(request, Request.Headers.AcceptLanguage.ToString(), cancellationToken);
+        return StatusCode(StatusCodes.Status201Created, result);
     }
 
     [HttpPost("login")]

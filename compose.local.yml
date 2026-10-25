@@ -39,6 +39,8 @@ services:
       dockerfile: src/Worklane.WebApi/Dockerfile
     environment:
       ASPNETCORE_ENVIRONMENT: Development
+      # Invite links follow the published web port. Development allows this loopback origin.
+      Frontend__BaseUrl: "http://127.0.0.1:${WORKLANE_WEB_PORT:-4200}"
     ports: !override
       - "127.0.0.1:${WORKLANE_API_PORT:-5000}:8080"
     depends_on:

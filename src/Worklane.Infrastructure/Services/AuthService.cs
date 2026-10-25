@@ -2,7 +2,6 @@ using System.Reflection;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
-using Npgsql;
 using Worklane.Application.Auth.Dtos;
 using Worklane.Application.Auth.Interfaces;
 using Worklane.Application.Common.Exceptions;
@@ -17,11 +16,7 @@ namespace Worklane.Infrastructure.Services;
 
 public class AuthService : IAuthService
 {
-    internal const int MaxSlugInsertAttempts = 8;
-    internal const string SlugUnavailableCode = "workspace_slug_unavailable";
-    internal const string SlugUnavailableDetail = "A unique workspace address could not be reserved. Try again.";
-
-    private const string AccountExistsDetail = "An account with this email already exists.";
+    internal const int MaxSlugInsertAttempts = WorkspaceSlug.MaxInsertAttempts;
 
     private readonly WorklaneDbContext _db;
     private readonly UserManager<AppUser> _userManager;
@@ -47,103 +42,79 @@ public class AuthService : IAuthService
         _jwtSettings = jwtSettings.Value;
     }
 
-    public async Task<AuthTokensResponse> RegisterAsync(RegisterRequest request, CancellationToken cancellationToken)
+    public Task<AuthTokensResponse> RegisterAsync(
+        RegisterRequest request,
+        string? acceptLanguage,
+        CancellationToken cancellationToken)
     {
         // A retrying strategy rejects a user transaction unless the whole unit runs inside Execute.
-        var strategy = _db.Database.CreateExecutionStrategy();
-        if (strategy.RetriesOnFailure)
-            return await strategy.ExecuteAsync(ct => RegisterNewUserAsync(request, ct), cancellationToken);
-
-        return await RegisterNewUserAsync(request, cancellationToken);
+        return DbRetry.ExecuteAsync(_db, ct => RegisterNewUserAsync(request, acceptLanguage, ct), cancellationToken);
     }
 
-    private async Task<AuthTokensResponse> RegisterNewUserAsync(RegisterRequest request, CancellationToken cancellationToken)
+    private async Task<AuthTokensResponse> RegisterNewUserAsync(
+        RegisterRequest request,
+        string? acceptLanguage,
+        CancellationToken cancellationToken)
     {
         // A strategy retry must not treat a rolled-back user still sitting in the tracker as a duplicate.
         _db.ChangeTracker.Clear();
 
         var existing = await _userManager.FindByEmailAsync(request.Email);
         if (existing is not null)
-            throw new ConflictException(AccountExistsDetail);
+            throw UniqueConstraintConflicts.EmailAlreadyRegistered();
 
+        var language = WorkspaceLocale.Resolve(request.PreferredLanguage, acceptLanguage);
         var baseSlug = WorkspaceSlug.ForDisplayName(request.DisplayName);
-        var minimumSuffix = 0;
 
-        for (var attempt = 0; attempt < MaxSlugInsertAttempts; attempt++)
+        return await WorkspaceSlug.InsertAsync(_db, baseSlug, async (slug, ct) =>
         {
-            _db.ChangeTracker.Clear();
-            var attemptedSuffix = minimumSuffix;
-            await using var transaction = await _db.Database.BeginTransactionAsync(cancellationToken);
+            var user = new AppUser
+            {
+                UserName = request.Email,
+                Email = request.Email,
+                DisplayName = request.DisplayName,
+                PreferredLanguage = language
+            };
+
+            IdentityResult createResult;
             try
             {
-                var user = new AppUser
-                {
-                    UserName = request.Email,
-                    Email = request.Email,
-                    DisplayName = request.DisplayName,
-                    PreferredLanguage = "en"
-                };
-
-                var createResult = await _userManager.CreateAsync(user, request.Password);
-                if (!createResult.Succeeded)
-                    throw new ConflictException(string.Join(" ", createResult.Errors.Select(e => e.Description)));
-
-                var slug = await WorkspaceSlug.GenerateUniqueAsync(
-                    _db.Workspaces,
-                    baseSlug,
-                    cancellationToken,
-                    minimumSuffix);
-                attemptedSuffix = slug.Suffix;
-
-                var workspace = new Workspace
-                {
-                    Id = Guid.NewGuid(),
-                    Name = $"{request.DisplayName}'s Workspace",
-                    Slug = slug.Value,
-                    Plan = WorkspacePlan.Free,
-                    CreatedAt = DateTimeOffset.UtcNow
-                };
-                _db.Workspaces.Add(workspace);
-                _db.WorkspaceMembers.Add(new WorkspaceMember
-                {
-                    Id = Guid.NewGuid(),
-                    WorkspaceId = workspace.Id,
-                    UserId = user.Id,
-                    Role = WorkspaceRole.Owner,
-                    JoinedAt = DateTimeOffset.UtcNow
-                });
-
-                await _db.SaveChangesAsync(cancellationToken);
-                var tokens = await IssueTokensAsync(user, cancellationToken);
-                await transaction.CommitAsync(cancellationToken);
-                return tokens;
+                createResult = await _userManager.CreateAsync(user, request.Password);
             }
-            catch (Exception ex) when (IsUniqueViolation(ex, WorkspaceSlug.UniqueIndexName))
+            catch (Exception ex) when (UniqueConstraintConflicts.IsAccountConstraint(ex))
             {
-                minimumSuffix = attemptedSuffix + 1;
+                throw UniqueConstraintConflicts.EmailAlreadyRegistered();
             }
-            catch (Exception ex) when (IsUniqueViolation(ex, "EmailIndex") || IsUniqueViolation(ex, "UserNameIndex"))
+
+            if (!createResult.Succeeded)
             {
-                throw new ConflictException(AccountExistsDetail);
+                if (createResult.Errors.Any(static e => e.Code is "DuplicateEmail" or "DuplicateUserName"))
+                    throw UniqueConstraintConflicts.EmailAlreadyRegistered();
+
+                throw new ConflictException(string.Join(" ", createResult.Errors.Select(e => e.Description)));
             }
-        }
 
-        throw new ConflictException(SlugUnavailableCode, SlugUnavailableDetail);
-    }
-
-    private static bool IsUniqueViolation(Exception exception, string constraintName)
-    {
-        for (var current = exception; current is not null; current = current.InnerException)
-        {
-            if (current is PostgresException postgres
-                && postgres.SqlState == PostgresErrorCodes.UniqueViolation
-                && string.Equals(postgres.ConstraintName, constraintName, StringComparison.Ordinal))
+            var workspace = new Workspace
             {
-                return true;
-            }
-        }
+                Id = Guid.NewGuid(),
+                Name = WorkspaceLocale.WorkspaceName(request.DisplayName, language),
+                Slug = slug.Value,
+                Plan = WorkspacePlan.Free,
+                CreatedAt = DateTimeOffset.UtcNow
+            };
+            _db.Workspaces.Add(workspace);
+            _db.WorkspaceMembers.Add(new WorkspaceMember
+            {
+                Id = Guid.NewGuid(),
+                WorkspaceId = workspace.Id,
+                UserId = user.Id,
+                Role = WorkspaceRole.Owner,
+                JoinedAt = DateTimeOffset.UtcNow
+            });
 
-        return false;
+            await _db.SaveChangesAsync(ct);
+            return await IssueTokensAsync(user, ct);
+        }, cancellationToken);
     }
 
     public async Task<AuthTokensResponse> LoginAsync(LoginRequest request, CancellationToken cancellationToken)
