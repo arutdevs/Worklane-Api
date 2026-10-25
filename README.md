@@ -18,6 +18,8 @@ a Kanban board with drag-and-drop, and a dashboard that measures effort per pers
 
 ## Run everything
 
+The full local stack (API image, Angular image from Worklane-Web, Postgres 16, and a one-shot migrator) is `./run-local.sh`. Steps, the URL, the demo login, and port clashes are in [RUN-LOCAL.md](RUN-LOCAL.md).
+
 ```bash
 cp .env.example .env
 # JWT signing key. .env is git-ignored. Compose will not start while JWT_SIGNING_KEY is empty.

@@ -206,12 +206,22 @@ if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI(options => options.SwaggerEndpoint("/swagger/v1/swagger.json", "Worklane API v1"));
+}
 
+// Development applies migrations and the demo seed before listen, as before.
+// `--migrate-only` is the one-shot migrator: same steps, then exit 0.
+var migrateOnly = args.Contains("--migrate-only");
+if (app.Environment.IsDevelopment() || migrateOnly)
+{
     using var scope = app.Services.CreateScope();
     var db = scope.ServiceProvider.GetRequiredService<WorklaneDbContext>();
     await db.Database.MigrateAsync();
-    await DevSeeder.SeedAsync(scope.ServiceProvider);
+    if (app.Environment.IsDevelopment())
+        await DevSeeder.SeedAsync(scope.ServiceProvider);
 }
+
+if (migrateOnly)
+    return;
 
 app.UseHttpsRedirection();
 
