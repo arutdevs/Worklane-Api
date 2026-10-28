@@ -15,7 +15,7 @@ namespace Worklane.IntegrationTests.Workspaces;
 
 public sealed class InvitationLegacyMigrationTests : IAsyncLifetime
 {
-    private const string LegacyToken = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF";
+    private const string LegacyToken = "legacy-plaintext-invite";
     private const string PreviousMigration = "20261025155535_MakeEmailIndexUnique";
 
     private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder("postgres:16-alpine")
