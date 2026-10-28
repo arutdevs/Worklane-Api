@@ -83,6 +83,8 @@ builder.Services.Configure<CommentRateLimitSettings>(
     builder.Configuration.GetSection(CommentRateLimitSettings.SectionName));
 builder.Services.Configure<AuthRateLimitSettings>(
     builder.Configuration.GetSection(AuthRateLimitSettings.SectionName));
+builder.Services.Configure<WorkspaceCreateRateLimitSettings>(
+    builder.Configuration.GetSection(WorkspaceCreateRateLimitSettings.SectionName));
 builder.Services.AddWorklaneForwardedHeaders(builder.Configuration);
 builder.Services.AddRateLimiter(options =>
 {
@@ -128,6 +130,21 @@ builder.Services.AddRateLimiter(options =>
         var window = settings.WindowSeconds < 1 ? 1 : settings.WindowSeconds;
         return RateLimitPartition.GetFixedWindowLimiter(
             ForwardedClientIp.PartitionKey(httpContext),
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = permit,
+                Window = TimeSpan.FromSeconds(window),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            });
+    });
+    options.AddPolicy(WorkspaceCreateRateLimitSettings.PolicyName, httpContext =>
+    {
+        var settings = httpContext.RequestServices.GetRequiredService<IOptions<WorkspaceCreateRateLimitSettings>>().Value;
+        var permit = settings.PermitLimit < 1 ? 1 : settings.PermitLimit;
+        var window = settings.WindowSeconds < 1 ? 1 : settings.WindowSeconds;
+        return RateLimitPartition.GetFixedWindowLimiter(
+            WorkspaceCreateRateLimitPartition.Key(httpContext),
             _ => new FixedWindowRateLimiterOptions
             {
                 PermitLimit = permit,
