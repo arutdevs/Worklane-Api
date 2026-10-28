@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [main, develop]
 
+permissions:
+  contents: read
+
 concurrency:
   # A newer push makes an in-flight run irrelevant.
   group: backend-${{ github.ref }}
@@ -14,13 +17,37 @@ concurrency:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    # NuGet and Docker image caches need to write the Actions cache.
+    permissions:
+      contents: read
+      actions: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-dotnet@v4
+      - name: Cache Postgres image
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: /home/runner/.cache/worklane-docker
+          key: postgres-16-alpine-${{ runner.os }}-${{ hashFiles('tests/Worklane.IntegrationTests/Infrastructure/WorklaneWebApplicationFactory.cs') }}
+
+      - name: Restore Postgres image
+        run: |
+          set -euo pipefail
+          mkdir -p /home/runner/.cache/worklane-docker
+          tar=/home/runner/.cache/worklane-docker/postgres-16-alpine.tar
+          if [ -f "$tar" ]; then
+            docker load -i "$tar"
+          else
+            docker pull postgres:16-alpine
+            docker save postgres:16-alpine -o "$tar"
+          fi
+
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: '10.0.x'
+          cache: true
+          cache-dependency-path: '**/*.csproj'
 
       - name: Restore
         run: dotnet restore Worklane.slnx
@@ -35,7 +62,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: backend-test-results
           path: TestResults/
