@@ -200,7 +200,7 @@ public class SecurityReviewTests : IClassFixture<WorklaneWebApplicationFactory>
         var board = await BoardTestSetup.CreateAsync(_factory, "hub-owner@test.com", "Owner");
         var task = await BoardTestSetup.CreateTaskAsync(board, "Live");
         var member = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), "hub-member@test.com", "Member");
-        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, member.Tokens.User.Email, "Member");
+        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, member, "Member");
         var outsider = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), "hub-outsider@test.com");
 
         await using var outsiderHub = BoardTestSetup.Hub(_factory, outsider.Tokens.AccessToken);
@@ -281,7 +281,7 @@ public class SecurityReviewTests : IClassFixture<WorklaneWebApplicationFactory>
         var secondTask = (await secondTaskResponse.Content.ReadFromJsonAsync<TaskItemDto>(TestAuthHelper.JsonOptions))!;
 
         var member = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), "hub-two-member@test.com", "Member");
-        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, member.Tokens.User.Email, "Member");
+        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, member, "Member");
 
         await using var connection = BoardTestSetup.Hub(_factory, member.Tokens.AccessToken);
         var seen = new List<Guid>();

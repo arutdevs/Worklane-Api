@@ -296,7 +296,14 @@ public class E2E1RegressionTests : IClassFixture<WorklaneWebApplicationFactory>
         var addMember = await owner.Client.PostAsJsonAsync(
             $"/api/workspaces/{owner.Workspace.Id}/invitations",
             new InviteMemberRequest(memberOnly.Tokens.User.Email, WorkspaceRole.Member));
-        addMember.StatusCode.Should().Be(HttpStatusCode.OK);
+        var addText = await addMember.Content.ReadAsStringAsync();
+        addMember.StatusCode.Should().Be(HttpStatusCode.OK, addText);
+        using var addJson = JsonDocument.Parse(addText);
+        var memberToken = QueryHelpers.ParseQuery(new Uri(addJson.RootElement.GetProperty("inviteLink").GetString()!, UriKind.Absolute).Query)["token"].ToString();
+        var memberAccept = await memberOnly.Client.PostAsJsonAsync(
+            "/api/invitations/accept",
+            new AcceptInvitationRequest(memberToken));
+        memberAccept.StatusCode.Should().Be(HttpStatusCode.NoContent);
 
         var memberInvite = await memberOnly.Client.PostAsJsonAsync(
             $"/api/workspaces/{owner.Workspace.Id}/invitations",
@@ -304,7 +311,7 @@ public class E2E1RegressionTests : IClassFixture<WorklaneWebApplicationFactory>
         await AssertProblem(memberInvite, HttpStatusCode.Forbidden, "workspace_access_denied");
     }
 
-    [Fact(Skip = "bug: a still-valid invite token presented by a different account returns 403 forbidden (This invitation was issued to a different email address.) instead of 404. AcceptInvitationAsync rejects the email mismatch before the not-found path, so the response reveals that the token is live. Spent tokens and unknown tokens already return 404 and are covered by Invite_OwnerLinkUsesFrontendOrigin_InviteeJoinsAndReadsBoard_ReuseIsNotFound_MemberIsForbidden.")]
+    [Fact]
     public async Task Invite_AnotherUsersLiveToken_IsNotFound()
     {
         var owner = await RegisterAsync($"e2e-live-owner-{Guid.NewGuid():N}@example.com", "Owner");

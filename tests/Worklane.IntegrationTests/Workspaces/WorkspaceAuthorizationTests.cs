@@ -55,10 +55,7 @@ public class WorkspaceAuthorizationTests : IClassFixture<WorklaneWebApplicationF
         var owner = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
         var member = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
 
-        var inviteResponse = await owner.Client.PostAsJsonAsync(
-            $"/api/workspaces/{owner.Workspace.Id}/invitations",
-            new InviteMemberRequest(member.Tokens.User.Email, WorkspaceRole.Member));
-        inviteResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+        await InviteAsync(owner, member, WorkspaceRole.Member);
 
         var createProjectResponse = await member.Client.PostAsJsonAsync(
             $"/api/workspaces/{owner.Workspace.Id}/projects",
@@ -538,7 +535,15 @@ public class WorkspaceAuthorizationTests : IClassFixture<WorklaneWebApplicationF
         var response = await owner.Client.PostAsJsonAsync(
             $"/api/workspaces/{owner.Workspace.Id}/invitations",
             new InviteMemberRequest(user.Tokens.User.Email, role));
+        var body = await response.Content.ReadAsStringAsync();
         response.EnsureSuccessStatusCode();
+        var invitation = JsonSerializer.Deserialize<InvitationDto>(body, TestAuthHelper.JsonOptions)
+            ?? throw new InvalidOperationException("Invite did not return a body.");
+        var link = invitation.InviteLink ?? throw new InvalidOperationException("Invite did not return a link.");
+        var accept = await user.Client.PostAsJsonAsync(
+            "/api/invitations/accept",
+            new AcceptInvitationRequest(TestAuthHelper.TokenFromInviteLink(link)));
+        accept.EnsureSuccessStatusCode();
     }
 
     private async Task<RegisteredUser> AddSecondOwnerAsync(RegisteredUser owner)
@@ -558,11 +563,7 @@ public class WorkspaceAuthorizationTests : IClassFixture<WorklaneWebApplicationF
         response.EnsureSuccessStatusCode();
         var invitation = await response.Content.ReadFromJsonAsync<InvitationDto>(TestAuthHelper.JsonOptions);
         var link = invitation!.InviteLink ?? throw new InvalidOperationException("Pending invite did not return a link.");
-        const string marker = "token=";
-        var start = link.IndexOf(marker, StringComparison.Ordinal);
-        if (start < 0)
-            throw new InvalidOperationException("Pending invite link has no token.");
-        return link[(start + marker.Length)..];
+        return TestAuthHelper.TokenFromInviteLink(link);
     }
 
     private async Task<int> OwnerCountAsync(Guid workspaceId)

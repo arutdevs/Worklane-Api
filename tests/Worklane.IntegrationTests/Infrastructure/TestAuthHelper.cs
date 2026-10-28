@@ -36,4 +36,13 @@ public static class TestAuthHelper
 
         return new RegisteredUser(client, tokens, workspaces.Single());
     }
+
+    public static string TokenFromInviteLink(string link)
+    {
+        const string marker = "token=";
+        var start = link.IndexOf(marker, StringComparison.Ordinal);
+        if (start < 0)
+            throw new InvalidOperationException("Invite link has no token.");
+        return Uri.UnescapeDataString(link[(start + marker.Length)..]);
+    }
 }

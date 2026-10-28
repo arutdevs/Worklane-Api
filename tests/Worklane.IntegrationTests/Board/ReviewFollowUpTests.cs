@@ -38,7 +38,7 @@ public class RateLimitAndQuotaTests : IClassFixture<RateLimitAndQuotaFactory>
         var board = await BoardTestSetup.CreateAsync(_factory, "limit-owner@test.com", "Owner");
         var task = await BoardTestSetup.CreateTaskAsync(board, "Limited");
         var member = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), "limit-member@test.com", "Member");
-        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, member.Tokens.User.Email, "Member");
+        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, member, "Member");
 
         (await Comment(board.Client, task.Id, "one")).StatusCode.Should().Be(HttpStatusCode.Created);
         (await Comment(board.Client, task.Id, "two")).StatusCode.Should().Be(HttpStatusCode.Created);

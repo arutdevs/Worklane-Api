@@ -105,6 +105,89 @@ public class InvitationTokenTests : IClassFixture<WorklaneWebApplicationFactory>
     }
 
     [Fact]
+    public async Task Accept_WrongAccount_MatchesTheUnknownTokenBody_AndDoesNotJoin()
+    {
+        var owner = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
+        var email = $"pending-{Guid.NewGuid():N}@example.com";
+        var (token, _) = await InvitePendingAsync(owner, email, WorkspaceRole.Member);
+        var other = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
+
+        var unknown = await AcceptAsync(other, NewToken());
+        var wrong = await AcceptAsync(other, token);
+        var expiredOwner = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
+        var expiredEmail = $"expired-{Guid.NewGuid():N}@example.com";
+        var (expiredToken, _) = await InvitePendingAsync(expiredOwner, expiredEmail, WorkspaceRole.Member);
+        await using (var scope = _factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<WorklaneDbContext>();
+            var invitation = await db.Invitations.IgnoreQueryFilters().SingleAsync(i => i.Email == expiredEmail);
+            invitation.ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(-5);
+            await db.SaveChangesAsync();
+        }
+
+        var expiredUser = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), expiredEmail);
+        var expired = await AcceptAsync(expiredUser, expiredToken);
+
+        unknown.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        wrong.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        expired.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        var unknownBody = await unknown.Content.ReadAsStringAsync();
+        (await wrong.Content.ReadAsStringAsync()).Should().Be(unknownBody);
+        (await expired.Content.ReadAsStringAsync()).Should().Be(unknownBody);
+        unknownBody.Should().Contain("\"code\":\"not_found\"");
+        unknownBody.Should().NotContain(token);
+        unknownBody.Should().NotContain("different email");
+
+        await AssertMemberAsync(other, owner.Workspace.Id, null);
+        await AssertMemberAsync(expiredUser, expiredOwner.Workspace.Id, null);
+
+        var invitee = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), email);
+        (await AcceptAsync(invitee, token)).StatusCode.Should().Be(HttpStatusCode.NoContent);
+        await AssertMemberAsync(invitee, owner.Workspace.Id, WorkspaceRole.Member);
+        await AssertMemberAsync(invitee, other.Workspace.Id, null);
+    }
+
+    [Fact]
+    public async Task Invite_ExistingAccount_MatchesANewEmail_AndJoinsOnlyOnAccept()
+    {
+        var owner = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
+        var existing = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
+        var freshEmail = $"fresh-{Guid.NewGuid():N}@example.com";
+
+        var existingResponse = await owner.Client.PostAsJsonAsync(
+            $"/api/workspaces/{owner.Workspace.Id}/invitations",
+            new InviteMemberRequest(existing.Tokens.User.Email, WorkspaceRole.Member));
+        var freshResponse = await owner.Client.PostAsJsonAsync(
+            $"/api/workspaces/{owner.Workspace.Id}/invitations",
+            new InviteMemberRequest(freshEmail, WorkspaceRole.Member));
+        var existingText = await existingResponse.Content.ReadAsStringAsync();
+        var freshText = await freshResponse.Content.ReadAsStringAsync();
+        existingResponse.StatusCode.Should().Be(HttpStatusCode.OK, existingText);
+        freshResponse.StatusCode.Should().Be(HttpStatusCode.OK, freshText);
+
+        using var existingJson = JsonDocument.Parse(existingText);
+        using var freshJson = JsonDocument.Parse(freshText);
+        PropertyNames(existingJson).Should().Equal(PropertyNames(freshJson));
+        existingJson.RootElement.GetProperty("id").GetGuid().Should().NotBe(Guid.Empty);
+        freshJson.RootElement.GetProperty("id").GetGuid().Should().NotBe(Guid.Empty);
+        existingJson.RootElement.GetProperty("inviteLink").GetString()
+            .Should().StartWith("http://web.test/invitations/accept?token=");
+        freshJson.RootElement.GetProperty("inviteLink").GetString()
+            .Should().StartWith("http://web.test/invitations/accept?token=");
+
+        await AssertMemberAsync(existing, owner.Workspace.Id, null);
+
+        var token = TestAuthHelper.TokenFromInviteLink(existingJson.RootElement.GetProperty("inviteLink").GetString()!);
+        (await AcceptAsync(existing, token)).StatusCode.Should().Be(HttpStatusCode.NoContent);
+        await AssertMemberAsync(existing, owner.Workspace.Id, WorkspaceRole.Member);
+
+        var again = await owner.Client.PostAsJsonAsync(
+            $"/api/workspaces/{owner.Workspace.Id}/invitations",
+            new InviteMemberRequest(existing.Tokens.User.Email, WorkspaceRole.Member));
+        again.StatusCode.Should().Be(HttpStatusCode.Conflict);
+    }
+
+    [Fact]
     public async Task Accept_TokenCannotJoinAnotherWorkspace()
     {
         var owner = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
@@ -172,6 +255,9 @@ public class InvitationTokenTests : IClassFixture<WorklaneWebApplicationFactory>
 
     private static string NewToken() => Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
 
+    private static List<string> PropertyNames(JsonDocument document) =>
+        document.RootElement.EnumerateObject().Select(property => property.Name).ToList();
+
     private static async Task<HttpResponseMessage> AcceptAsync(RegisteredUser user, string token) =>
         await user.Client.PostAsJsonAsync("/api/invitations/accept", new AcceptInvitationRequest(token));
 
@@ -187,11 +273,7 @@ public class InvitationTokenTests : IClassFixture<WorklaneWebApplicationFactory>
         response.StatusCode.Should().Be(HttpStatusCode.OK, body);
         var invitation = JsonSerializer.Deserialize<InvitationDto>(body, TestAuthHelper.JsonOptions);
         var link = invitation!.InviteLink ?? throw new InvalidOperationException("Pending invite did not return a link.");
-        const string marker = "token=";
-        var start = link.IndexOf(marker, StringComparison.Ordinal);
-        if (start < 0)
-            throw new InvalidOperationException("Pending invite link has no token.");
-        return (Uri.UnescapeDataString(link[(start + marker.Length)..]), link);
+        return (TestAuthHelper.TokenFromInviteLink(link), link);
     }
 
     private async Task AssertRawTokenIsAbsentAsync(string email, string token)

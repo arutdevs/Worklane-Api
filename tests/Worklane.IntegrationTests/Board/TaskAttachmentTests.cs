@@ -29,7 +29,7 @@ public class TaskAttachmentTests : IClassFixture<WorklaneWebApplicationFactory>
         var task = await BoardTestSetup.CreateTaskAsync(board, "With a file");
         var member = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), "files-member@test.com", "Member");
         var outsider = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), "files-out@test.com", "Outsider");
-        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, member.Tokens.User.Email, "Member");
+        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, member, "Member");
 
         var payload = SampleFiles.Png;
         var uploaded = await UploadAsync(board.Client, task.Id, payload, "text/html", "../../notes.png");
@@ -110,7 +110,7 @@ public class TaskAttachmentTests : IClassFixture<WorklaneWebApplicationFactory>
         var board = await BoardTestSetup.CreateAsync(_factory, "files-viewer-owner@test.com");
         var task = await BoardTestSetup.CreateTaskAsync(board, "Read only");
         var viewer = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), "files-viewer@test.com");
-        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, viewer.Tokens.User.Email, "Viewer");
+        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, viewer, "Viewer");
 
         (await UploadAsync(viewer.Client, task.Id, SampleFiles.Png, "image/png", "notes.png"))
             .StatusCode.Should().Be(HttpStatusCode.Forbidden);
@@ -126,7 +126,7 @@ public class TaskAttachmentTests : IClassFixture<WorklaneWebApplicationFactory>
         var board = await BoardTestSetup.CreateAsync(_factory, "files-demote-owner@test.com", "Owner");
         var task = await BoardTestSetup.CreateTaskAsync(board, "Demote");
         var member = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), "files-demote-member@test.com", "Uploader");
-        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, member.Tokens.User.Email, "Member");
+        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, member, "Member");
 
         var uploaded = await UploadAsync(member.Client, task.Id, SampleFiles.Text, "text/plain", "note.txt");
         var file = (await uploaded.Content.ReadFromJsonAsync<AttachmentDto>(TestAuthHelper.JsonOptions))!;
@@ -233,7 +233,7 @@ public class TaskAttachmentTests : IClassFixture<WorklaneWebApplicationFactory>
         var board = await BoardTestSetup.CreateAsync(_factory, "files-admin-owner@test.com", "Owner");
         var task = await BoardTestSetup.CreateTaskAsync(board, "Shared");
         var member = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), "files-admin-member@test.com", "Member");
-        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, member.Tokens.User.Email, "Member");
+        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, member, "Member");
 
         var uploaded = await UploadAsync(member.Client, task.Id, SampleFiles.Text, "application/octet-stream", "note.txt");
         var file = (await uploaded.Content.ReadFromJsonAsync<AttachmentDto>(TestAuthHelper.JsonOptions))!;

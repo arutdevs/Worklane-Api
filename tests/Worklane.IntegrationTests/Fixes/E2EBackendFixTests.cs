@@ -163,9 +163,16 @@ public class E2EBackendFixTests : IClassFixture<WorklaneWebApplicationFactory>
         var added = await owner.Client.PostAsJsonAsync(
             $"/api/workspaces/{owner.Workspace.Id}/invitations",
             new InviteMemberRequest(member.Tokens.User.Email, WorkspaceRole.Member));
-        added.StatusCode.Should().Be(HttpStatusCode.OK);
-        var addedBody = await added.Content.ReadFromJsonAsync<InvitationDto>(TestAuthHelper.JsonOptions);
-        addedBody!.InviteLink.Should().BeNull();
+        var addedText = await added.Content.ReadAsStringAsync();
+        added.StatusCode.Should().Be(HttpStatusCode.OK, addedText);
+        var addedBody = JsonSerializer.Deserialize<InvitationDto>(addedText, TestAuthHelper.JsonOptions);
+        addedBody!.Id.Should().NotBe(Guid.Empty);
+        addedBody.InviteLink.Should().StartWith("http://web.test/invitations/accept?token=");
+
+        var accept = await member.Client.PostAsJsonAsync(
+            "/api/invitations/accept",
+            new AcceptInvitationRequest(TestAuthHelper.TokenFromInviteLink(addedBody.InviteLink!)));
+        accept.StatusCode.Should().Be(HttpStatusCode.NoContent);
 
         var again = await owner.Client.PostAsJsonAsync(
             $"/api/workspaces/{owner.Workspace.Id}/invitations",
@@ -184,10 +191,7 @@ public class E2EBackendFixTests : IClassFixture<WorklaneWebApplicationFactory>
         await using var scope = _factory.Services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<WorklaneDbContext>();
         var stored = await db.Invitations.IgnoreQueryFilters().SingleAsync(row => row.Email == pendingEmail);
-        const string marker = "token=";
-        var tokenStart = invitation.InviteLink!.IndexOf(marker, StringComparison.Ordinal);
-        tokenStart.Should().BeGreaterThanOrEqualTo(0);
-        var token = invitation.InviteLink[(tokenStart + marker.Length)..];
+        var token = TestAuthHelper.TokenFromInviteLink(invitation.InviteLink!);
         invitation.InviteLink.Should().Be(InviteLinks.ForToken("http://web.test", token));
         stored.TokenHash.Should().Be(InviteTokens.Hash(token));
         stored.TokenHash.Should().NotBe(token);

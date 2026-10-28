@@ -139,23 +139,11 @@ public class WorkspaceService : IWorkspaceService
 
                 if (alreadyMember)
                     throw UniqueConstraintConflicts.WorkspaceMemberExists();
-
-                _db.WorkspaceMembers.Add(new WorkspaceMember
-                {
-                    Id = Guid.NewGuid(),
-                    WorkspaceId = workspaceId,
-                    UserId = existingUser.Id,
-                    Role = request.Role,
-                    JoinedAt = DateTimeOffset.UtcNow
-                });
-                AddMembershipEvent(workspaceId, invitedByUserId, existingUser.Id, WorkspaceMembershipAction.MemberAdded, oldRole: null, request.Role);
-                await _db.SaveChangesAsync(cancellationToken);
-                await transaction.CommitAsync(cancellationToken);
-                LogMembershipChange(workspaceId, invitedByUserId, existingUser.Id, WorkspaceMembershipAction.MemberAdded, oldRole: null, request.Role);
-
-                return new InvitationDto(Guid.Empty, request.Email, request.Role, DateTimeOffset.UtcNow, null);
             }
 
+            // Registered and unknown emails get the same pending invite. Membership
+            // is added only when that person accepts, so the response cannot be used
+            // to discover whether an account exists.
             var rawToken = InviteTokens.Generate();
             invitation = new Invitation
             {
@@ -209,26 +197,19 @@ public class WorkspaceService : IWorkspaceService
         // Accept runs with no tenant pinned. IgnoreQueryFilters keeps the lookup working
         // when the membership filter is fail-closed. The row is found by the hash, so a
         // token from another workspace still resolves only to the workspace that issued it.
+        // A missing invite, a wrong account, and an expired or used invite all do both
+        // lookups and return the same 404, so the body does not reveal that the token exists.
         var invitation = await FindByTokenAsync(token, cancellationToken);
-        if (IsUnusable(invitation))
-        {
-            throw new NotFoundException("Invitation is invalid or has expired.");
-        }
-
         var user = await _userManager.FindByIdAsync(acceptingUserId.ToString());
-        if (user is null || !string.Equals(user.Email, invitation.Email, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new ForbiddenAccessException("This invitation was issued to a different email address.");
-        }
+        if (CannotAccept(invitation, user))
+            throw new NotFoundException("Invitation is invalid or has expired.");
 
         var workspaceId = invitation.WorkspaceId;
         await using var transaction = await BeginLockedMembershipChangeAsync(workspaceId, cancellationToken);
 
         invitation = await FindByTokenAsync(token, cancellationToken);
-        if (IsUnusable(invitation))
-        {
+        if (CannotAccept(invitation, user))
             throw new NotFoundException("Invitation is invalid or has expired.");
-        }
 
         var inviterRole = await _db.WorkspaceMembers
             .IgnoreQueryFilters()
@@ -353,6 +334,16 @@ public class WorkspaceService : IWorkspaceService
 
     private static bool IsUnusable([NotNullWhen(false)] Invitation? invitation) =>
         invitation is null || invitation.AcceptedAt is not null || invitation.ExpiresAt < DateTimeOffset.UtcNow;
+
+    private static bool CannotAccept(
+        [NotNullWhen(false)] Invitation? invitation,
+        [NotNullWhen(false)] AppUser? user)
+    {
+        if (IsUnusable(invitation) || user is null)
+            return true;
+
+        return !string.Equals(user.Email, invitation.Email, StringComparison.OrdinalIgnoreCase);
+    }
 
     /// <summary>
     /// Role comes from this workspace's membership row. The route filter has already pinned
