@@ -70,6 +70,11 @@ public class WorklaneWebApplicationFactory : WebApplicationFactory<Program>, IAs
                 // The suite shares one client IP per factory. Production stays at RateLimit:Auth.
                 ["RateLimit:Auth:PermitLimit"] = "10000",
                 ["RateLimit:Auth:WindowSeconds"] = "60",
+                // Several tests create more than one workspace for the same user.
+                // Production stays at WorkspaceCreation.
+                ["WorkspaceCreation:PermitLimit"] = "10000",
+                ["WorkspaceCreation:WindowSeconds"] = "60",
+                ["WorkspaceCreation:MaxOwnedWorkspaces"] = "10000",
                 ["Frontend:BaseUrl"] = "http://web.test"
             });
         });

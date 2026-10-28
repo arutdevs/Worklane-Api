@@ -1,7 +1,9 @@
 using FluentValidation;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.RateLimiting;
 using Worklane.Application.Common.Interfaces;
+using Worklane.Application.Common.Options;
 using Worklane.Application.Workspaces.Dtos;
 using Worklane.Application.Workspaces.Interfaces;
 using Worklane.Domain.Enums;
@@ -42,6 +44,7 @@ public class WorkspacesController : ControllerBase
     }
 
     [HttpPost]
+    [EnableRateLimiting(WorkspaceCreationSettings.PolicyName)]
     public async Task<ActionResult<WorkspaceDto>> Create(CreateWorkspaceRequest request, CancellationToken cancellationToken)
     {
         await _createValidator.ValidateAndThrowAsync(request, cancellationToken);
