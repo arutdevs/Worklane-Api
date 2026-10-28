@@ -3,12 +3,15 @@ name: Security
 on:
   push:
     branches: [main, develop]
+  # Any base branch, so a pull request stacked on another feature branch still runs these checks.
   pull_request:
-    branches: [main, develop]
   schedule:
     # Advisories get published against dependencies that have not changed, so a weekly
     # sweep catches what a push-triggered run never would.
     - cron: '0 2 * * 1'
+
+permissions:
+  contents: read
 
 concurrency:
   group: security-${{ github.ref }}
@@ -17,23 +20,33 @@ concurrency:
 jobs:
   nuget-audit:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: '10.0.x'
+          cache: true
+          cache-dependency-path: '**/*.csproj'
 
       - name: Restore
         run: dotnet restore Worklane.slnx
 
-      # `dotnet list package --vulnerable` reports through its output, not its exit code,
-      # so the text has to be inspected for the job to fail. Advisory rows start with ">".
+      # `dotnet list package --vulnerable` reports through its output, not its exit code.
+      # High and critical fail the job. Any other advisory row still fails too.
       - name: Audit NuGet packages
         run: |
+          set -euo pipefail
           dotnet list package --vulnerable --include-transitive 2>&1 | tee audit.txt
-          if grep -qE '^\s*>\s' audit.txt; then
+          if grep -E '^[[:space:]]*>' audit.txt | grep -E -q '(^|[[:space:]])(High|Critical)([[:space:]]|$)'; then
+            echo "::error::High or critical NuGet vulnerability (dotnet list package --vulnerable)"
+            exit 1
+          fi
+          if grep -qE '^[[:space:]]*>[[:space:]]' audit.txt; then
             echo "::error::Vulnerable NuGet packages found"
             exit 1
           fi
@@ -42,7 +55,7 @@ jobs:
   secret-scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
 

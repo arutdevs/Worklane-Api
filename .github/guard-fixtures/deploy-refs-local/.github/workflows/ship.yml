@@ -1,0 +1,7 @@
+name: Ship
+on: workflow_dispatch
+jobs:
+  ship:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo compose.dev.yml
