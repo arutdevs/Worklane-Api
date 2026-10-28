@@ -44,7 +44,12 @@ public class ProjectsController : ControllerBase
     public async Task<ActionResult<ProjectDto>> CreateProject(Guid id, CreateProjectRequest request, CancellationToken cancellationToken)
     {
         await _createValidator.ValidateAndThrowAsync(request, cancellationToken);
-        var project = await _projectService.CreateProjectAsync(id, _currentUser.UserId, request, cancellationToken);
+        var project = await _projectService.CreateProjectAsync(
+            id,
+            _currentUser.UserId,
+            request,
+            Request.Headers.AcceptLanguage.ToString(),
+            cancellationToken);
         return Ok(project);
     }
 

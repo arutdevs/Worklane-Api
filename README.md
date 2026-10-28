@@ -74,7 +74,7 @@ Keep the image as a literal `name:tag@sha256:…`. Do not wrap it in `${IMAGE:-�
 1. Open the Angular app (`ng serve` on http://localhost:4200) → redirected to `/login`. This compose file does not start it. Login calls can go through nginx at http://127.0.0.1:8080, which is the trusted proxy below.
 2. Register a new account (or use the demo login above) → lands in your personal workspace.
 3. Go to **Projects** → create a project (name + key, e.g. `WL`). It starts with
-   **To Do / In Progress / Done**, or **ต้องทำ / กำลังทำ / เสร็จแล้ว** when the account locale is Thai.
+   **To Do / In Progress / Done**, or **ต้องทำ / กำลังทำ / เสร็จแล้ว** when the UI language at creation is Thai. Those names are stored as text.
 4. Open the board → add cards, drag them between columns, give them an estimate in days.
    Entering **In Progress** starts the clock; reaching **Done** stops it.
 5. Open **Dashboard** → estimated against actual man-days, per person.
@@ -95,13 +95,15 @@ Keep the image as a literal `name:tag@sha256:…`. Do not wrap it in `${IMAGE:-�
 
 `POST /api/auth/register` returns **201** with the same token body as login. A second registration of the same email returns **409** `email_already_registered`, including when the two requests race. The user, membership, workspace, and refresh token are one transaction; the loser rolls back, so a failed race leaves no extra rows.
 
-The personal workspace name and the columns of projects that user later creates follow one locale. English is the default.
+The personal workspace name follows the locale chosen at signup. English is the default. Default column names are chosen later, when the project is created, and stored as plain text.
 
 1. `preferredLanguage` on the register body, when it is not blank, wins. A primary language tag of `th` (`th`, `th-TH`) selects Thai. Any other explicit value, including `en` and `en-US`, selects English and does not consult the header.
 2. When the field is omitted, the `Accept-Language` header is used. Ranges are ordered by quality. Unsupported tags are skipped. The first remaining `th` or `en` range wins, so `th-TH,en;q=0.8` is Thai and `en-US,th;q=0.8` is English.
 3. Otherwise the locale is `en`.
 
-Thai seeds the workspace as `เวิร์กสเปซของ {displayName}` and project columns `ต้องทำ`, `กำลังทำ`, `เสร็จแล้ว`. English stays `{displayName}'s Workspace` and `To Do`, `In Progress`, `Done`. The stored `preferredLanguage` is only `th` or `en`.
+Thai names the workspace `เวิร์กสเปซของ {displayName}`. English names it `{displayName}'s Workspace`. The stored `preferredLanguage` is only `th` or `en`.
+
+`POST /api/workspaces/{id}/projects` names the three starting columns from the locale of that request. Optional body field `language` wins: a primary tag of `th` (`th`, `th-TH`) stores `ต้องทำ`, `กำลังทำ`, `เสร็จแล้ว`; any other explicit value stores `To Do`, `In Progress`, `Done`. When `language` is omitted, the same `Accept-Language` rules apply, and anything else is English. The account's `preferredLanguage` is not read. A `language` longer than 35 characters is **400** `validation_failed` (`fieldCodes.Language` includes `maximum_length`). Renaming a column leaves that text as saved.
 
 `POST /api/workspaces` (bearer auth) creates another workspace. Body is `{ "name": string }`, required, at most 200 characters; blank or whitespace is **400** `validation_failed`. The caller becomes `Owner`. The slug comes from the name with the same normalization and suffix retry as signup (`name`, then `name-1`, …). Eight lost races return **409** `workspace_slug_unavailable`. The response is the workspace object with `myRole` `Owner`. A caller only sees workspaces they belong to.
 

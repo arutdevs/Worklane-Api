@@ -5,7 +5,12 @@ namespace Worklane.Application.Projects.Interfaces;
 public interface IProjectService
 {
     Task<List<ProjectDto>> GetProjectsAsync(Guid workspaceId, CancellationToken cancellationToken);
-    Task<ProjectDto> CreateProjectAsync(Guid workspaceId, Guid createdByUserId, CreateProjectRequest request, CancellationToken cancellationToken);
+    Task<ProjectDto> CreateProjectAsync(
+        Guid workspaceId,
+        Guid createdByUserId,
+        CreateProjectRequest request,
+        string? acceptLanguage,
+        CancellationToken cancellationToken);
     Task<ProjectDto> UpdateProjectAsync(Guid projectId, UpdateProjectRequest request, CancellationToken cancellationToken);
     Task ArchiveProjectAsync(Guid projectId, CancellationToken cancellationToken);
 
