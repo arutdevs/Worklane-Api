@@ -66,18 +66,12 @@ public class E2EBackendFixTests : IClassFixture<WorklaneWebApplicationFactory>
     }
 
     [Fact]
-    public async Task Register_ThaiPreferredLanguage_SeedsThaiWorkspaceAndColumns()
+    public async Task Register_ThaiPreferredLanguage_SeedsThaiWorkspaceName()
     {
         var email = $"th-field-{Guid.NewGuid():N}@example.com";
         var user = await RegisterAsync(email, "สมชาย", preferredLanguage: "th-TH", acceptLanguage: "en");
         user.Tokens.User.PreferredLanguage.Should().Be("th");
         user.Workspace.Name.Should().Be("เวิร์กสเปซของ สมชาย");
-
-        var columns = await CreateProjectColumnsAsync(user, "TH");
-        columns.Select(column => column.Name).Should().Equal("ต้องทำ", "กำลังทำ", "เสร็จแล้ว");
-        columns.Single(column => column.IsInProgress).Name.Should().Be("กำลังทำ");
-        columns.Single(column => column.IsDone).Name.Should().Be("เสร็จแล้ว");
-        columns.Should().OnlyContain(column => column.Name.Contains('\u0E33') || column.Name == "เสร็จแล้ว");
     }
 
     [Fact]

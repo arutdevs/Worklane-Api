@@ -138,7 +138,12 @@ public class RequireWorkspaceRoleFilterTests
 
         public Task<List<ProjectDto>> GetProjectsAsync(Guid workspaceId, CancellationToken cancellationToken) =>
             throw new NotImplementedException();
-        public Task<ProjectDto> CreateProjectAsync(Guid workspaceId, Guid createdByUserId, CreateProjectRequest request, CancellationToken cancellationToken) =>
+        public Task<ProjectDto> CreateProjectAsync(
+            Guid workspaceId,
+            Guid createdByUserId,
+            CreateProjectRequest request,
+            string? acceptLanguage,
+            CancellationToken cancellationToken) =>
             throw new NotImplementedException();
         public Task<ProjectDto> UpdateProjectAsync(Guid projectId, UpdateProjectRequest request, CancellationToken cancellationToken) =>
             throw new NotImplementedException();
