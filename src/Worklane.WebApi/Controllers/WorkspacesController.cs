@@ -44,7 +44,7 @@ public class WorkspacesController : ControllerBase
     }
 
     [HttpPost]
-    [EnableRateLimiting(WorkspaceCreateRateLimitSettings.PolicyName)]
+    [EnableRateLimiting(WorkspaceCreationSettings.PolicyName)]
     public async Task<ActionResult<WorkspaceDto>> Create(CreateWorkspaceRequest request, CancellationToken cancellationToken)
     {
         await _createValidator.ValidateAndThrowAsync(request, cancellationToken);

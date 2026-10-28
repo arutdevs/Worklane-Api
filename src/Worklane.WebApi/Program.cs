@@ -83,8 +83,8 @@ builder.Services.Configure<CommentRateLimitSettings>(
     builder.Configuration.GetSection(CommentRateLimitSettings.SectionName));
 builder.Services.Configure<AuthRateLimitSettings>(
     builder.Configuration.GetSection(AuthRateLimitSettings.SectionName));
-builder.Services.Configure<WorkspaceCreateRateLimitSettings>(
-    builder.Configuration.GetSection(WorkspaceCreateRateLimitSettings.SectionName));
+builder.Services.Configure<WorkspaceCreationSettings>(
+    builder.Configuration.GetSection(WorkspaceCreationSettings.SectionName));
 builder.Services.AddWorklaneForwardedHeaders(builder.Configuration);
 builder.Services.AddRateLimiter(options =>
 {
@@ -138,9 +138,9 @@ builder.Services.AddRateLimiter(options =>
                 AutoReplenishment = true
             });
     });
-    options.AddPolicy(WorkspaceCreateRateLimitSettings.PolicyName, httpContext =>
+    options.AddPolicy(WorkspaceCreationSettings.PolicyName, httpContext =>
     {
-        var settings = httpContext.RequestServices.GetRequiredService<IOptions<WorkspaceCreateRateLimitSettings>>().Value;
+        var settings = httpContext.RequestServices.GetRequiredService<IOptions<WorkspaceCreationSettings>>().Value;
         var permit = settings.PermitLimit < 1 ? 1 : settings.PermitLimit;
         var window = settings.WindowSeconds < 1 ? 1 : settings.WindowSeconds;
         return RateLimitPartition.GetFixedWindowLimiter(

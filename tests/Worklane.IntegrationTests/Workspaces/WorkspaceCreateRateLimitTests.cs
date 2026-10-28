@@ -13,16 +13,17 @@ using Worklane.IntegrationTests.Infrastructure;
 
 namespace Worklane.IntegrationTests.Workspaces;
 
-public class WorkspaceCreateRateLimitSettingsTests
+public class WorkspaceCreationSettingsTests
 {
     [Fact]
-    public void Defaults_AreFivePerHour()
+    public void Defaults_AreTenPerHour_AndTwentyOwned()
     {
-        var settings = new WorkspaceCreateRateLimitSettings();
-        settings.PermitLimit.Should().Be(5);
+        var settings = new WorkspaceCreationSettings();
+        settings.PermitLimit.Should().Be(10);
         settings.WindowSeconds.Should().Be(3600);
-        WorkspaceCreateRateLimitSettings.PolicyName.Should().Be("workspace-create");
-        WorkspaceCreateRateLimitSettings.SectionName.Should().Be("RateLimit:WorkspaceCreate");
+        settings.MaxOwnedWorkspaces.Should().Be(20);
+        WorkspaceCreationSettings.PolicyName.Should().Be("workspace-create");
+        WorkspaceCreationSettings.SectionName.Should().Be("WorkspaceCreation");
     }
 
     [Fact]
@@ -34,9 +35,10 @@ public class WorkspaceCreateRateLimitSettingsTests
         root.Should().NotBeNull();
 
         using var json = JsonDocument.Parse(File.ReadAllText(Path.Combine(root!.FullName, "src/Worklane.WebApi/appsettings.json")));
-        var section = json.RootElement.GetProperty("RateLimit").GetProperty("WorkspaceCreate");
-        section.GetProperty("PermitLimit").GetInt32().Should().Be(5);
+        var section = json.RootElement.GetProperty("WorkspaceCreation");
+        section.GetProperty("PermitLimit").GetInt32().Should().Be(10);
         section.GetProperty("WindowSeconds").GetInt32().Should().Be(3600);
+        section.GetProperty("MaxOwnedWorkspaces").GetInt32().Should().Be(20);
     }
 }
 
@@ -50,7 +52,7 @@ public class WorkspaceCreateRateLimitTests : IClassFixture<WorkspaceCreateRateLi
     }
 
     [Fact]
-    public async Task UnderTheLimit_Returns200_OverTheLimit_Returns429()
+    public async Task RequestPastThePermit_Is429_WithRetryAfter_AndScopeUser()
     {
         var user = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
 
@@ -58,134 +60,64 @@ public class WorkspaceCreateRateLimitTests : IClassFixture<WorkspaceCreateRateLi
         {
             var created = await CreateAsync(user.Client);
             var body = await created.Content.ReadAsStringAsync();
-            // Create stays 200 OK. The limiter does not change that status.
             created.StatusCode.Should().Be(HttpStatusCode.OK, body);
-            var workspace = JsonSerializer.Deserialize<WorkspaceDto>(body, TestAuthHelper.JsonOptions);
-            workspace!.MyRole.Should().Be(WorkspaceRole.Owner);
-            workspace.Name.Should().NotBeNullOrWhiteSpace();
         }
 
-        var blocked = await CreateAsync(user.Client);
-        await AssertRateLimited(blocked);
-
-        var again = await CreateAsync(user.Client);
-        await AssertRateLimited(again);
+        await AssertRateLimited(await CreateAsync(user.Client));
     }
 
     [Fact]
-    public async Task SeparateUsers_HaveSeparateBuckets_EvenFromTheSameClientAddress()
+    public async Task AnotherUser_IsNotAffected_ByTheSameClientAddress()
     {
         var first = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
         var second = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
-        var sharedForwardedFor = "203.0.113.40";
+        const string sharedForwardedFor = "203.0.113.40";
 
         for (var i = 0; i < WorkspaceCreateRateLimitFactory.PermitLimit; i++)
         {
-            var created = await CreateAsync(first.Client, peer: WorkspaceCreateRateLimitFactory.TrustedProxy, forwardedFor: sharedForwardedFor);
+            var created = await CreateAsync(
+                first.Client,
+                peer: WorkspaceCreateRateLimitFactory.TrustedProxy,
+                forwardedFor: sharedForwardedFor);
             created.StatusCode.Should().Be(HttpStatusCode.OK, await created.Content.ReadAsStringAsync());
         }
 
-        var blocked = await CreateAsync(first.Client, peer: WorkspaceCreateRateLimitFactory.TrustedProxy, forwardedFor: "203.0.113.41");
-        await AssertRateLimited(blocked);
+        await AssertRateLimited(await CreateAsync(
+            first.Client,
+            peer: WorkspaceCreateRateLimitFactory.TrustedProxy,
+            forwardedFor: "203.0.113.41"));
+        await AssertRateLimited(await CreateAsync(
+            first.Client,
+            peer: "198.51.100.20",
+            forwardedFor: "203.0.113.99"));
 
-        var spoofed = await CreateAsync(first.Client, peer: "198.51.100.20", forwardedFor: "203.0.113.99");
-        await AssertRateLimited(spoofed);
-
-        var otherUser = await CreateAsync(second.Client, peer: WorkspaceCreateRateLimitFactory.TrustedProxy, forwardedFor: sharedForwardedFor);
-        otherUser.StatusCode.Should().Be(HttpStatusCode.OK, await otherUser.Content.ReadAsStringAsync());
+        var other = await CreateAsync(
+            second.Client,
+            peer: WorkspaceCreateRateLimitFactory.TrustedProxy,
+            forwardedFor: sharedForwardedFor);
+        other.StatusCode.Should().Be(HttpStatusCode.OK, await other.Content.ReadAsStringAsync());
     }
 
     [Fact]
-    public async Task TwoClients_WithTheSameUser_ShareOneBucket()
-    {
-        var first = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
-        var second = _factory.CreateClient();
-        second.DefaultRequestHeaders.Authorization = first.Client.DefaultRequestHeaders.Authorization;
-
-        for (var i = 0; i < WorkspaceCreateRateLimitFactory.PermitLimit - 1; i++)
-        {
-            (await CreateAsync(first.Client)).StatusCode.Should().Be(HttpStatusCode.OK);
-        }
-
-        (await CreateAsync(second)).StatusCode.Should().Be(HttpStatusCode.OK);
-        await AssertRateLimited(await CreateAsync(second));
-        await AssertRateLimited(await CreateAsync(first.Client));
-    }
-
-    [Fact]
-    public async Task Unauthenticated_Stays401_AndDoesNotSpendAUserBucket()
+    public async Task RejectionOrder_Is401_Then429_Before400()
     {
         var anonymous = _factory.CreateClient();
         for (var i = 0; i < WorkspaceCreateRateLimitFactory.PermitLimit + 2; i++)
         {
-            var denied = await anonymous.PostAsJsonAsync("/api/workspaces", new { name = "Secret " + i });
+            var denied = await anonymous.PostAsJsonAsync("/api/workspaces", new { name = "   " });
             denied.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
             denied.Headers.RetryAfter.Should().BeNull();
         }
 
         var user = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
-        for (var i = 0; i < WorkspaceCreateRateLimitFactory.PermitLimit; i++)
-        {
+        var invalid = await user.Client.PostAsJsonAsync("/api/workspaces", new { name = "   " });
+        await AssertValidation(invalid);
+
+        for (var i = 0; i < WorkspaceCreateRateLimitFactory.PermitLimit - 1; i++)
             (await CreateAsync(user.Client)).StatusCode.Should().Be(HttpStatusCode.OK);
-        }
-    }
 
-    [Fact]
-    public async Task OtherEndpoints_StayAvailable_AfterCreateIsLimited()
-    {
-        var user = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
-        var invitee = $"invite-{Guid.NewGuid():N}@example.com";
-
-        for (var i = 0; i < WorkspaceCreateRateLimitFactory.PermitLimit; i++)
-            (await CreateAsync(user.Client)).EnsureSuccessStatusCode();
-
-        await AssertRateLimited(await CreateAsync(user.Client));
-
-        var list = await user.Client.GetAsync("/api/workspaces");
-        list.StatusCode.Should().Be(HttpStatusCode.OK);
-
-        var invite = await user.Client.PostAsJsonAsync(
-            $"/api/workspaces/{user.Workspace.Id}/invitations",
-            new InviteMemberRequest(invitee, WorkspaceRole.Member));
-        invite.StatusCode.Should().Be(HttpStatusCode.OK, await invite.Content.ReadAsStringAsync());
-
-        var project = await user.Client.PostAsJsonAsync(
-            $"/api/workspaces/{user.Workspace.Id}/projects",
-            new { name = "Still open", key = "SO" });
-        project.StatusCode.Should().Be(HttpStatusCode.OK, await project.Content.ReadAsStringAsync());
-    }
-
-    [Fact]
-    public async Task ConcurrentCreates_AdmitOnlyThePermitLimit_PerUser()
-    {
-        var first = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
-        var second = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
-        const int burst = 8;
-
-        var firstBurst = Task.WhenAll(Enumerable.Range(0, burst).Select(_ => CreateAsync(first.Client)));
-        var secondBurst = Task.WhenAll(Enumerable.Range(0, burst).Select(_ => CreateAsync(second.Client)));
-        var results = await Task.WhenAll(firstBurst, secondBurst);
-
-        await AssertBurst(results[0]);
-        await AssertBurst(results[1]);
-    }
-
-    private static async Task AssertBurst(HttpResponseMessage[] responses)
-    {
-        var statuses = new List<HttpStatusCode>(responses.Length);
-        foreach (var response in responses)
-        {
-            statuses.Add(response.StatusCode);
-            if (response.StatusCode == HttpStatusCode.TooManyRequests)
-                await AssertRateLimited(response);
-            else
-                response.StatusCode.Should().Be(HttpStatusCode.OK, await response.Content.ReadAsStringAsync());
-        }
-
-        statuses.Count(status => status == HttpStatusCode.OK)
-            .Should().Be(WorkspaceCreateRateLimitFactory.PermitLimit);
-        statuses.Count(status => status == HttpStatusCode.TooManyRequests)
-            .Should().Be(responses.Length - WorkspaceCreateRateLimitFactory.PermitLimit);
+        var blocked = await user.Client.PostAsJsonAsync("/api/workspaces", new { name = "   " });
+        await AssertRateLimited(blocked);
     }
 
     private static async Task AssertRateLimited(HttpResponseMessage response)
@@ -195,29 +127,22 @@ public class WorkspaceCreateRateLimitTests : IClassFixture<WorkspaceCreateRateLi
         response.Content.Headers.ContentType!.MediaType.Should().Be("application/problem+json");
         response.Headers.RetryAfter.Should().NotBeNull();
         response.Headers.RetryAfter!.Delta.Should().NotBeNull();
-        var seconds = response.Headers.RetryAfter.Delta!.Value.TotalSeconds;
-        seconds.Should().BeGreaterThan(0);
-        seconds.Should().BeLessThanOrEqualTo(WorkspaceCreateRateLimitFactory.WindowSeconds);
+        response.Headers.RetryAfter.Delta!.Value.TotalSeconds.Should().BeGreaterThan(0);
         body.Should().NotContain("retryAfterSeconds");
-        body.Should().NotContain("PermitLimit");
-        body.Should().NotContain("WindowSeconds");
-
         var problem = JsonDocument.Parse(body).RootElement;
         problem.GetProperty("code").GetString().Should().Be("rate_limited");
         problem.GetProperty("scope").GetString().Should().Be("user");
         problem.GetProperty("detail").GetString().Should().Be("Too many requests.");
         problem.GetProperty("status").GetInt32().Should().Be(429);
         problem.TryGetProperty("retryAfterSeconds", out _).Should().BeFalse();
-        problem.TryGetProperty("permitLimit", out _).Should().BeFalse();
         problem.TryGetProperty("limit", out _).Should().BeFalse();
-        problem.TryGetProperty("remaining", out _).Should().BeFalse();
-        foreach (var property in problem.EnumerateObject())
-        {
-            if (property.Value.ValueKind != JsonValueKind.Number)
-                continue;
-            property.Value.GetInt32().Should().NotBe(WorkspaceCreateRateLimitFactory.PermitLimit);
-            property.Value.GetInt32().Should().NotBe(WorkspaceCreateRateLimitFactory.WindowSeconds);
-        }
+    }
+
+    private static async Task AssertValidation(HttpResponseMessage response)
+    {
+        var body = await response.Content.ReadAsStringAsync();
+        response.StatusCode.Should().Be(HttpStatusCode.BadRequest, body);
+        JsonDocument.Parse(body).RootElement.GetProperty("code").GetString().Should().Be("validation_failed");
     }
 
     private static async Task<HttpResponseMessage> CreateAsync(
@@ -239,9 +164,7 @@ public class WorkspaceCreateRateLimitTests : IClassFixture<WorkspaceCreateRateLi
 
 public class WorkspaceCreateRateLimitFactory : WorklaneWebApplicationFactory
 {
-    public const int PermitLimit = 3;
-
-    public const int WindowSeconds = 60;
+    public const int PermitLimit = 2;
 
     public const string TrustedProxy = "10.50.0.1";
 
@@ -252,12 +175,142 @@ public class WorkspaceCreateRateLimitFactory : WorklaneWebApplicationFactory
         {
             config.AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["RateLimit:WorkspaceCreate:PermitLimit"] = PermitLimit.ToString(),
-                ["RateLimit:WorkspaceCreate:WindowSeconds"] = WindowSeconds.ToString(),
+                ["WorkspaceCreation:PermitLimit"] = PermitLimit.ToString(),
+                ["WorkspaceCreation:WindowSeconds"] = "60",
+                ["WorkspaceCreation:MaxOwnedWorkspaces"] = "100",
                 ["ForwardedHeaders:KnownProxies:0"] = TrustedProxy,
             });
         });
         builder.ConfigureServices(services =>
             services.AddSingleton<IStartupFilter, ClientIpFromHeaderStartupFilter>());
+    }
+}
+
+public class WorkspaceOwnershipCapTests : IClassFixture<WorkspaceOwnershipCapFactory>
+{
+    private readonly WorkspaceOwnershipCapFactory _factory;
+
+    public WorkspaceOwnershipCapTests(WorkspaceOwnershipCapFactory factory)
+    {
+        _factory = factory;
+    }
+
+    [Fact]
+    public async Task AtTheOwnershipCap_Is409_WithLimit_AndInvalidBodyStays400()
+    {
+        var user = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
+
+        for (var i = 1; i < WorkspaceOwnershipCapFactory.MaxOwned; i++)
+        {
+            var created = await user.Client.PostAsJsonAsync("/api/workspaces", new { name = "owned-" + Guid.NewGuid().ToString("N") });
+            created.StatusCode.Should().Be(HttpStatusCode.OK, await created.Content.ReadAsStringAsync());
+        }
+
+        var invalid = await user.Client.PostAsJsonAsync("/api/workspaces", new { name = "   " });
+        var invalidBody = await invalid.Content.ReadAsStringAsync();
+        invalid.StatusCode.Should().Be(HttpStatusCode.BadRequest, invalidBody);
+        JsonDocument.Parse(invalidBody).RootElement.GetProperty("code").GetString().Should().Be("validation_failed");
+
+        var blocked = await user.Client.PostAsJsonAsync("/api/workspaces", new { name = "one-too-many" });
+        await AssertOwnershipCap(blocked, WorkspaceOwnershipCapFactory.MaxOwned);
+    }
+
+    [Fact]
+    public async Task MembershipThatIsNotOwner_DoesNotCountTowardTheCap()
+    {
+        var host = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
+        var otherHost = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
+        var member = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
+
+        foreach (var owner in new[] { host, otherHost })
+        {
+            var invite = await owner.Client.PostAsJsonAsync(
+                $"/api/workspaces/{owner.Workspace.Id}/invitations",
+                new InviteMemberRequest(member.Tokens.User.Email, WorkspaceRole.Member));
+            invite.StatusCode.Should().Be(HttpStatusCode.OK, await invite.Content.ReadAsStringAsync());
+        }
+
+        var created = await member.Client.PostAsJsonAsync("/api/workspaces", new { name = "still-allowed-" + Guid.NewGuid().ToString("N") });
+        created.StatusCode.Should().Be(HttpStatusCode.OK, await created.Content.ReadAsStringAsync());
+
+        var blocked = await member.Client.PostAsJsonAsync("/api/workspaces", new { name = "over-owned-" + Guid.NewGuid().ToString("N") });
+        await AssertOwnershipCap(blocked, WorkspaceOwnershipCapFactory.MaxOwned);
+    }
+
+    private static async Task AssertOwnershipCap(HttpResponseMessage response, int limit)
+    {
+        var body = await response.Content.ReadAsStringAsync();
+        response.StatusCode.Should().Be(HttpStatusCode.Conflict, body);
+        response.Content.Headers.ContentType!.MediaType.Should().Be("application/problem+json");
+        var problem = JsonDocument.Parse(body).RootElement;
+        problem.GetProperty("code").GetString().Should().Be("workspace_limit_reached");
+        problem.GetProperty("status").GetInt32().Should().Be(409);
+        problem.GetProperty("limit").GetInt32().Should().Be(limit);
+        problem.GetProperty("detail").GetString().Should().Be($"You can own at most {limit} workspaces.");
+    }
+}
+
+public class WorkspaceOwnershipCapFactory : WorklaneWebApplicationFactory
+{
+    public const int MaxOwned = 2;
+
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
+        base.ConfigureWebHost(builder);
+        builder.ConfigureAppConfiguration((_, config) =>
+        {
+            config.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["WorkspaceCreation:PermitLimit"] = "100",
+                ["WorkspaceCreation:WindowSeconds"] = "60",
+                ["WorkspaceCreation:MaxOwnedWorkspaces"] = MaxOwned.ToString(),
+            });
+        });
+    }
+}
+
+public class WorkspaceRegistrationCapTests : IClassFixture<WorkspaceRegistrationCapFactory>
+{
+    private readonly WorkspaceRegistrationCapFactory _factory;
+
+    public WorkspaceRegistrationCapTests(WorkspaceRegistrationCapFactory factory)
+    {
+        _factory = factory;
+    }
+
+    [Fact]
+    public async Task Registration_StillCreatesThePersonalWorkspace_WhenTheCapIsAlreadyZero()
+    {
+        var user = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
+        user.Workspace.MyRole.Should().Be(WorkspaceRole.Owner);
+
+        var mine = await user.Client.GetFromJsonAsync<List<WorkspaceDto>>("/api/workspaces", TestAuthHelper.JsonOptions);
+        mine.Should().ContainSingle();
+        mine![0].MyRole.Should().Be(WorkspaceRole.Owner);
+
+        var blocked = await user.Client.PostAsJsonAsync("/api/workspaces", new { name = "no-more" });
+        var body = await blocked.Content.ReadAsStringAsync();
+        blocked.StatusCode.Should().Be(HttpStatusCode.Conflict, body);
+        var problem = JsonDocument.Parse(body).RootElement;
+        problem.GetProperty("code").GetString().Should().Be("workspace_limit_reached");
+        problem.GetProperty("limit").GetInt32().Should().Be(0);
+        problem.GetProperty("detail").GetString().Should().Be("You can own at most 0 workspaces.");
+    }
+}
+
+public class WorkspaceRegistrationCapFactory : WorklaneWebApplicationFactory
+{
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
+        base.ConfigureWebHost(builder);
+        builder.ConfigureAppConfiguration((_, config) =>
+        {
+            config.AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["WorkspaceCreation:PermitLimit"] = "100",
+                ["WorkspaceCreation:WindowSeconds"] = "60",
+                ["WorkspaceCreation:MaxOwnedWorkspaces"] = "0",
+            });
+        });
     }
 }

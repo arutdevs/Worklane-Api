@@ -71,9 +71,10 @@ public class WorklaneWebApplicationFactory : WebApplicationFactory<Program>, IAs
                 ["RateLimit:Auth:PermitLimit"] = "10000",
                 ["RateLimit:Auth:WindowSeconds"] = "60",
                 // Several tests create more than one workspace for the same user.
-                // Production stays at RateLimit:WorkspaceCreate.
-                ["RateLimit:WorkspaceCreate:PermitLimit"] = "10000",
-                ["RateLimit:WorkspaceCreate:WindowSeconds"] = "60",
+                // Production stays at WorkspaceCreation.
+                ["WorkspaceCreation:PermitLimit"] = "10000",
+                ["WorkspaceCreation:WindowSeconds"] = "60",
+                ["WorkspaceCreation:MaxOwnedWorkspaces"] = "10000",
                 ["Frontend:BaseUrl"] = "http://web.test"
             });
         });

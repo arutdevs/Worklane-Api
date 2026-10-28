@@ -25,6 +25,7 @@ public class WorkspaceService : IWorkspaceService
     private readonly IEmailService _emailService;
     private readonly IRealtimeGroupMembership _realtime;
     private readonly FrontendSettings _frontendSettings;
+    private readonly WorkspaceCreationSettings _workspaceCreation;
 
     public WorkspaceService(
         WorklaneDbContext db,
@@ -32,7 +33,8 @@ public class WorkspaceService : IWorkspaceService
         ILogger<WorkspaceService> logger,
         IEmailService emailService,
         IRealtimeGroupMembership realtime,
-        IOptions<FrontendSettings> frontendSettings)
+        IOptions<FrontendSettings> frontendSettings,
+        IOptions<WorkspaceCreationSettings> workspaceCreation)
     {
         _db = db;
         _userManager = userManager;
@@ -40,6 +42,7 @@ public class WorkspaceService : IWorkspaceService
         _emailService = emailService;
         _realtime = realtime;
         _frontendSettings = frontendSettings.Value;
+        _workspaceCreation = workspaceCreation.Value;
     }
 
     public async Task<List<WorkspaceDto>> GetMyWorkspacesAsync(Guid userId, CancellationToken cancellationToken)
@@ -73,6 +76,18 @@ public class WorkspaceService : IWorkspaceService
         WorkspaceSlug.UniqueSlug slug,
         CancellationToken cancellationToken)
     {
+        var limit = _workspaceCreation.MaxOwnedWorkspaces;
+        var owned = await _db.WorkspaceMembers
+            .IgnoreQueryFilters()
+            .CountAsync(m => m.UserId == ownerUserId && m.Role == WorkspaceRole.Owner, cancellationToken);
+        if (owned >= limit)
+        {
+            throw new ConflictException(
+                "workspace_limit_reached",
+                $"You can own at most {limit} workspaces.",
+                new Dictionary<string, object?> { ["limit"] = limit });
+        }
+
         var workspace = new Workspace
         {
             Id = Guid.NewGuid(),
