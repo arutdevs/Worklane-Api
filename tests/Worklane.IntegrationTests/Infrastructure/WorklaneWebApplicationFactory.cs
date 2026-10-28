@@ -11,11 +11,8 @@ namespace Worklane.IntegrationTests.Infrastructure;
 
 public class WorklaneWebApplicationFactory : WebApplicationFactory<Program>, IAsyncLifetime
 {
-    private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder("postgres:16-alpine")
-        .WithDatabase("worklane_test")
-        .WithUsername("worklane")
-        .WithPassword("worklane")
-        .Build();
+    private readonly PostgreSqlContainer? _postgres;
+    private readonly string? _connectionString;
 
     /// <summary>
     /// Per-fixture attachment directory, and a small cap so tests can prove the 413
@@ -32,7 +29,33 @@ public class WorklaneWebApplicationFactory : WebApplicationFactory<Program>, IAs
     public const long TestMaxUploadBytes = 2048;
 
     public WorklaneWebApplicationFactory()
+        : this(ownedContainer: true, connectionString: null)
     {
+    }
+
+    /// <summary>
+    /// Host against a database the caller already prepared. The caller owns that server.
+    /// </summary>
+    internal WorklaneWebApplicationFactory(string connectionString)
+        : this(ownedContainer: false, connectionString)
+    {
+    }
+
+    private WorklaneWebApplicationFactory(bool ownedContainer, string? connectionString)
+    {
+        if (ownedContainer)
+        {
+            _postgres = new PostgreSqlBuilder("postgres:16-alpine")
+                .WithDatabase("worklane_test")
+                .WithUsername("worklane")
+                .WithPassword("worklane")
+                .Build();
+        }
+        else
+        {
+            _connectionString = connectionString ?? throw new ArgumentNullException(nameof(connectionString));
+        }
+
         Directory.CreateDirectory(AttachmentPath);
         Directory.CreateDirectory(DataProtectionKeysPath);
     }
@@ -41,12 +64,14 @@ public class WorklaneWebApplicationFactory : WebApplicationFactory<Program>, IAs
 
     public async Task InitializeAsync()
     {
-        await _postgres.StartAsync();
+        if (_postgres is not null)
+            await _postgres.StartAsync();
     }
 
     public new async Task DisposeAsync()
     {
-        await _postgres.DisposeAsync();
+        if (_postgres is not null)
+            await _postgres.DisposeAsync();
         if (Directory.Exists(AttachmentPath))
             Directory.Delete(AttachmentPath, recursive: true);
         if (Directory.Exists(DataProtectionKeysPath))
@@ -61,7 +86,7 @@ public class WorklaneWebApplicationFactory : WebApplicationFactory<Program>, IAs
         {
             configBuilder.AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["ConnectionStrings:Default"] = _postgres.GetConnectionString(),
+                ["ConnectionStrings:Default"] = _connectionString ?? _postgres!.GetConnectionString(),
                 ["FileStorage:LocalPath"] = AttachmentPath,
                 ["FileStorage:MaxBytes"] = TestMaxUploadBytes.ToString(),
                 ["Jwt:Secret"] = JwtSecret,

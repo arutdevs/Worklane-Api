@@ -1,4 +1,5 @@
 using System.Data;
+using System.Diagnostics.CodeAnalysis;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
@@ -155,13 +156,14 @@ public class WorkspaceService : IWorkspaceService
                 return new InvitationDto(Guid.Empty, request.Email, request.Role, DateTimeOffset.UtcNow, null);
             }
 
+            var rawToken = InviteTokens.Generate();
             invitation = new Invitation
             {
                 Id = Guid.NewGuid(),
                 WorkspaceId = workspaceId,
                 Email = request.Email,
                 Role = request.Role,
-                Token = Convert.ToHexString(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)),
+                TokenHash = InviteTokens.Hash(rawToken),
                 InvitedById = invitedByUserId,
                 ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
                 CreatedAt = DateTimeOffset.UtcNow
@@ -170,13 +172,15 @@ public class WorkspaceService : IWorkspaceService
             await _db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
 
-            absoluteLink = InviteLinks.ForToken(_frontendSettings.BaseUrl, invitation.Token);
-            _logger.LogInformation("Invitation created for {Email} to workspace {WorkspaceId}: {InviteLink}", request.Email, workspaceId, absoluteLink);
+            absoluteLink = InviteLinks.ForToken(_frontendSettings.BaseUrl, rawToken);
+            _logger.LogInformation(
+                "Invitation created for {Email} in workspace {WorkspaceId}",
+                request.Email,
+                workspaceId);
         }
 
-        // Best-effort: a workspace member is invited either way, and the link above is
-        // logged, so a delivery failure (no SMTP credentials configured, provider outage)
-        // should not fail invite creation — it just falls back to sharing the link by hand.
+        // Best-effort. The invitation is already saved and the response carries the
+        // link. A delivery failure should not fail invite creation.
         try
         {
             var workspaceName = await _db.Workspaces
@@ -194,7 +198,7 @@ public class WorkspaceService : IWorkspaceService
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to send invitation email to {Email}; the link above still works", request.Email);
+            _logger.LogWarning(ex, "Failed to send invitation email to {Email}", request.Email);
         }
 
         return new InvitationDto(invitation!.Id, invitation.Email, invitation.Role, invitation.ExpiresAt, absoluteLink);
@@ -203,11 +207,10 @@ public class WorkspaceService : IWorkspaceService
     public async Task AcceptInvitationAsync(Guid acceptingUserId, string token, CancellationToken cancellationToken)
     {
         // Accept runs with no tenant pinned. IgnoreQueryFilters keeps the lookup working
-        // when the membership filter is fail-closed.
-        var invitation = await _db.Invitations
-            .IgnoreQueryFilters()
-            .SingleOrDefaultAsync(i => i.Token == token, cancellationToken);
-        if (invitation is null || invitation.AcceptedAt is not null || invitation.ExpiresAt < DateTimeOffset.UtcNow)
+        // when the membership filter is fail-closed. The row is found by the hash, so a
+        // token from another workspace still resolves only to the workspace that issued it.
+        var invitation = await FindByTokenAsync(token, cancellationToken);
+        if (IsUnusable(invitation))
         {
             throw new NotFoundException("Invitation is invalid or has expired.");
         }
@@ -221,10 +224,8 @@ public class WorkspaceService : IWorkspaceService
         var workspaceId = invitation.WorkspaceId;
         await using var transaction = await BeginLockedMembershipChangeAsync(workspaceId, cancellationToken);
 
-        invitation = await _db.Invitations
-            .IgnoreQueryFilters()
-            .SingleOrDefaultAsync(i => i.Token == token, cancellationToken);
-        if (invitation is null || invitation.AcceptedAt is not null || invitation.ExpiresAt < DateTimeOffset.UtcNow)
+        invitation = await FindByTokenAsync(token, cancellationToken);
+        if (IsUnusable(invitation))
         {
             throw new NotFoundException("Invitation is invalid or has expired.");
         }
@@ -341,6 +342,17 @@ public class WorkspaceService : IWorkspaceService
 
         return member?.Role;
     }
+
+    private Task<Invitation?> FindByTokenAsync(string token, CancellationToken cancellationToken)
+    {
+        var tokenHash = InviteTokens.Hash(token);
+        return _db.Invitations
+            .IgnoreQueryFilters()
+            .SingleOrDefaultAsync(i => i.TokenHash == tokenHash, cancellationToken);
+    }
+
+    private static bool IsUnusable([NotNullWhen(false)] Invitation? invitation) =>
+        invitation is null || invitation.AcceptedAt is not null || invitation.ExpiresAt < DateTimeOffset.UtcNow;
 
     /// <summary>
     /// Role comes from this workspace's membership row. The route filter has already pinned

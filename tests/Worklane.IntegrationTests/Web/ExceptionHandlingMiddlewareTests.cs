@@ -3,6 +3,7 @@ using System.Net;
 using System.Text.Json;
 using FluentAssertions;
 using FluentValidation;
+using Microsoft.EntityFrameworkCore;
 using FluentValidation.Results;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -11,7 +12,9 @@ using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Npgsql;
 using Worklane.Application.Common.Exceptions;
+using Worklane.Infrastructure.Persistence;
 using Worklane.WebApi.Middleware;
 
 namespace Worklane.IntegrationTests.Web;
@@ -253,7 +256,42 @@ public class ExceptionHandlingMiddlewareTests
         public override HttpStatusCode StatusCode => (HttpStatusCode)418;
     }
 
-    private sealed record LoggedException(LogLevel Level, Exception? Exception);
+    [Fact]
+    public async Task UniqueViolation_LogOmitsTheDuplicateKey()
+    {
+        const string token = "INVITE-TOKEN-SHOULD-NOT-BE-LOGGED";
+        var postgres = new PostgresException(
+            $"duplicate key value violates unique constraint \"IX_Invitations_TokenHash\" DETAIL: Key (\"TokenHash\")=({token})",
+            "ERROR",
+            "ERROR",
+            PostgresErrorCodes.UniqueViolation,
+            constraintName: "IX_Invitations_TokenHash",
+            detail: $"Key (\"TokenHash\")=({token}) already exists.");
+        var logs = new List<LoggedException>();
+        var middleware = new ExceptionHandlingMiddleware(
+            _ => throw new DbUpdateException("SaveChanges failed", postgres),
+            new CollectingLogger<ExceptionHandlingMiddleware>(logs));
+        var context = new DefaultHttpContext();
+        context.Request.Path = "/api/workspaces/example/invitations";
+        context.Response.Body = new MemoryStream();
+
+        await middleware.InvokeAsync(context);
+
+        context.Response.StatusCode.Should().Be(StatusCodes.Status409Conflict);
+        context.Response.Body.Position = 0;
+        var raw = await new StreamReader(context.Response.Body).ReadToEndAsync();
+        raw.Should().NotContain(token);
+        raw.Should().Contain("invitation_token_taken");
+
+        var logged = logs.Should().ContainSingle().Subject;
+        logged.Level.Should().Be(LogLevel.Warning);
+        logged.Exception.Should().BeNull();
+        logged.Message.Should().Contain("IX_Invitations_TokenHash");
+        logged.Message.Should().NotContain(token);
+        logged.Message.Should().NotContain("already exists");
+    }
+
+    private sealed record LoggedException(LogLevel Level, Exception? Exception, string Message);
 
     private sealed class CollectingLogger<T>(List<LoggedException> entries) : ILogger<T>
     {
@@ -263,7 +301,7 @@ public class ExceptionHandlingMiddlewareTests
 
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
         {
-            entries.Add(new LoggedException(logLevel, exception));
+            entries.Add(new LoggedException(logLevel, exception, formatter(state, exception)));
         }
     }
 }

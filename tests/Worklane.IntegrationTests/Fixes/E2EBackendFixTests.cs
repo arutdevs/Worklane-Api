@@ -184,7 +184,13 @@ public class E2EBackendFixTests : IClassFixture<WorklaneWebApplicationFactory>
         await using var scope = _factory.Services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<WorklaneDbContext>();
         var stored = await db.Invitations.IgnoreQueryFilters().SingleAsync(row => row.Email == pendingEmail);
-        invitation.InviteLink.Should().Be(InviteLinks.ForToken("http://web.test", stored.Token));
+        const string marker = "token=";
+        var tokenStart = invitation.InviteLink!.IndexOf(marker, StringComparison.Ordinal);
+        tokenStart.Should().BeGreaterThanOrEqualTo(0);
+        var token = invitation.InviteLink[(tokenStart + marker.Length)..];
+        invitation.InviteLink.Should().Be(InviteLinks.ForToken("http://web.test", token));
+        stored.TokenHash.Should().Be(InviteTokens.Hash(token));
+        stored.TokenHash.Should().NotBe(token);
     }
 
     [Theory]
