@@ -11,6 +11,7 @@ using Worklane.Application.Workspaces.Dtos;
 using Worklane.Domain.Entities;
 using Worklane.Domain.Enums;
 using Worklane.Infrastructure.Persistence;
+using Worklane.Infrastructure.Services;
 using Worklane.IntegrationTests.Infrastructure;
 
 namespace Worklane.IntegrationTests.Workspaces;
@@ -469,7 +470,7 @@ public class WorkspaceAuthorizationTests : IClassFixture<WorklaneWebApplicationF
 
         using var scope = _factory.Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<WorklaneDbContext>();
-        var invitation = await db.Invitations.IgnoreQueryFilters().SingleAsync(i => i.Token == token);
+        var invitation = await db.Invitations.IgnoreQueryFilters().SingleAsync(i => i.TokenHash == InviteTokens.Hash(token));
         invitation.AcceptedAt.Should().BeNull();
     }
 
