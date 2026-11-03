@@ -58,6 +58,10 @@ public static class DependencyInjection
             .Bind(configuration.GetSection(FrontendSettings.SectionName))
             .ValidateOnStart();
         services.AddSingleton<IValidateOptions<FrontendSettings>, FrontendSettingsValidator>();
+        services.AddOptions<TaskSettings>()
+            .Bind(configuration.GetSection(TaskSettings.SectionName))
+            .Validate(static settings => settings.MaxChildrenPerParent > 0, "Tasks:MaxChildrenPerParent must be greater than 0.")
+            .ValidateOnStart();
         services.AddOptions<FileStorageSettings>()
             .Configure<IConfiguration>((settings, config) =>
             {

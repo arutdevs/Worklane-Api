@@ -40,6 +40,11 @@ public class TaskItem
     public DateTimeOffset UpdatedAt { get; set; }
     public bool IsArchived { get; set; }
 
+    /// <summary>Optional parent in the same project. Null when this card is not a subtask.</summary>
+    public Guid? ParentTaskId { get; set; }
+
     public Project Project { get; set; } = null!;
     public BoardColumn Column { get; set; } = null!;
+    public TaskItem? Parent { get; set; }
+    public ICollection<TaskItem> Children { get; set; } = new List<TaskItem>();
 }

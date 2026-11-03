@@ -40,6 +40,31 @@ public class TaskItemConfiguration : IEntityTypeConfiguration<TaskItem>
             .HasForeignKey(t => t.ColumnId)
             .OnDelete(DeleteBehavior.Restrict);
 
+        // Exists so the self-FK can target (ProjectId, Id). Id is already the primary key;
+        // a duplicate here is not a user-facing conflict.
+        builder.HasAlternateKey(t => new { t.ProjectId, t.Id })
+            .HasName("AK_TaskItems_ProjectId_Id");
+
+        // Same project is required: (ProjectId, ParentTaskId) matches a row in this project.
+        // RESTRICT so a parent cannot disappear while a child still points at it.
+        // Project cascade deletes tasks; a hard delete of a project that still has links
+        // fails until those links are cleared. No project hard-delete path exists.
+        builder.HasOne(t => t.Parent)
+            .WithMany(t => t.Children)
+            .HasForeignKey(t => new { t.ProjectId, t.ParentTaskId })
+            .HasPrincipalKey(t => new { t.ProjectId, t.Id })
+            .OnDelete(DeleteBehavior.Restrict)
+            .IsRequired(false)
+            .HasConstraintName("FK_TaskItems_TaskItems_ProjectId_ParentTaskId");
+
+        builder.HasIndex(t => new { t.ProjectId, t.ParentTaskId })
+            .HasDatabaseName("IX_TaskItems_ProjectId_ParentTaskId")
+            .HasFilter("\"ParentTaskId\" IS NOT NULL");
+
+        builder.ToTable(t => t.HasCheckConstraint(
+            "CK_TaskItems_NotSelfParent",
+            "\"ParentTaskId\" IS NULL OR \"ParentTaskId\" <> \"Id\""));
+
         // Unique per-project task number (display key generation)
         builder.HasIndex(t => new { t.ProjectId, t.Number }).IsUnique();
 

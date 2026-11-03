@@ -47,6 +47,16 @@ public class ExceptionHandlingMiddleware
                 conflict.Code);
             exception = conflict;
         }
+        else if (ParentLinkConflicts.Translate(exception) is { } parentConflict)
+        {
+            _logger.LogWarning(
+                exception,
+                "Parent link failure on {Method} {Path} mapped to {Code}",
+                context.Request.Method,
+                context.Request.Path,
+                parentConflict.Code);
+            exception = parentConflict;
+        }
 
         var statusCode = exception switch
         {

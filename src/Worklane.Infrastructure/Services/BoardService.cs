@@ -1,9 +1,12 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 using Npgsql;
 using Worklane.Application.Board.Dtos;
 using Worklane.Application.Board.Interfaces;
 using Worklane.Application.Common.Exceptions;
 using Worklane.Application.Common.Interfaces;
+using Worklane.Application.Common.Options;
 using Worklane.Domain.Common;
 using Worklane.Domain.Entities;
 using Worklane.Domain.Enums;
@@ -12,17 +15,26 @@ using Worklane.Infrastructure.Persistence;
 
 namespace Worklane.Infrastructure.Services;
 
-public class BoardService : IBoardService
+public partial class BoardService : IBoardService
 {
     private readonly WorklaneDbContext _db;
     private readonly IBoardNotifier _notifier;
     private readonly ICurrentTenantService _tenant;
+    private readonly ILogger<BoardService> _logger;
+    private readonly int _maxChildren;
 
-    public BoardService(WorklaneDbContext db, IBoardNotifier notifier, ICurrentTenantService tenant)
+    public BoardService(
+        WorklaneDbContext db,
+        IBoardNotifier notifier,
+        ICurrentTenantService tenant,
+        IOptions<TaskSettings> tasks,
+        ILogger<BoardService> logger)
     {
         _db = db;
         _notifier = notifier;
         _tenant = tenant;
+        _logger = logger;
+        _maxChildren = tasks.Value.MaxChildrenPerParent;
     }
 
     // ── Columns ──────────────────────────────────────────────────────────────
@@ -45,6 +57,7 @@ public class BoardService : IBoardService
         var assigneeMap = await BuildAssigneeMapAsync(tasks, ct);
         var cardCounts = await LoadCardCountsAsync(tasks.Select(t => t.Id), ct);
         var archivedCounts = await LoadArchivedTaskCountsAsync(columns.Select(c => c.Id), ct);
+        var links = await LoadParentLinksAsync(tasks, ct);
 
         return columns.Select(col =>
         {
@@ -52,7 +65,7 @@ public class BoardService : IBoardService
             var over = IsOverWip(col.WipLimit, colTasks.Count);
             return new BoardColumnDto(
                 col.Id, col.ProjectId, col.Name, col.Order, col.IsDone, col.IsInProgress,
-                colTasks.Select(t => ToDto(t, project.Key, assigneeMap, over, cardCounts)).ToList(),
+                colTasks.Select(t => ToDto(t, project.Key, assigneeMap, over, cardCounts, links)).ToList(),
                 col.WipLimit, colTasks.Count, over, archivedCounts.GetValueOrDefault(col.Id));
         }).ToList();
     }
@@ -208,61 +221,18 @@ public class BoardService : IBoardService
 
         var columnId = column.Id;
 
-        // Atomic per-project counter via PostgreSQL upsert.
-        // The INSERT ... RETURNING is non-composable, so it must be materialised without
-        // any LINQ operator on top of it (FirstAsync would compose a LIMIT over it and
-        // throw). SqlQuery<T> shapes a scalar from a column named "Value".
-        var numbers = await _db.Database.SqlQuery<int>(
-            $"""
-            INSERT INTO "ProjectTaskCounters" ("ProjectId", "LastNumber")
-            VALUES ({projectId}, 1)
-            ON CONFLICT ("ProjectId") DO UPDATE
-            SET "LastNumber" = "ProjectTaskCounters"."LastNumber" + 1
-            RETURNING "LastNumber" AS "Value"
-            """).ToListAsync(ct);
-        var number = numbers[0];
+        if (request.ParentTaskId is Guid parentTaskId)
+            return await CreateLinkedTaskAsync(project, column, request, userId, parentTaskId, ct);
 
-        var maxOrder = await _db.TaskItems
-            .Where(t => t.ColumnId == columnId)
-            .MaxAsync(t => (double?)t.Order, ct) ?? 0;
-
+        var number = await NextTaskNumberAsync(projectId, ct);
         var now = DateTimeOffset.UtcNow;
-        var task = new TaskItem
-        {
-            Id = Guid.NewGuid(),
-            ProjectId = projectId,
-            ColumnId = columnId,
-            Number = number,
-            Title = request.Title,
-            Description = request.Description,
-            AssigneeId = request.AssigneeId,
-            Priority = request.Priority,
-            DueDate = request.DueDate,
-            Order = maxOrder + 65536.0,
-            EstimateDays = request.EstimateDays,
-            StartedAt = column.IsInProgress ? now : null,
-            CompletedAt = column.IsDone ? now : null,
-            CreatedById = userId,
-            CreatedAt = now,
-            UpdatedAt = now,
-            IsArchived = false
-        };
+        var task = NewTask(projectId, column, request, userId, number, await NextOrderAsync(columnId, ct), now, parentTaskId: null);
 
         _db.TaskItems.Add(task);
-        _db.TaskActivities.Add(new TaskActivity
-        {
-            Id = Guid.NewGuid(),
-            TaskId = task.Id,
-            Type = TaskActivityType.Created,
-            FromColumnId = null,
-            ToColumnId = columnId,
-            ActorUserId = userId,
-            CreatedAt = now,
-            Details = ActivityJson.Of(new { columnId, columnName = column.Name, title = task.Title })
-        });
+        AddCreatedActivity(task, column, userId, now);
         await _db.SaveChangesAsync(ct);
 
-        var dto = ToDto(task, project.Key, await BuildAssigneeMapAsync([task], ct), await IsColumnOverWipAsync(columnId, ct), await LoadCardCountsAsync([task.Id], ct));
+        var dto = await MapTaskAsync(task, project.Key, ct);
         await _notifier.TaskCreatedAsync(projectId, dto, ct);
         return dto;
     }
@@ -274,7 +244,7 @@ public class BoardService : IBoardService
             .FirstOrDefaultAsync(t => t.Id == taskId, ct)
             ?? throw new NotFoundException(nameof(TaskItem), taskId);
 
-        return ToDto(task, task.Project.Key, await BuildAssigneeMapAsync([task], ct), await IsColumnOverWipAsync(task.ColumnId, ct), await LoadCardCountsAsync([task.Id], ct));
+        return await MapTaskAsync(task, task.Project.Key, ct);
     }
 
     public async Task<TaskItemDto> UpdateTaskAsync(Guid taskId, UpdateTaskRequest request, Guid userId, CancellationToken ct = default)
@@ -364,6 +334,17 @@ public class BoardService : IBoardService
 
         var fromColumnId = task.ColumnId;
         var changedColumn = fromColumnId != toColumn.Id;
+        var fromIsDone = false;
+        string? fromColumnName = null;
+        if (changedColumn)
+        {
+            var fromColumn = await _db.BoardColumns
+                .Where(c => c.Id == fromColumnId)
+                .Select(c => new { c.Name, c.IsDone })
+                .FirstOrDefaultAsync(ct);
+            fromIsDone = fromColumn?.IsDone ?? false;
+            fromColumnName = fromColumn?.Name;
+        }
 
         // Siblings = all non-archived tasks in target column except the task being moved
         var siblings = await _db.TaskItems
@@ -395,11 +376,6 @@ public class BoardService : IBoardService
             // CompletedAt always reflects the current state: set on arriving in a done
             // column, cleared when the task is pulled back out of one.
             task.CompletedAt = toColumn.IsDone ? now : null;
-
-            var fromColumnName = await _db.BoardColumns
-                .Where(c => c.Id == fromColumnId)
-                .Select(c => c.Name)
-                .FirstOrDefaultAsync(ct);
 
             _db.TaskActivities.Add(new TaskActivity
             {
@@ -433,17 +409,9 @@ public class BoardService : IBoardService
         await _db.SaveChangesAsync(ct);
         var dto = await GetTaskAsync(taskId, ct);
         await _notifier.TaskMovedAsync(dto.ProjectId, dto, ct);
+        if (changedColumn && fromIsDone != toColumn.IsDone && dto.ParentTaskId is Guid parentId)
+            await NotifyParentCountsAsync(parentId, ct);
         return dto;
-    }
-
-    public async Task ArchiveTaskAsync(Guid taskId, CancellationToken ct = default)
-    {
-        var task = await _db.TaskItems.FirstOrDefaultAsync(t => t.Id == taskId, ct)
-            ?? throw new NotFoundException(nameof(TaskItem), taskId);
-
-        task.IsArchived = true;
-        task.UpdatedAt = DateTimeOffset.UtcNow;
-        await _db.SaveChangesAsync(ct);
     }
 
     public async Task<IReadOnlyList<TaskItemDto>> GetTasksAsync(
@@ -465,8 +433,9 @@ public class BoardService : IBoardService
         var assigneeMap = await BuildAssigneeMapAsync(tasks, ct);
         var wip = await LoadWipAsync(tasks.Select(t => t.ColumnId), ct);
         var cardCounts = await LoadCardCountsAsync(tasks.Select(t => t.Id), ct);
+        var links = await LoadParentLinksAsync(tasks, ct);
 
-        return tasks.Select(t => ToDto(t, project.Key, assigneeMap, Over(wip, t.ColumnId), cardCounts)).ToList();
+        return tasks.Select(t => ToDto(t, project.Key, assigneeMap, Over(wip, t.ColumnId), cardCounts, links)).ToList();
     }
 
     public async Task<IReadOnlyList<MyTaskDto>> GetMyTasksAsync(Guid workspaceId, Guid userId, CancellationToken ct = default)
@@ -485,10 +454,11 @@ public class BoardService : IBoardService
         var assigneeMap = await BuildAssigneeMapAsync(tasks, ct);
         var wip = await LoadWipAsync(tasks.Select(t => t.ColumnId), ct);
         var cardCounts = await LoadCardCountsAsync(tasks.Select(t => t.Id), ct);
+        var links = await LoadParentLinksAsync(tasks, ct);
 
         return tasks
             .Select(t => new MyTaskDto(
-                ToDto(t, t.Project.Key, assigneeMap, Over(wip, t.ColumnId), cardCounts),
+                ToDto(t, t.Project.Key, assigneeMap, Over(wip, t.ColumnId), cardCounts, links),
                 t.Project.Key,
                 t.Project.Name,
                 t.Column.Name,
@@ -697,12 +667,25 @@ public class BoardService : IBoardService
 
     private static string? DateText(DateTimeOffset? value) => value?.ToString("O");
 
+    private async Task<TaskItemDto> MapTaskAsync(TaskItem task, string projectKey, CancellationToken ct)
+    {
+        var links = await LoadParentLinksAsync([task], ct);
+        return ToDto(
+            task,
+            projectKey,
+            await BuildAssigneeMapAsync([task], ct),
+            await IsColumnOverWipAsync(task.ColumnId, ct),
+            await LoadCardCountsAsync([task.Id], ct),
+            links);
+    }
+
     private static TaskItemDto ToDto(
         TaskItem t,
         string projectKey,
         Dictionary<Guid, (string DisplayName, string? AvatarUrl)> assigneeMap,
         bool isOverWipLimit,
-        IReadOnlyDictionary<Guid, CardCounts> cardCounts)
+        IReadOnlyDictionary<Guid, CardCounts> cardCounts,
+        ParentLinkSnapshot links)
     {
         (string? name, string? avatar) = t.AssigneeId.HasValue && assigneeMap.TryGetValue(t.AssigneeId.Value, out var a)
             ? a
@@ -711,6 +694,7 @@ public class BoardService : IBoardService
         var (actualDays, isOverEstimate, daysOverEstimate) = CalculateEffort(t);
         var (isOverdue, daysOverdue) = CalculateOverdue(t);
         var counts = cardCounts.GetValueOrDefault(t.Id);
+        var parent = links.For(t);
 
         return new TaskItemDto(
             t.Id, t.ProjectId, t.ColumnId,
@@ -723,7 +707,8 @@ public class BoardService : IBoardService
             actualDays, isOverEstimate, daysOverEstimate,
             isOverdue, daysOverdue,
             isOverWipLimit,
-            counts.Comments, counts.Attachments);
+            counts.Comments, counts.Attachments,
+            parent.ParentTaskId, parent.ParentDisplayKey, parent.ChildCount, parent.DoneChildCount);
     }
 
     /// <summary>

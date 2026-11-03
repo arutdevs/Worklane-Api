@@ -64,7 +64,19 @@ public record TaskItemDto(
     int CommentCount,
 
     /// <summary>Files attached to this card.</summary>
-    int AttachmentCount
+    int AttachmentCount,
+
+    /// <summary>Parent card id. Null when this card is not a subtask.</summary>
+    Guid? ParentTaskId,
+
+    /// <summary>Parent display key, for example "WL-12". Null exactly when <see cref="ParentTaskId"/> is null.</summary>
+    string? ParentDisplayKey,
+
+    /// <summary>Active children. Archived children count toward neither this nor <see cref="DoneChildCount"/>.</summary>
+    int ChildCount,
+
+    /// <summary>Active children whose column is done. Always between 0 and <see cref="ChildCount"/>.</summary>
+    int DoneChildCount
 );
 
 public record CreateColumnRequest(string Name, int? WipLimit = null);
@@ -83,8 +95,12 @@ public record CreateTaskRequest(
     TaskPriority Priority,
     DateTimeOffset? DueDate,
     Guid? ColumnId,
-    double? EstimateDays
+    double? EstimateDays,
+    Guid? ParentTaskId = null
 );
+
+/// <summary>Sets the parent of an existing card. The id is required; clearing is a separate call.</summary>
+public record SetParentRequest(Guid ParentTaskId);
 
 public record UpdateTaskRequest(
     Optional<string?> Title,

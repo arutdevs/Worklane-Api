@@ -14,5 +14,9 @@ public enum TaskActivityType
     CommentEdited,
     CommentDeleted,
     AttachmentAdded,
-    AttachmentDeleted
+    AttachmentDeleted,
+    ChildAdded,
+    ChildRemoved,
+    ParentSet,
+    ParentCleared
 }
