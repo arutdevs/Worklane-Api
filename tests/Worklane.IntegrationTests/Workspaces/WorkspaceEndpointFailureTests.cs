@@ -8,6 +8,7 @@ using Worklane.Application.Common.Interfaces;
 using Worklane.Application.Workspaces.Dtos;
 using Worklane.Domain.Enums;
 using Worklane.Infrastructure.Persistence;
+using Worklane.Infrastructure.Services;
 using Worklane.IntegrationTests.Infrastructure;
 
 namespace Worklane.IntegrationTests.Workspaces;
@@ -152,7 +153,7 @@ public class WorkspaceEndpointFailureTests : IClassFixture<WorklaneWebApplicatio
         await using (var scope = _factory.Services.CreateAsyncScope())
         {
             var db = scope.ServiceProvider.GetRequiredService<WorklaneDbContext>();
-            var invitation = await db.Invitations.IgnoreQueryFilters().SingleAsync(i => i.Token == expiredToken);
+            var invitation = await db.Invitations.IgnoreQueryFilters().SingleAsync(i => i.TokenHash == InviteTokens.Hash(expiredToken));
             invitation.ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(-5);
             await db.SaveChangesAsync();
         }
