@@ -14,5 +14,6 @@ public class CreateProjectRequestValidator : AbstractValidator<CreateProjectRequ
             .Matches("^[A-Z][A-Z0-9]*$")
             .WithMessage("Key must be uppercase letters/digits, starting with a letter (e.g. \"WL\").");
         RuleFor(x => x.Description).MaximumLength(2000);
+        RuleFor(x => x.Language).MaximumLength(35).When(x => x.Language is not null);
     }
 }

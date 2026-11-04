@@ -4,8 +4,9 @@ using Microsoft.Net.Http.Headers;
 namespace Worklane.Infrastructure.Services;
 
 /// <summary>
-/// Signup locale for the personal workspace name and, later, the columns of projects
-/// that user creates. English is the default. Only <c>th</c> selects Thai.
+/// Resolves <c>th</c> or <c>en</c> for text seeded at one moment: the personal workspace
+/// name at signup, and the default column names when a project is created. English is
+/// the default. Only a primary tag of <c>th</c> selects Thai.
 /// </summary>
 public static class WorkspaceLocale
 {

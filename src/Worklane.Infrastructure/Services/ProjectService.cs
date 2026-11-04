@@ -24,7 +24,12 @@ public class ProjectService : IProjectService
             .ToListAsync(cancellationToken);
     }
 
-    public async Task<ProjectDto> CreateProjectAsync(Guid workspaceId, Guid createdByUserId, CreateProjectRequest request, CancellationToken cancellationToken)
+    public async Task<ProjectDto> CreateProjectAsync(
+        Guid workspaceId,
+        Guid createdByUserId,
+        CreateProjectRequest request,
+        string? acceptLanguage,
+        CancellationToken cancellationToken)
     {
         var keyTaken = await _db.Projects
             .IgnoreQueryFilters()
@@ -47,11 +52,8 @@ public class ProjectService : IProjectService
 
         _db.Projects.Add(project);
 
-        var language = await _db.Users
-            .AsNoTracking()
-            .Where(u => u.Id == createdByUserId)
-            .Select(u => u.PreferredLanguage)
-            .FirstOrDefaultAsync(cancellationToken);
+        // Plain text in the UI language of this request. Later reads and renames keep that text.
+        var language = WorkspaceLocale.Resolve(request.Language, acceptLanguage);
 
         foreach (var column in WorkspaceLocale.ColumnsFor(language))
         {
