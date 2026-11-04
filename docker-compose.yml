@@ -1,3 +1,12 @@
+# api and migrator share this. The runtime Dockerfile sets USER app (uid 1654).
+x-api-hardening: &api-hardening
+  user: "1654:1654"
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  pids_limit: 256
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -17,7 +26,32 @@ services:
       timeout: 5s
       retries: 10
 
+  # One-shot. Same image as api, which is the service that builds it.
+  # Exits 0 after EF migrations. Does not seed.
+  migrator:
+    image: worklane-api:compose
+    pull_policy: never
+    command: ["--migrate-only"]
+    environment:
+      ConnectionStrings__Default: "Host=postgres;Port=5432;Database=worklane;Username=worklane;Password=worklane"
+      Jwt__Secret: "${JWT_SIGNING_KEY:?}"
+      Jwt__Issuer: "Worklane"
+      Jwt__Audience: "WorklaneClient"
+      # Same public origin as api. Loopback is rejected outside Development.
+      Frontend__BaseUrl: "${FRONTEND_BASE_URL:?}"
+      DataProtection__KeysPath: /var/lib/worklane/dataprotection-keys
+    volumes:
+      - dataprotection-keys:/var/lib/worklane/dataprotection-keys
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    <<: *api-hardening
+
   api:
+    image: worklane-api:compose
     build:
       context: .
       dockerfile: src/Worklane.WebApi/Dockerfile
@@ -36,8 +70,10 @@ services:
       ForwardedHeaders__KnownProxies__0: "172.30.20.10"
       FileStorage__LocalPath: /var/worklane/attachments
       FileStorage__MaxBytes: "10485760"
+      DataProtection__KeysPath: /var/lib/worklane/dataprotection-keys
     volumes:
       - attachments:/var/worklane/attachments
+      - dataprotection-keys:/var/lib/worklane/dataprotection-keys
     ports:
       - "127.0.0.1:5000:8080"
     networks:
@@ -46,6 +82,15 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      migrator:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'echo >/dev/tcp/127.0.0.1/8080'"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+      start_period: 20s
+    <<: *api-hardening
 
   # Loopback edge in front of the API. This fixed address is the only trusted proxy.
   # The Web nginx below is not a second KnownProxies entry. See deploy/nginx/default.conf.
@@ -77,6 +122,7 @@ services:
 volumes:
   pgdata:
   attachments:
+  dataprotection-keys:
 
 networks:
   backend:

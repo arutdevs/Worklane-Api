@@ -13,11 +13,14 @@ services:
     ports: !override
       - "127.0.0.1:${WORKLANE_PG_PORT:-5434}:5432"
 
+  # Overrides the root migrator for local dev. The api service builds
+  # worklane-api:local. This overlay only selects that tag and Development,
+  # where the demo seed runs. The root service owns the one-shot command,
+  # the shared dataprotection-keys volume, DataProtection__KeysPath, and
+  # the hardening anchor.
   migrator:
     image: worklane-api:local
-    build:
-      context: .
-      dockerfile: src/Worklane.WebApi/Dockerfile
+    pull_policy: never
     command: ["--migrate-only"]
     environment:
       ASPNETCORE_ENVIRONMENT: Development
