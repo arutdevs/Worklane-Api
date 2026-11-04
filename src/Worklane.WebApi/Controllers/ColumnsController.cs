@@ -15,11 +15,19 @@ public class ColumnsController : ControllerBase
 {
     private readonly IBoardService _board;
     private readonly ICurrentUserService _currentUser;
+    private readonly IValidator<CreateColumnRequest> _createValidator;
+    private readonly IValidator<UpdateColumnRequest> _updateValidator;
 
-    public ColumnsController(IBoardService board, ICurrentUserService currentUser)
+    public ColumnsController(
+        IBoardService board,
+        ICurrentUserService currentUser,
+        IValidator<CreateColumnRequest> createValidator,
+        IValidator<UpdateColumnRequest> updateValidator)
     {
         _board = board;
         _currentUser = currentUser;
+        _createValidator = createValidator;
+        _updateValidator = updateValidator;
     }
 
     /// <summary>Returns all columns for a project, each with their ordered tasks.</summary>
@@ -38,10 +46,9 @@ public class ColumnsController : ControllerBase
     public async Task<ActionResult<BoardColumnDto>> CreateColumn(
         Guid projectId,
         [FromBody] CreateColumnRequest request,
-        [FromServices] IValidator<CreateColumnRequest> validator,
         CancellationToken ct)
     {
-        await validator.ValidateAndThrowAsync(request, ct);
+        await _createValidator.ValidateAndThrowAsync(request, ct);
         var result = await _board.CreateColumnAsync(projectId, request, _currentUser.UserId, ct);
         return CreatedAtAction(nameof(GetColumns), new { projectId }, result);
     }
@@ -52,10 +59,9 @@ public class ColumnsController : ControllerBase
     public async Task<ActionResult<BoardColumnDto>> UpdateColumn(
         Guid columnId,
         [FromBody] UpdateColumnRequest request,
-        [FromServices] IValidator<UpdateColumnRequest> validator,
         CancellationToken ct)
     {
-        await validator.ValidateAndThrowAsync(request, ct);
+        await _updateValidator.ValidateAndThrowAsync(request, ct);
         var result = await _board.UpdateColumnAsync(columnId, request, ct);
         return Ok(result);
     }

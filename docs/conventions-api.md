@@ -1,6 +1,6 @@
 # API conventions
 
-Copy the Projects slice. It is the smallest feature that crosses every layer and already follows the tenancy, validation, and error-code rules below. Board code is the reference for moves, comments, and parent links; it is the wrong template for a new CRUD feature (`[FromServices]` validators, SignalR, uploads).
+Copy the Projects slice. It is the smallest feature that crosses every layer and already follows the tenancy, validation, and error-code rules below. Board code is the reference for moves, comments, and parent links; it is the wrong template for a new CRUD feature (SignalR, uploads).
 
 This file describes the target for new work. It does not change existing controllers.
 
@@ -170,9 +170,7 @@ Subclass by status: `BadRequestException` (400), `AuthenticationFailedException`
 
 Registration is already one line: `AddValidatorsFromAssembly` in `src/Worklane.Application/DependencyInjection.cs`.
 
-The call site is not. These controllers take `IValidator<T>` in the constructor and call `ValidateAndThrowAsync` as the first line of the action: `ProjectsController`, `WorkspacesController`, `AuthController`, `InvitationsController`. These pass `[FromServices] IValidator<T>` on the action instead: `TasksController`, `ColumnsController`, `TaskCommentsController`.
-
-Target for new actions: constructor injection, then `ValidateAndThrowAsync` inside the action, as `ProjectsController` does. Leave the existing `[FromServices]` actions as they are.
+Controllers take `IValidator<T>` in the constructor and call `ValidateAndThrowAsync` as the first line of the action: `ProjectsController`, `WorkspacesController`, `AuthController`, `InvitationsController`, `TasksController`, `ColumnsController`, `TaskCommentsController`.
 
 The call stays inside the action on purpose. `[RequireWorkspaceRole]` runs first, so a non-member receives 404 `not_found` and never a 400 `validation_failed`. `ValidationException` is what `ExceptionHandlingMiddleware` turns into `validation_failed` with `errors` and `fieldCodes`. The `[ApiController]` model-state path is a different code, `invalid_request_body`.
 
@@ -217,7 +215,7 @@ One test project: `tests/Worklane.IntegrationTests`. xUnit, FluentAssertions, `W
 
 Put a test in the feature folder: `Auth/`, `Board/`, `Projects/`, `Workspaces/`. HTTP pipeline behaviour stays in `Web/`. Host and startup checks stay in `Infrastructure/`. A pure function can sit in `Domain/` (`WorkingDaysTests` does not boot the host).
 
-Name the file for the behaviour (`DefaultColumnLocaleTests`, `TaskCommentTests`). The folders `Fixes/` (`E2EBackendFixTests`) and `Regression/` (`E2E1RegressionTests`) group cases by the round that found them. `Board/ReviewFollowUpTests.cs` is the same kind of name inside a feature folder. Add the next case to the feature file, or add a behaviour-named file beside it. Leave the old files where they are.
+Name the file for the behaviour (`DefaultColumnLocaleTests`, `TaskCommentTests`). `Board/ReviewFollowUpTests.cs` is a round-based name inside a feature folder. `E2EBackendFixTests` and `E2E1RegressionTests` keep those class names and live in the feature folder for the behaviour each case covers. Add the next case to the feature file, or add a behaviour-named file beside it.
 
 A workspace-scoped change needs a non-member (404 `not_found`, same body as a missing id) and a role that is too low (403 `workspace_access_denied`). `RequireWorkspaceRoleFilterTests` is the existing shape.
 
