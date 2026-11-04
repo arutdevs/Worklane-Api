@@ -58,13 +58,31 @@ Layer rules, naming, and the Projects slice to copy: `docs/conventions-api.md`.
 
 The Angular app is the `Worklane-Web` repository. `.gitignore` ignores `web/`. This checkout has no `web/` tree, so `git status` here says nothing about the frontend. Commit that repo on its own.
 
-## Running
+## Local dev
 
-`docker-compose.yml` publishes Postgres on `127.0.0.1:5432` and the API on `127.0.0.1:5000` (container port 8080). `src/Worklane.WebApi/Properties/launchSettings.json` listens on `http://localhost:5009`. Development applies EF migrations on startup (`src/Worklane.WebApi/Program.cs`).
+Postgres runs in Docker. **Port 5432 is taken by a native PostgreSQL 18 install on this machine**, so the container is published on **5433** and the API needs the connection string overridden — `appsettings.json` still points at 5432.
 
-On a machine where port 5432 is already taken, publish the container on another host port and override `ConnectionStrings__Default`. That override is local; the compose file in this repo binds 5432.
+```bash
+docker start worklane-pg
+```
 
-On Windows, a running `dotnet run` locks `Worklane.Infrastructure.dll` and `dotnet build` / `dotnet test` fail with `MSB3027`. Stop that process first. After an unclean Docker Desktop shutdown, `scripts/Repair-DockerSockets.ps1` renames the stuck socket directory. Factory-reset deletes the database volume.
+```bash
+ASPNETCORE_ENVIRONMENT=Development \
+ConnectionStrings__Default="Host=localhost;Port=5433;Database=worklane;Username=worklane;Password=worklane" \
+dotnet run --project src/Worklane.WebApi --no-launch-profile --urls http://localhost:5000
+```
+
+If the container is gone, recreate it against the existing volume so the data survives:
+
+```bash
+docker run -d --name worklane-pg -e POSTGRES_DB=worklane -e POSTGRES_USER=worklane -e POSTGRES_PASSWORD=worklane -p 5433:5432 -v worklane_pgdata:/var/lib/postgresql/data postgres:16-alpine
+```
+
+**Never use "Reset to factory defaults" in Docker's error dialog.** It deletes every volume, including `worklane_pgdata` — the whole database.
+
+`docker-compose.yml` publishes the API on `127.0.0.1:5000` (container port 8080). The same file maps Postgres to host port 5432; on this machine that mapping is not used — the container is published on **5433**. `src/Worklane.WebApi/Properties/launchSettings.json` listens on `http://localhost:5009`. Development applies EF migrations on startup (`src/Worklane.WebApi/Program.cs`).
+
+On Windows, a running `dotnet run` locks `Worklane.Infrastructure.dll` and `dotnet build` / `dotnet test` fail with `MSB3027`. Stop that process first. After an unclean Docker Desktop shutdown, `scripts/Repair-DockerSockets.ps1` renames the stuck socket directory.
 
 ## Traps already paid for
 
