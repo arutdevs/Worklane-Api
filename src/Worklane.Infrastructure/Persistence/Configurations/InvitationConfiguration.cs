@@ -10,8 +10,8 @@ public class InvitationConfiguration : IEntityTypeConfiguration<Invitation>
     {
         builder.HasKey(i => i.Id);
         builder.Property(i => i.Email).IsRequired().HasMaxLength(320);
-        builder.Property(i => i.Token).IsRequired().HasMaxLength(128);
-        builder.HasIndex(i => i.Token).IsUnique();
+        builder.Property(i => i.TokenHash).IsRequired().HasMaxLength(64);
+        builder.HasIndex(i => i.TokenHash).IsUnique();
 
         builder.HasOne(i => i.Workspace)
             .WithMany(w => w.Invitations)

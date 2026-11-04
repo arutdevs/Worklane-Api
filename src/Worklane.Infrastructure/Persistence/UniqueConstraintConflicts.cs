@@ -57,7 +57,7 @@ public static class UniqueConstraintConflicts
     {
         ["IX_Projects_WorkspaceId_Key"] = (ProjectKeyTakenCode, ProjectKeyTakenDetail),
         ["IX_WorkspaceMembers_WorkspaceId_UserId"] = (WorkspaceMemberExistsCode, WorkspaceMemberExistsDetail),
-        ["IX_Invitations_Token"] = (InvitationTokenTakenCode, InvitationTokenTakenDetail),
+        ["IX_Invitations_TokenHash"] = (InvitationTokenTakenCode, InvitationTokenTakenDetail),
         ["IX_ProjectMembers_ProjectId_UserId"] = (ProjectMemberExistsCode, ProjectMemberExistsDetail),
         ["IX_RefreshTokens_TokenHash"] = (RefreshTokenConflictCode, RefreshTokenConflictDetail),
         ["IX_TaskAttachments_StorageKey"] = (AttachmentStorageKeyTakenCode, AttachmentStorageKeyTakenDetail),

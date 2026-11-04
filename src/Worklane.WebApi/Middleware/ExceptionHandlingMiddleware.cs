@@ -38,8 +38,9 @@ public class ExceptionHandlingMiddleware
     {
         if (UniqueConstraintConflicts.Translate(exception) is { } conflict)
         {
+            // The provider message includes the duplicate key. Log the constraint
+            // name only, so a token or other secret in that key is not written out.
             _logger.LogWarning(
-                exception,
                 "Unique constraint {ConstraintName} on {Method} {Path} mapped to {Code}",
                 UniqueConstraintConflicts.ConstraintName(exception) ?? "(unnamed)",
                 context.Request.Method,
