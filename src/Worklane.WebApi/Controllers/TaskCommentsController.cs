@@ -16,11 +16,19 @@ public class TaskCommentsController : ControllerBase
 {
     private readonly ITaskCommentService _comments;
     private readonly ICurrentUserService _currentUser;
+    private readonly IValidator<CreateCommentRequest> _createValidator;
+    private readonly IValidator<UpdateCommentRequest> _updateValidator;
 
-    public TaskCommentsController(ITaskCommentService comments, ICurrentUserService currentUser)
+    public TaskCommentsController(
+        ITaskCommentService comments,
+        ICurrentUserService currentUser,
+        IValidator<CreateCommentRequest> createValidator,
+        IValidator<UpdateCommentRequest> updateValidator)
     {
         _comments = comments;
         _currentUser = currentUser;
+        _createValidator = createValidator;
+        _updateValidator = updateValidator;
     }
 
     /// <summary>Comments on a task, oldest first.</summary>
@@ -39,10 +47,9 @@ public class TaskCommentsController : ControllerBase
     public async Task<ActionResult<CommentDto>> CreateComment(
         Guid taskId,
         [FromBody] CreateCommentRequest request,
-        [FromServices] IValidator<CreateCommentRequest> validator,
         CancellationToken ct)
     {
-        await validator.ValidateAndThrowAsync(request, ct);
+        await _createValidator.ValidateAndThrowAsync(request, ct);
         var result = await _comments.CreateCommentAsync(taskId, request, _currentUser.UserId, ct);
         return Created($"/api/tasks/{taskId}/comments/{result.Id}", result);
     }
@@ -53,10 +60,9 @@ public class TaskCommentsController : ControllerBase
     public async Task<ActionResult<CommentDto>> UpdateComment(
         Guid commentId,
         [FromBody] UpdateCommentRequest request,
-        [FromServices] IValidator<UpdateCommentRequest> validator,
         CancellationToken ct)
     {
-        await validator.ValidateAndThrowAsync(request, ct);
+        await _updateValidator.ValidateAndThrowAsync(request, ct);
         var result = await _comments.UpdateCommentAsync(commentId, request, _currentUser.UserId, ct);
         return Ok(result);
     }
