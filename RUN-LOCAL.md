@@ -2,6 +2,10 @@
 
 คำสั่งเดียวจาก repo `Worklane-Api` สร้าง image ของ API, สร้าง image จริงของ Angular (`Worklane-Web`, nginx-unprivileged พอร์ต 8080), เปิด Postgres 16, รัน EF migration ผ่านเซอร์วิส `migrator` ครั้งเดียว แล้วเสิร์ฟแอปที่ localhost ให้ล็อกอินผ่านเว็บไปที่ API ได้
 
+## เหตุผลที่ห้ามใช้บนเซิร์ฟเวอร์
+
+`./run-local.sh` บังคับโหมด Development (`ASPNETCORE_ENVIRONMENT=Development` ใน `compose.local.yml`) และตอน API สตาร์ท `DevSeeder` จะสร้างผู้ใช้ตัวอย่าง `demo@worklane.app` พร้อมรหัส `Demo123!` สแตกนี้มีไว้สำหรับเครื่องนักพัฒนาเท่านั้น ห้ามใช้บนเซิร์ฟเวอร์หรือเครื่องที่เปิดออกสู่อินเทอร์เน็ต คีย์ JWT ที่เคยถูก commit ถูกเผาแล้ว (WL-63) การขึ้นเซิร์ฟเวอร์ต้องใช้คีย์ที่ออกใหม่และโหมดที่ไม่ใช่ Development
+
 ## สิ่งที่ต้องมี
 
 - Docker Engine พร้อม Docker Compose **v2.24 ขึ้นไป** (`docker compose version`) ใช้แท็ก `!override` / `!reset` ใน `compose.local.yml`

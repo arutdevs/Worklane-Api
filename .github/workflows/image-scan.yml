@@ -6,6 +6,9 @@ on:
   # Any base branch, so a pull request stacked on another feature branch still runs this check.
   pull_request:
 
+permissions:
+  contents: read
+
 concurrency:
   group: image-scan-${{ github.ref }}
   cancel-in-progress: true
@@ -14,9 +17,9 @@ jobs:
   base-compose-has-no-dev-s3:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - name: Rendered deploy compose has no dev S3
+      - name: Rendered deploy compose has no dev S3 or local-only refs
         run: bash scripts/check-deploy-compose.sh
 
       # Fixtures are pruned out of the scan above. expect.txt of PASS must exit 0.
@@ -107,6 +110,9 @@ jobs:
 
   trivy:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write
     strategy:
       fail-fast: false
       matrix:
@@ -124,3 +130,4 @@ jobs:
           severity: CRITICAL
           ignore-unfixed: true
           vuln-type: os,library
+          cache: 'true'

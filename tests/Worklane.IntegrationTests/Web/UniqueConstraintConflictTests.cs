@@ -77,7 +77,7 @@ public class UniqueConstraintConflictTests
         unique.Should().Contain([
             "IX_Projects_WorkspaceId_Key",
             "IX_WorkspaceMembers_WorkspaceId_UserId",
-            "IX_Invitations_Token",
+            "IX_Invitations_TokenHash",
             "IX_ProjectMembers_ProjectId_UserId",
             "IX_RefreshTokens_TokenHash",
             "IX_TaskAttachments_StorageKey",

@@ -55,7 +55,7 @@ public class E2E1RegressionTests : IClassFixture<WorklaneWebApplicationFactory>
         first.Workspace.Slug.Should().Be($"{displayName}-workspace");
         AssertThaiMarksPreserved(first.Workspace.Slug);
 
-        var project = await CreateProjectAsync(first, "Thai Board", "TH");
+        var project = await CreateProjectAsync(first, "Thai Board", "TH", "th");
         var columns = await GetColumnsAsync(first.Client, project.Id);
         columns.Select(column => column.Name).Should().Equal("ต้องทำ", "กำลังทำ", "เสร็จแล้ว");
         columns.Single(column => column.IsInProgress).Name.Should().Be("กำลังทำ");
@@ -413,11 +413,11 @@ public class E2E1RegressionTests : IClassFixture<WorklaneWebApplicationFactory>
         return client;
     }
 
-    private static async Task<ProjectDto> CreateProjectAsync(RegisteredUser user, string name, string key)
+    private static async Task<ProjectDto> CreateProjectAsync(RegisteredUser user, string name, string key, string? language = null)
     {
         var response = await user.Client.PostAsJsonAsync(
             $"/api/workspaces/{user.Workspace.Id}/projects",
-            new CreateProjectRequest(name, key, null));
+            new CreateProjectRequest(name, key, null, language));
         var text = await response.Content.ReadAsStringAsync();
         response.StatusCode.Should().Be(HttpStatusCode.OK, text);
         return JsonSerializer.Deserialize<ProjectDto>(text, TestAuthHelper.JsonOptions)

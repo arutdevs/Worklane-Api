@@ -4,8 +4,66 @@
 # docker compose, so `./run-local.sh down` and `./run-local.sh down -v` work.
 set -euo pipefail
 
+# Reads compose config JSON on stdin. Exits 1 when a published port binds
+# anything other than 127.0.0.1. WORKLANE_CHECK_CONFIG_JSON=1 runs only this
+# check so a test can feed config JSON without Docker or the web checkout.
+check_published_ports_json() {
+  python3 -c "$(cat <<'PY'
+import json
+import sys
+
+try:
+    doc = json.load(sys.stdin)
+except json.JSONDecodeError as exc:
+    sys.stderr.write("docker compose config JSON could not be read: %s\n" % exc)
+    sys.exit(1)
+
+services = doc.get("services") or {}
+bad = []
+if isinstance(services, dict):
+    for name, svc in services.items():
+        if not isinstance(svc, dict):
+            continue
+        ports = svc.get("ports") or []
+        if not isinstance(ports, list):
+            continue
+        for port in ports:
+            if not isinstance(port, dict):
+                continue
+            if (port.get("mode") or "ingress") != "ingress":
+                continue
+            published = port.get("published")
+            if published in (None, ""):
+                continue
+            host_ip = port.get("host_ip") or "0.0.0.0"
+            if str(host_ip) != "127.0.0.1":
+                bad.append("%s publishes %s on %s" % (name, published, host_ip))
+
+if bad:
+    sys.stderr.write("Refusing to start. Published ports must bind 127.0.0.1 only.\n")
+    for line in bad:
+        sys.stderr.write(line + "\n")
+    sys.exit(1)
+PY
+)"
+}
+
+if [[ "${WORKLANE_CHECK_CONFIG_JSON:-}" == "1" ]]; then
+  check_published_ports_json
+  exit 0
+fi
+
 root=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 cd "$root"
+
+assert_loopback_ports() {
+  local rendered
+  if ! rendered="$(docker compose "${compose_args[@]}" config --format json)"; then
+    echo "docker compose config failed, so published ports were not checked." >&2
+    exit 1
+  fi
+  printf '%s' "$rendered" | check_published_ports_json
+}
 
 if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
   echo "Docker Compose v2 is required. See RUN-LOCAL.md." >&2
@@ -98,6 +156,7 @@ fi
 compose_args+=(-f compose.local.yml)
 
 if [[ $# -eq 0 ]]; then
+  assert_loopback_ports
   docker compose "${compose_args[@]}" up --build --detach --wait
   web_port=$(python3 - <<'PY'
 import os
@@ -119,6 +178,9 @@ PY
 )
   printf 'Worklane is up at http://127.0.0.1:%s\n' "$web_port"
   printf 'Demo login: demo@worklane.app / Demo123!\n'
+elif [[ "${1:-}" == "up" ]]; then
+  assert_loopback_ports
+  docker compose "${compose_args[@]}" "$@"
 else
   docker compose "${compose_args[@]}" "$@"
 fi

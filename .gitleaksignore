@@ -2,3 +2,5 @@
 # A new secret, including one written on a Jwt__Secret or "Secret" line, is a different fingerprint.
 777101675a86af931180e267864b04cd4c584cd6:docker-compose.yml:generic-api-key:25
 777101675a86af931180e267864b04cd4c584cd6:src/Worklane.WebApi/appsettings.Development.json:generic-api-key:9
+# Synthetic plaintext from the invitation-hash migration test. Not a credential.
+ae26e921d002708128c9362db78d29a317452d2c:tests/Worklane.IntegrationTests/Workspaces/InvitationLegacyMigrationTests.cs:generic-api-key:18

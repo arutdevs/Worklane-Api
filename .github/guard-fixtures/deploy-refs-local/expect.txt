@@ -1,0 +1,2 @@
+::error file=deploy/local-ref.txt::Deploy path references compose.local.yml or compose.dev.yml.
+::error file=.github/workflows/ship.yml::Deploy path references compose.local.yml or compose.dev.yml.

@@ -66,18 +66,12 @@ public class E2EBackendFixTests : IClassFixture<WorklaneWebApplicationFactory>
     }
 
     [Fact]
-    public async Task Register_ThaiPreferredLanguage_SeedsThaiWorkspaceAndColumns()
+    public async Task Register_ThaiPreferredLanguage_SeedsThaiWorkspaceName()
     {
         var email = $"th-field-{Guid.NewGuid():N}@example.com";
         var user = await RegisterAsync(email, "สมชาย", preferredLanguage: "th-TH", acceptLanguage: "en");
         user.Tokens.User.PreferredLanguage.Should().Be("th");
         user.Workspace.Name.Should().Be("เวิร์กสเปซของ สมชาย");
-
-        var columns = await CreateProjectColumnsAsync(user, "TH");
-        columns.Select(column => column.Name).Should().Equal("ต้องทำ", "กำลังทำ", "เสร็จแล้ว");
-        columns.Single(column => column.IsInProgress).Name.Should().Be("กำลังทำ");
-        columns.Single(column => column.IsDone).Name.Should().Be("เสร็จแล้ว");
-        columns.Should().OnlyContain(column => column.Name.Contains('\u0E33') || column.Name == "เสร็จแล้ว");
     }
 
     [Fact]
@@ -184,7 +178,13 @@ public class E2EBackendFixTests : IClassFixture<WorklaneWebApplicationFactory>
         await using var scope = _factory.Services.CreateAsyncScope();
         var db = scope.ServiceProvider.GetRequiredService<WorklaneDbContext>();
         var stored = await db.Invitations.IgnoreQueryFilters().SingleAsync(row => row.Email == pendingEmail);
-        invitation.InviteLink.Should().Be(InviteLinks.ForToken("http://web.test", stored.Token));
+        const string marker = "token=";
+        var tokenStart = invitation.InviteLink!.IndexOf(marker, StringComparison.Ordinal);
+        tokenStart.Should().BeGreaterThanOrEqualTo(0);
+        var token = invitation.InviteLink[(tokenStart + marker.Length)..];
+        invitation.InviteLink.Should().Be(InviteLinks.ForToken("http://web.test", token));
+        stored.TokenHash.Should().Be(InviteTokens.Hash(token));
+        stored.TokenHash.Should().NotBe(token);
     }
 
     [Theory]
