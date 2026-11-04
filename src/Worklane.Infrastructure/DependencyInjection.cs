@@ -8,6 +8,7 @@ using Worklane.Application.Auth.Interfaces;
 using Worklane.Application.Board.Interfaces;
 using Worklane.Application.Common.Interfaces;
 using Worklane.Application.Common.Options;
+using Worklane.Application.Imports.Interfaces;
 using Worklane.Application.Projects.Interfaces;
 using Worklane.Application.Reports.Interfaces;
 using Worklane.Application.Workspaces.Interfaces;
@@ -15,6 +16,7 @@ using Worklane.Infrastructure.Identity;
 using Worklane.Infrastructure.Multitenancy;
 using Worklane.Infrastructure.Persistence;
 using Worklane.Infrastructure.Services;
+using Worklane.Infrastructure.Services.Imports;
 
 namespace Worklane.Infrastructure;
 
@@ -62,6 +64,17 @@ public static class DependencyInjection
             .Bind(configuration.GetSection(TaskSettings.SectionName))
             .Validate(static settings => settings.MaxChildrenPerParent > 0, "Tasks:MaxChildrenPerParent must be greater than 0.")
             .ValidateOnStart();
+        services.AddOptions<ImportSettings>()
+            .Bind(configuration.GetSection(ImportSettings.SectionName))
+            .Validate(static settings => settings.MaxBytes > 0, "Imports:MaxBytes must be greater than 0.")
+            .Validate(static settings => settings.MaxRows > 0, "Imports:MaxRows must be greater than 0.")
+            .Validate(static settings => settings.MaxColumns > 0, "Imports:MaxColumns must be greater than 0.")
+            .Validate(static settings => settings.MaxUncompressedBytes > 0, "Imports:MaxUncompressedBytes must be greater than 0.")
+            .Validate(static settings => settings.RetentionHours > 0, "Imports:RetentionHours must be greater than 0.")
+            .Validate(static settings => settings.MaxOpenBatchesPerProject > 0, "Imports:MaxOpenBatchesPerProject must be greater than 0.")
+            .Validate(static settings => settings.CommitCommandTimeoutSeconds > 0, "Imports:CommitCommandTimeoutSeconds must be greater than 0.")
+            .Validate(static settings => settings.RealtimeFanoutLimit > 0, "Imports:RealtimeFanoutLimit must be greater than 0.")
+            .ValidateOnStart();
         services.AddOptions<FileStorageSettings>()
             .Configure<IConfiguration>((settings, config) =>
             {
@@ -89,6 +102,10 @@ public static class DependencyInjection
         services.AddScoped<ITaskAttachmentService, TaskAttachmentService>();
         services.AddScoped<IFileStorage, LocalFileStorage>();
         services.AddScoped<IReportService, ReportService>();
+        services.AddScoped<IImportService, ImportService>();
+        services.AddScoped<IProjectExportService, ProjectExportService>();
+        services.AddSingleton<ImportRetentionService>();
+        services.AddHostedService(sp => sp.GetRequiredService<ImportRetentionService>());
 
         return services;
     }

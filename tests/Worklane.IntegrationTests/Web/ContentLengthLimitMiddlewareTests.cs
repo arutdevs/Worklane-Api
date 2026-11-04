@@ -15,7 +15,8 @@ public class ContentLengthLimitMiddlewareTests
     {
         var middleware = new ContentLengthLimitMiddleware(
             _ => throw new InvalidOperationException("The body should not be read."),
-            Options.Create(new FileStorageSettings()));
+            Options.Create(new FileStorageSettings()),
+            Options.Create(new ImportSettings()));
         var context = new DefaultHttpContext();
         context.Request.Path = "/api/auth/login";
         context.Request.ContentLength = 50;
@@ -44,7 +45,7 @@ public class ContentLengthLimitMiddlewareTests
         {
             continued = true;
             return Task.CompletedTask;
-        }, Options.Create(new FileStorageSettings()));
+        }, Options.Create(new FileStorageSettings()), Options.Create(new ImportSettings()));
         var context = new DefaultHttpContext();
         context.Request.ContentLength = 4;
         context.SetEndpoint(new Endpoint(

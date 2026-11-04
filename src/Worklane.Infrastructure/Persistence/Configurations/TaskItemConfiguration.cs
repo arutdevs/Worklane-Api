@@ -29,6 +29,10 @@ public class TaskItemConfiguration : IEntityTypeConfiguration<TaskItem>
         builder.Property(t => t.IsArchived).IsRequired().HasDefaultValue(false);
         builder.Property(t => t.CreatedAt).IsRequired();
         builder.Property(t => t.UpdatedAt).IsRequired();
+        builder.Property(t => t.ImportSource)
+            .HasConversion(ImportConverters.NullableSource)
+            .HasMaxLength(16);
+        builder.Property(t => t.ExternalId).HasMaxLength(200);
 
         builder.HasOne(t => t.Project)
             .WithMany()
@@ -61,9 +65,30 @@ public class TaskItemConfiguration : IEntityTypeConfiguration<TaskItem>
             .HasDatabaseName("IX_TaskItems_ProjectId_ParentTaskId")
             .HasFilter("\"ParentTaskId\" IS NOT NULL");
 
-        builder.ToTable(t => t.HasCheckConstraint(
-            "CK_TaskItems_NotSelfParent",
-            "\"ParentTaskId\" IS NULL OR \"ParentTaskId\" <> \"Id\""));
+        builder.HasOne(t => t.ImportBatch)
+            .WithMany(b => b.Tasks)
+            .HasForeignKey(t => t.ImportBatchId)
+            .OnDelete(DeleteBehavior.Restrict)
+            .IsRequired(false);
+
+        builder.HasIndex(t => new { t.ProjectId, t.ImportSource, t.ExternalId })
+            .IsUnique()
+            .HasFilter("\"ExternalId\" IS NOT NULL")
+            .HasDatabaseName("IX_TaskItems_ProjectId_ImportSource_ExternalId");
+
+        builder.HasIndex(t => t.ImportBatchId)
+            .HasFilter("\"ImportBatchId\" IS NOT NULL")
+            .HasDatabaseName("IX_TaskItems_ImportBatchId");
+
+        builder.ToTable(t =>
+        {
+            t.HasCheckConstraint(
+                "CK_TaskItems_NotSelfParent",
+                "\"ParentTaskId\" IS NULL OR \"ParentTaskId\" <> \"Id\"");
+            t.HasCheckConstraint(
+                "CK_TaskItems_ExternalIdRequiresSource",
+                "\"ExternalId\" IS NULL OR \"ImportSource\" IS NOT NULL");
+        });
 
         // Unique per-project task number (display key generation)
         builder.HasIndex(t => new { t.ProjectId, t.Number }).IsUnique();

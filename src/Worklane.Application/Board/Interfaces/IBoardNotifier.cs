@@ -1,4 +1,5 @@
 using Worklane.Application.Board.Dtos;
+using Worklane.Application.Imports.Dtos;
 
 namespace Worklane.Application.Board.Interfaces;
 
@@ -19,4 +20,7 @@ public interface IBoardNotifier
 
     Task AttachmentAddedAsync(Guid projectId, AttachmentBroadcastDto attachment, CancellationToken ct = default);
     Task AttachmentDeletedAsync(Guid projectId, AttachmentDeletedEvent payload, CancellationToken ct = default);
+
+    Task ImportCompletedAsync(Guid projectId, ImportCompletedDto payload, CancellationToken ct = default);
+    Task ImportUndoneAsync(Guid projectId, ImportUndoneDto payload, CancellationToken ct = default);
 }

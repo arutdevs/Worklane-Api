@@ -161,6 +161,40 @@ internal static class FileSignature
         text.Contains("onerror=", StringComparison.OrdinalIgnoreCase) ||
         text.Contains("onload=", StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>
+    /// Decodes CSV bytes the same way <see cref="IsText"/> accepts them, and strips a leading BOM.
+    /// </summary>
+    internal static bool TryDecodeText(ReadOnlySpan<byte> content, out string text)
+    {
+        text = string.Empty;
+        if (content.IsEmpty || !IsText(content))
+            return false;
+
+        if (HasUtf16Bom(content))
+            text = DecodeUtf16(content);
+        else if (!TryDecodeUtf8(content, out text!))
+            text = DecodeThai(content);
+
+        if (text.Length > 0 && text[0] == '\uFEFF')
+            text = text[1..];
+        return true;
+    }
+
+    /// <summary>
+    /// windows-874 / TIS-620: bytes 0xA1-0xFB sit 0x0D60 below the Thai Unicode block.
+    /// </summary>
+    private static string DecodeThai(ReadOnlySpan<byte> content)
+    {
+        var chars = new char[content.Length];
+        for (var i = 0; i < content.Length; i++)
+        {
+            var b = content[i];
+            chars[i] = b is >= 0xA1 and <= 0xFB ? (char)(b + 0x0D60) : (char)b;
+        }
+
+        return new string(chars);
+    }
+
     private static bool StartsWith(ReadOnlySpan<byte> content, ReadOnlySpan<byte> magic) =>
         content.Length >= magic.Length && content[..magic.Length].SequenceEqual(magic);
 }
