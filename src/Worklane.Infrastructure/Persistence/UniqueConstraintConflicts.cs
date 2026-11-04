@@ -1,5 +1,6 @@
 using Npgsql;
 using Worklane.Application.Common.Exceptions;
+using Worklane.Application.Imports;
 
 namespace Worklane.Infrastructure.Persistence;
 
@@ -62,6 +63,9 @@ public static class UniqueConstraintConflicts
         ["IX_RefreshTokens_TokenHash"] = (RefreshTokenConflictCode, RefreshTokenConflictDetail),
         ["IX_TaskAttachments_StorageKey"] = (AttachmentStorageKeyTakenCode, AttachmentStorageKeyTakenDetail),
         ["IX_TaskItems_ProjectId_Number"] = (TaskNumberTakenCode, TaskNumberTakenDetail),
+        ["IX_TaskItems_ProjectId_ImportSource_ExternalId"] = (ImportErrors.ExternalIdTaken, ImportErrors.ExternalIdTakenDetail),
+        // One data row per batch. A second insert is a programming conflict, not a user-facing import code.
+        ["IX_ImportBatchRows_ImportBatchId_RowNumber"] = (UniqueConflictCode, UniqueConflictDetail),
         // Alternate key so the parent FK can target (ProjectId, Id). A violation is a
         // duplicate id, which callers never produce on purpose.
         ["AK_TaskItems_ProjectId_Id"] = (UniqueConflictCode, UniqueConflictDetail),

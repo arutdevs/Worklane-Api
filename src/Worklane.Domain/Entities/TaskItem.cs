@@ -43,8 +43,18 @@ public class TaskItem
     /// <summary>Optional parent in the same project. Null when this card is not a subtask.</summary>
     public Guid? ParentTaskId { get; set; }
 
+    /// <summary>Set only on cards created by an import. Null on every other card.</summary>
+    public ImportSource? ImportSource { get; set; }
+
+    /// <summary>Source-system id. Unique per project and <see cref="ImportSource"/>, including archived cards.</summary>
+    public string? ExternalId { get; set; }
+
+    /// <summary>Batch that created this card. Null when the card was not imported.</summary>
+    public Guid? ImportBatchId { get; set; }
+
     public Project Project { get; set; } = null!;
     public BoardColumn Column { get; set; } = null!;
     public TaskItem? Parent { get; set; }
     public ICollection<TaskItem> Children { get; set; } = new List<TaskItem>();
+    public ImportBatch? ImportBatch { get; set; }
 }

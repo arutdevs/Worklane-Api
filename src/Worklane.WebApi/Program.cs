@@ -41,8 +41,13 @@ builder.Services.AddScoped<ICurrentUserService, CurrentUserService>();
 
 builder.Services.AddMemoryCache();
 builder.Services.AddSingleton<IConfigureOptions<MvcOptions>, AttachmentUploadLimitSetup>();
+builder.Services.AddSingleton<IConfigureOptions<MvcOptions>, ImportUploadLimitSetup>();
 builder.Services.AddControllers()
-    .AddJsonOptions(options => options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter()));
+    .AddJsonOptions(options =>
+    {
+        options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
+        options.JsonSerializerOptions.Converters.Add(new Worklane.Application.Imports.ImportEnumConverter());
+    });
 builder.Services.Configure<ApiBehaviorOptions>(options =>
 {
     var builtIn = options.InvalidModelStateResponseFactory;
@@ -85,6 +90,14 @@ builder.Services.Configure<AuthRateLimitSettings>(
     builder.Configuration.GetSection(AuthRateLimitSettings.SectionName));
 builder.Services.Configure<WorkspaceCreationSettings>(
     builder.Configuration.GetSection(WorkspaceCreationSettings.SectionName));
+builder.Services.Configure<ImportUploadRateLimitSettings>(
+    builder.Configuration.GetSection(ImportUploadRateLimitSettings.SectionName));
+builder.Services.Configure<ImportPreviewRateLimitSettings>(
+    builder.Configuration.GetSection(ImportPreviewRateLimitSettings.SectionName));
+builder.Services.Configure<ImportCommitRateLimitSettings>(
+    builder.Configuration.GetSection(ImportCommitRateLimitSettings.SectionName));
+builder.Services.Configure<ExportRateLimitSettings>(
+    builder.Configuration.GetSection(ExportRateLimitSettings.SectionName));
 builder.Services.AddWorklaneForwardedHeaders(builder.Configuration);
 builder.Services.AddRateLimiter(options =>
 {
@@ -138,6 +151,18 @@ builder.Services.AddRateLimiter(options =>
                 AutoReplenishment = true
             });
     });
+    options.AddPolicy(ImportUploadRateLimitSettings.PolicyName, httpContext =>
+        ImportWindow(httpContext, httpContext.RequestServices.GetRequiredService<IOptions<ImportUploadRateLimitSettings>>().Value.PermitLimit,
+            httpContext.RequestServices.GetRequiredService<IOptions<ImportUploadRateLimitSettings>>().Value.WindowSeconds));
+    options.AddPolicy(ImportPreviewRateLimitSettings.PolicyName, httpContext =>
+        ImportWindow(httpContext, httpContext.RequestServices.GetRequiredService<IOptions<ImportPreviewRateLimitSettings>>().Value.PermitLimit,
+            httpContext.RequestServices.GetRequiredService<IOptions<ImportPreviewRateLimitSettings>>().Value.WindowSeconds));
+    options.AddPolicy(ImportCommitRateLimitSettings.PolicyName, httpContext =>
+        ImportWindow(httpContext, httpContext.RequestServices.GetRequiredService<IOptions<ImportCommitRateLimitSettings>>().Value.PermitLimit,
+            httpContext.RequestServices.GetRequiredService<IOptions<ImportCommitRateLimitSettings>>().Value.WindowSeconds));
+    options.AddPolicy(ExportRateLimitSettings.PolicyName, httpContext =>
+        ImportWindow(httpContext, httpContext.RequestServices.GetRequiredService<IOptions<ExportRateLimitSettings>>().Value.PermitLimit,
+            httpContext.RequestServices.GetRequiredService<IOptions<ExportRateLimitSettings>>().Value.WindowSeconds));
     options.AddPolicy(WorkspaceCreationSettings.PolicyName, httpContext =>
     {
         var settings = httpContext.RequestServices.GetRequiredService<IOptions<WorkspaceCreationSettings>>().Value;
@@ -153,6 +178,21 @@ builder.Services.AddRateLimiter(options =>
                 AutoReplenishment = true
             });
     });
+
+    static RateLimitPartition<string> ImportWindow(HttpContext httpContext, int permitLimit, int windowSeconds)
+    {
+        var permit = permitLimit < 1 ? 1 : permitLimit;
+        var window = windowSeconds < 1 ? 1 : windowSeconds;
+        return RateLimitPartition.GetFixedWindowLimiter(
+            ImportRateLimitPartition.Key(httpContext),
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = permit,
+                Window = TimeSpan.FromSeconds(window),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            });
+    }
 
     static RateLimitPartition<string> FixedWindow(HttpContext httpContext, int permitLimit, int windowSeconds)
     {
@@ -177,7 +217,11 @@ builder.Services.AddRateLimiter(options =>
 });
 
 builder.Services.AddSignalR()
-    .AddJsonProtocol(options => options.PayloadSerializerOptions.Converters.Add(new JsonStringEnumConverter()));
+    .AddJsonProtocol(options =>
+    {
+        options.PayloadSerializerOptions.Converters.Add(new JsonStringEnumConverter());
+        options.PayloadSerializerOptions.Converters.Add(new Worklane.Application.Imports.ImportEnumConverter());
+    });
 builder.Services.AddScoped<IBoardNotifier, SignalRBoardNotifier>();
 builder.Services.AddSingleton<IPresenceTracker, PresenceTracker>();
 builder.Services.AddSingleton<IRealtimeGroupMembership, SignalRGroupMembership>();

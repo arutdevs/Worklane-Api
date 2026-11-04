@@ -189,6 +189,148 @@ namespace Worklane.Infrastructure.Persistence.Migrations
                     b.ToTable("BoardColumns");
                 });
 
+            modelBuilder.Entity("Worklane.Domain.Entities.ImportBatch", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid>("CreatedById")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("ExpiresAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("FallbackColumnId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("FileDeletedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("HeadersJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb");
+
+                    b.Property<string>("MappingJson")
+                        .HasColumnType("jsonb");
+
+                    b.Property<string>("OriginalFileName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<Guid>("ProjectId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("SampleJson")
+                        .HasColumnType("jsonb");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<string>("StorageKey")
+                        .HasMaxLength(512)
+                        .HasColumnType("character varying(512)");
+
+                    b.Property<string>("SuggestedMappingJson")
+                        .HasColumnType("jsonb");
+
+                    b.Property<string>("WarningsJson")
+                        .HasColumnType("jsonb");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProjectId", "CreatedAt")
+                        .HasDatabaseName("IX_ImportBatches_ProjectId_CreatedAt");
+
+                    b.ToTable("ImportBatches");
+                });
+
+            modelBuilder.Entity("Worklane.Domain.Entities.ImportBatchRow", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("AssigneeEmail")
+                        .HasMaxLength(320)
+                        .HasColumnType("character varying(320)");
+
+                    b.Property<string>("ColumnName")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(10000)
+                        .HasColumnType("character varying(10000)");
+
+                    b.Property<string>("DueDateText")
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)");
+
+                    b.Property<string>("ErrorCode")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("EstimateText")
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)");
+
+                    b.Property<string>("ExternalId")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<Guid>("ImportBatchId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ParentExternalId")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("PriorityText")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<int>("RowNumber")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("character varying(32)");
+
+                    b.Property<Guid?>("TaskId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("Title")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)");
+
+                    b.Property<string>("WarningCode")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("TaskId");
+
+                    b.HasIndex("ImportBatchId", "RowNumber")
+                        .IsUnique()
+                        .HasDatabaseName("IX_ImportBatchRows_ImportBatchId_RowNumber");
+
+                    b.ToTable("ImportBatchRows");
+                });
+
             modelBuilder.Entity("Worklane.Domain.Entities.Invitation", b =>
                 {
                     b.Property<Guid>("Id")
@@ -271,6 +413,37 @@ namespace Worklane.Infrastructure.Persistence.Migrations
                         .IsUnique();
 
                     b.ToTable("Projects");
+                });
+
+            modelBuilder.Entity("Worklane.Domain.Entities.ProjectExportLog", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("ActorUserId")
+                        .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Format")
+                        .IsRequired()
+                        .HasMaxLength(8)
+                        .HasColumnType("character varying(8)");
+
+                    b.Property<Guid>("ProjectId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("RowCount")
+                        .HasColumnType("integer");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ProjectId", "CreatedAt")
+                        .HasDatabaseName("IX_ProjectExportLogs_ProjectId_CreatedAt");
+
+                    b.ToTable("ProjectExportLogs");
                 });
 
             modelBuilder.Entity("Worklane.Domain.Entities.ProjectMember", b =>
@@ -484,6 +657,17 @@ namespace Worklane.Infrastructure.Persistence.Migrations
                     b.Property<double?>("EstimateDays")
                         .HasColumnType("double precision");
 
+                    b.Property<string>("ExternalId")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<Guid?>("ImportBatchId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("ImportSource")
+                        .HasMaxLength(16)
+                        .HasColumnType("character varying(16)");
+
                     b.Property<bool>("IsArchived")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("boolean")
@@ -523,6 +707,10 @@ namespace Worklane.Infrastructure.Persistence.Migrations
                     b.HasAlternateKey("ProjectId", "Id")
                         .HasName("AK_TaskItems_ProjectId_Id");
 
+                    b.HasIndex("ImportBatchId")
+                        .HasDatabaseName("IX_TaskItems_ImportBatchId")
+                        .HasFilter("\"ImportBatchId\" IS NOT NULL");
+
                     b.HasIndex("ColumnId", "Order");
 
                     b.HasIndex("ProjectId", "Number")
@@ -532,8 +720,15 @@ namespace Worklane.Infrastructure.Persistence.Migrations
                         .HasDatabaseName("IX_TaskItems_ProjectId_ParentTaskId")
                         .HasFilter("\"ParentTaskId\" IS NOT NULL");
 
+                    b.HasIndex("ProjectId", "ImportSource", "ExternalId")
+                        .IsUnique()
+                        .HasDatabaseName("IX_TaskItems_ProjectId_ImportSource_ExternalId")
+                        .HasFilter("\"ExternalId\" IS NOT NULL");
+
                     b.ToTable("TaskItems", t =>
                         {
+                            t.HasCheckConstraint("CK_TaskItems_ExternalIdRequiresSource", "\"ExternalId\" IS NULL OR \"ImportSource\" IS NOT NULL");
+
                             t.HasCheckConstraint("CK_TaskItems_NotSelfParent", "\"ParentTaskId\" IS NULL OR \"ParentTaskId\" <> \"Id\"");
                         });
                 });
@@ -771,6 +966,35 @@ namespace Worklane.Infrastructure.Persistence.Migrations
                     b.Navigation("Project");
                 });
 
+            modelBuilder.Entity("Worklane.Domain.Entities.ImportBatch", b =>
+                {
+                    b.HasOne("Worklane.Domain.Entities.Project", "Project")
+                        .WithMany()
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Project");
+                });
+
+            modelBuilder.Entity("Worklane.Domain.Entities.ImportBatchRow", b =>
+                {
+                    b.HasOne("Worklane.Domain.Entities.ImportBatch", "ImportBatch")
+                        .WithMany("Rows")
+                        .HasForeignKey("ImportBatchId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Worklane.Domain.Entities.TaskItem", "Task")
+                        .WithMany()
+                        .HasForeignKey("TaskId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("ImportBatch");
+
+                    b.Navigation("Task");
+                });
+
             modelBuilder.Entity("Worklane.Domain.Entities.Invitation", b =>
                 {
                     b.HasOne("Worklane.Domain.Entities.Workspace", "Workspace")
@@ -791,6 +1015,17 @@ namespace Worklane.Infrastructure.Persistence.Migrations
                         .IsRequired();
 
                     b.Navigation("Workspace");
+                });
+
+            modelBuilder.Entity("Worklane.Domain.Entities.ProjectExportLog", b =>
+                {
+                    b.HasOne("Worklane.Domain.Entities.Project", "Project")
+                        .WithMany()
+                        .HasForeignKey("ProjectId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Project");
                 });
 
             modelBuilder.Entity("Worklane.Domain.Entities.ProjectMember", b =>
@@ -856,6 +1091,11 @@ namespace Worklane.Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
+                    b.HasOne("Worklane.Domain.Entities.ImportBatch", "ImportBatch")
+                        .WithMany("Tasks")
+                        .HasForeignKey("ImportBatchId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("Worklane.Domain.Entities.Project", "Project")
                         .WithMany()
                         .HasForeignKey("ProjectId")
@@ -870,6 +1110,8 @@ namespace Worklane.Infrastructure.Persistence.Migrations
                         .HasConstraintName("FK_TaskItems_TaskItems_ProjectId_ParentTaskId");
 
                     b.Navigation("Column");
+
+                    b.Navigation("ImportBatch");
 
                     b.Navigation("Parent");
 
@@ -900,6 +1142,13 @@ namespace Worklane.Infrastructure.Persistence.Migrations
 
             modelBuilder.Entity("Worklane.Domain.Entities.BoardColumn", b =>
                 {
+                    b.Navigation("Tasks");
+                });
+
+            modelBuilder.Entity("Worklane.Domain.Entities.ImportBatch", b =>
+                {
+                    b.Navigation("Rows");
+
                     b.Navigation("Tasks");
                 });
 
