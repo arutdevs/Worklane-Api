@@ -18,7 +18,7 @@ using Worklane.Domain.Enums;
 using Worklane.IntegrationTests.Auth;
 using Worklane.IntegrationTests.Infrastructure;
 
-namespace Worklane.IntegrationTests.Regression;
+namespace Worklane.IntegrationTests.Auth;
 
 /// <summary>
 /// API-level regression for the E2E1 flows QA signed off on develop.

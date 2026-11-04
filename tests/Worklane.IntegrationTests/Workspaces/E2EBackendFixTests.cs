@@ -15,7 +15,7 @@ using Worklane.Infrastructure.Persistence;
 using Worklane.Infrastructure.Services;
 using Worklane.IntegrationTests.Infrastructure;
 
-namespace Worklane.IntegrationTests.Fixes;
+namespace Worklane.IntegrationTests.Workspaces;
 
 public class E2EBackendFixTests : IClassFixture<WorklaneWebApplicationFactory>
 {
