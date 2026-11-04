@@ -495,6 +495,9 @@ namespace Worklane.Infrastructure.Persistence.Migrations
                     b.Property<double>("Order")
                         .HasColumnType("double precision");
 
+                    b.Property<Guid?>("ParentTaskId")
+                        .HasColumnType("uuid");
+
                     b.Property<string>("Priority")
                         .IsRequired()
                         .ValueGeneratedOnAdd()
@@ -517,12 +520,22 @@ namespace Worklane.Infrastructure.Persistence.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasAlternateKey("ProjectId", "Id")
+                        .HasName("AK_TaskItems_ProjectId_Id");
+
                     b.HasIndex("ColumnId", "Order");
 
                     b.HasIndex("ProjectId", "Number")
                         .IsUnique();
 
-                    b.ToTable("TaskItems");
+                    b.HasIndex("ProjectId", "ParentTaskId")
+                        .HasDatabaseName("IX_TaskItems_ProjectId_ParentTaskId")
+                        .HasFilter("\"ParentTaskId\" IS NOT NULL");
+
+                    b.ToTable("TaskItems", t =>
+                        {
+                            t.HasCheckConstraint("CK_TaskItems_NotSelfParent", "\"ParentTaskId\" IS NULL OR \"ParentTaskId\" <> \"Id\"");
+                        });
                 });
 
             modelBuilder.Entity("Worklane.Domain.Entities.Workspace", b =>
@@ -849,7 +862,16 @@ namespace Worklane.Infrastructure.Persistence.Migrations
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
+                    b.HasOne("Worklane.Domain.Entities.TaskItem", "Parent")
+                        .WithMany("Children")
+                        .HasForeignKey("ProjectId", "ParentTaskId")
+                        .HasPrincipalKey("ProjectId", "Id")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .HasConstraintName("FK_TaskItems_TaskItems_ProjectId_ParentTaskId");
+
                     b.Navigation("Column");
+
+                    b.Navigation("Parent");
 
                     b.Navigation("Project");
                 });
@@ -884,6 +906,11 @@ namespace Worklane.Infrastructure.Persistence.Migrations
             modelBuilder.Entity("Worklane.Domain.Entities.Project", b =>
                 {
                     b.Navigation("Members");
+                });
+
+            modelBuilder.Entity("Worklane.Domain.Entities.TaskItem", b =>
+                {
+                    b.Navigation("Children");
                 });
 
             modelBuilder.Entity("Worklane.Domain.Entities.Workspace", b =>

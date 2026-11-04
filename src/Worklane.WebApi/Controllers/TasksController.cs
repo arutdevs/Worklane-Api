@@ -99,12 +99,47 @@ public class TasksController : ControllerBase
         return Ok(result);
     }
 
-    /// <summary>Archives (soft-deletes) a task so it no longer appears on the board.</summary>
+    /// <summary>Links this card under a parent in the same project. Repeating the current parent is a no-op.</summary>
+    [HttpPut("api/tasks/{taskId:guid}/parent")]
+    [RequireWorkspaceRole(WorkspaceRole.Member, WorkspaceResourceType.Task, "taskId")]
+    public async Task<ActionResult<TaskItemDto>> SetParent(
+        Guid taskId,
+        [FromBody] SetParentRequest request,
+        [FromServices] IValidator<SetParentRequest> validator,
+        CancellationToken ct)
+    {
+        await validator.ValidateAndThrowAsync(request, ct);
+        var result = await _board.SetParentAsync(taskId, request.ParentTaskId, _currentUser.UserId, ct);
+        return Ok(result);
+    }
+
+    /// <summary>Clears the parent link. Repeating when there is no parent is a no-op.</summary>
+    [HttpDelete("api/tasks/{taskId:guid}/parent")]
+    [RequireWorkspaceRole(WorkspaceRole.Member, WorkspaceResourceType.Task, "taskId")]
+    public async Task<ActionResult<TaskItemDto>> ClearParent(Guid taskId, CancellationToken ct)
+    {
+        var result = await _board.ClearParentAsync(taskId, _currentUser.UserId, ct);
+        return Ok(result);
+    }
+
+    /// <summary>Active children, oldest first. Archived children are omitted.</summary>
+    [HttpGet("api/tasks/{taskId:guid}/children")]
+    [RequireWorkspaceRole(WorkspaceRole.Viewer, WorkspaceResourceType.Task, "taskId")]
+    public async Task<ActionResult<IReadOnlyList<TaskItemDto>>> GetChildren(Guid taskId, CancellationToken ct)
+    {
+        var result = await _board.GetChildrenAsync(taskId, ct);
+        return Ok(result);
+    }
+
+    /// <summary>
+    /// Archives (soft-deletes) a task so it no longer appears on the board.
+    /// A card with active children requires <c>includeChildren=true</c>, which archives them too.
+    /// </summary>
     [HttpDelete("api/tasks/{taskId:guid}")]
     [RequireWorkspaceRole(WorkspaceRole.Member, WorkspaceResourceType.Task, "taskId")]
-    public async Task<IActionResult> ArchiveTask(Guid taskId, CancellationToken ct)
+    public async Task<IActionResult> ArchiveTask(Guid taskId, [FromQuery] bool includeChildren, CancellationToken ct)
     {
-        await _board.ArchiveTaskAsync(taskId, ct);
+        await _board.ArchiveTaskAsync(taskId, includeChildren, ct);
         return NoContent();
     }
 }

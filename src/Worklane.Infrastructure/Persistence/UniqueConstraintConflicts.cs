@@ -62,6 +62,9 @@ public static class UniqueConstraintConflicts
         ["IX_RefreshTokens_TokenHash"] = (RefreshTokenConflictCode, RefreshTokenConflictDetail),
         ["IX_TaskAttachments_StorageKey"] = (AttachmentStorageKeyTakenCode, AttachmentStorageKeyTakenDetail),
         ["IX_TaskItems_ProjectId_Number"] = (TaskNumberTakenCode, TaskNumberTakenDetail),
+        // Alternate key so the parent FK can target (ProjectId, Id). A violation is a
+        // duplicate id, which callers never produce on purpose.
+        ["AK_TaskItems_ProjectId_Id"] = (UniqueConflictCode, UniqueConflictDetail),
         ["IX_Workspaces_Slug"] = (WorkspaceSlugUnavailableCode, WorkspaceSlugUnavailableDetail),
         ["EmailIndex"] = (EmailAlreadyRegisteredCode, EmailAlreadyRegisteredDetail),
         ["UserNameIndex"] = (EmailAlreadyRegisteredCode, EmailAlreadyRegisteredDetail),

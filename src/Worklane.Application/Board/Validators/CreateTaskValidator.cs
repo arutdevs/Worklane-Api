@@ -17,5 +17,10 @@ public class CreateTaskValidator : AbstractValidator<CreateTaskRequest>
         RuleFor(x => x.EstimateDays)
             .GreaterThan(0).LessThanOrEqualTo(260)
             .When(x => x.EstimateDays.HasValue);
+        RuleFor(x => x.ParentTaskId)
+            .Must(id => id != Guid.Empty)
+            .When(x => x.ParentTaskId.HasValue)
+            .WithErrorCode("not_empty")
+            .WithMessage("'{PropertyName}' must not be empty.");
     }
 }
