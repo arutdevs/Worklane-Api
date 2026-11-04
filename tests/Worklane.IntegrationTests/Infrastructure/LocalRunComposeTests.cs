@@ -27,6 +27,13 @@ public class LocalRunComposeTests
         var deploy = File.ReadAllText(Path.Combine(root, "docker-compose.yml"));
         deploy.Should().Contain("ipv4_address: 172.30.20.3");
         deploy.Should().Contain("Jwt__Secret: \"${JWT_SIGNING_KEY:?}\"");
+        deploy.Should().Contain("command: [\"--migrate-only\"]");
+        deploy.Should().Contain("DataProtection__KeysPath: /var/lib/worklane/dataprotection-keys");
+        deploy.Should().Contain("condition: service_completed_successfully");
+        deploy.Should().Contain("no-new-privileges:true");
+        deploy.Should().Contain("cap_drop:");
+        deploy.Should().Contain("pids_limit: 256");
+        deploy.Should().Contain("user: \"1654:1654\"");
     }
 
     [Fact]
