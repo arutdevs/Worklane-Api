@@ -8,3 +8,27 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 2
+
+  # Digest bumps in deploy/beta/docker-compose.yml. Nothing automerges.
+  - package-ecosystem: docker-compose
+    directory: /deploy/beta
+    target-branch: develop
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 2
+
+  # API Dockerfile base images (sdk and aspnet).
+  - package-ecosystem: docker
+    directory: /src/Worklane.WebApi
+    target-branch: develop
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 2
+
+  # Migrator Dockerfile (deploy/beta/Dockerfile) uses the same base images.
+  - package-ecosystem: docker
+    directory: /deploy/beta
+    target-branch: develop
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 2

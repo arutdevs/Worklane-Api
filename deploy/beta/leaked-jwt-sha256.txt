@@ -1,0 +1,9 @@
+# SHA-256 (hex) of JWT signing secrets that must never be deployed.
+# The plaintext was committed for local dev (docker-compose.yml and
+# appsettings.Development.json) and is in git history. Do not add plaintext here.
+#
+# text: SHA-256 of the exact UTF-8 base64 string.
+# key:  SHA-256 of the base64-decoded key bytes. .NET FromBase64String ignores
+#       whitespace, so a tab inside the value is still this key.
+bd3ad4473d8c29998cd25d9041bb61758a3de08da5430795688fb8b26e9e9e17
+6478a52cc5de53f75fc5b15ccda93afa869c601533c7b5c6894d963e0a839ff4
