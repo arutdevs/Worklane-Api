@@ -708,7 +708,8 @@ public partial class BoardService : IBoardService
             isOverdue, daysOverdue,
             isOverWipLimit,
             counts.Comments, counts.Attachments,
-            parent.ParentTaskId, parent.ParentDisplayKey, parent.ChildCount, parent.DoneChildCount);
+            parent.ParentTaskId, parent.ParentDisplayKey, parent.ChildCount, parent.DoneChildCount,
+            t.ArchivedAt);
     }
 
     /// <summary>

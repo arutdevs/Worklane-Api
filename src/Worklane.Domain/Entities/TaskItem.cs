@@ -40,6 +40,9 @@ public class TaskItem
     public DateTimeOffset UpdatedAt { get; set; }
     public bool IsArchived { get; set; }
 
+    /// <summary>When this card was archived. Null while it is on the board.</summary>
+    public DateTimeOffset? ArchivedAt { get; set; }
+
     /// <summary>Optional parent in the same project. Null when this card is not a subtask.</summary>
     public Guid? ParentTaskId { get; set; }
 
