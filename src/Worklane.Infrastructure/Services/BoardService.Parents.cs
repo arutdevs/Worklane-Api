@@ -20,6 +20,8 @@ public partial class BoardService
 
     private readonly record struct LinkOutcome(TaskItemDto Child, TaskItemDto? Parent, bool Changed);
 
+    private readonly record struct ArchiveBroadcast(IReadOnlyList<TaskArchivedEvent> Archived, Guid? SurvivingParentId);
+
     private sealed class ParentLinkSnapshot
     {
         public static ParentLinkSnapshot Empty { get; } = new(
@@ -148,8 +150,8 @@ public partial class BoardService
 
     public async Task ArchiveTaskAsync(Guid taskId, bool includeChildren, CancellationToken ct = default)
     {
-        Guid? parentToNotify = null;
-        await InLinkTransactionAsync(async token =>
+        // Broadcast only after commit. A rejected archive throws inside the transaction.
+        var broadcast = await InLinkTransactionAsync(async token =>
         {
             var workspaceId = RequireWorkspaceId();
             var locked = await LockFamilyAsync(workspaceId, taskId, token);
@@ -178,15 +180,27 @@ public partial class BoardService
                 child.UpdatedAt = now;
             }
 
+            // Root first, then each child this call archived, ordered by id. Already-archived children stay out.
+            var archived = new List<TaskArchivedEvent>(1 + activeChildren.Count)
+            {
+                new(task.ProjectId, task.Id, task.ColumnId, task.ParentTaskId)
+            };
+            foreach (var child in activeChildren.OrderBy(child => child.Id))
+                archived.Add(new(child.ProjectId, child.Id, child.ColumnId, child.ParentTaskId));
+
             // The parent stays on the board only when this card is a child and is archived alone.
-            if (activeChildren.Count == 0 && task.ParentTaskId is Guid parentId)
-                parentToNotify = parentId;
+            Guid? survivingParentId = activeChildren.Count == 0 && task.ParentTaskId is Guid parentId
+                ? parentId
+                : null;
 
             await _db.SaveChangesAsync(token);
-            return 0;
+            return new ArchiveBroadcast(archived, survivingParentId);
         }, ct);
 
-        if (parentToNotify is Guid notifyId)
+        foreach (var archived in broadcast.Archived)
+            await _notifier.TaskArchivedAsync(archived.ProjectId, archived, ct);
+
+        if (broadcast.SurvivingParentId is Guid notifyId)
             await NotifyParentCountsAsync(notifyId, ct);
     }
 
