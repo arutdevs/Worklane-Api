@@ -146,7 +146,7 @@ public partial class BoardService
             .ToList();
     }
 
-    public async Task ArchiveTaskAsync(Guid taskId, bool includeChildren, CancellationToken ct = default)
+    public async Task ArchiveTaskAsync(Guid taskId, bool includeChildren, Guid userId, CancellationToken ct = default)
     {
         Guid? parentToNotify = null;
         await InLinkTransactionAsync(async token =>
@@ -170,13 +170,9 @@ public partial class BoardService
             }
 
             var now = DateTimeOffset.UtcNow;
-            task.IsArchived = true;
-            task.UpdatedAt = now;
+            ArchiveCard(task, userId, now);
             foreach (var child in activeChildren)
-            {
-                child.IsArchived = true;
-                child.UpdatedAt = now;
-            }
+                ArchiveCard(child, userId, now);
 
             // The parent stays on the board only when this card is a child and is archived alone.
             if (activeChildren.Count == 0 && task.ParentTaskId is Guid parentId)
@@ -541,8 +537,29 @@ public partial class BoardService
         CreatedAt = now,
         UpdatedAt = now,
         IsArchived = false,
+        ArchivedAt = null,
         ParentTaskId = parentTaskId
     };
+
+    /// <summary>
+    /// One <see cref="TaskActivityType.Archived"/> row per card this call archives.
+    /// The activity query filter hides it while the card is archived; that filter stays as it is.
+    /// </summary>
+    private void ArchiveCard(TaskItem task, Guid userId, DateTimeOffset now)
+    {
+        task.IsArchived = true;
+        task.ArchivedAt = now;
+        task.UpdatedAt = now;
+        _db.TaskActivities.Add(new TaskActivity
+        {
+            Id = Guid.NewGuid(),
+            TaskId = task.Id,
+            Type = TaskActivityType.Archived,
+            ActorUserId = userId,
+            CreatedAt = now,
+            Details = "{}"
+        });
+    }
 
     private void AddCreatedActivity(TaskItem task, BoardColumn column, Guid userId, DateTimeOffset now)
     {
