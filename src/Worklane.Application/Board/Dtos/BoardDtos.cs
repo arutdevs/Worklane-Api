@@ -76,7 +76,10 @@ public record TaskItemDto(
     int ChildCount,
 
     /// <summary>Active children whose column is done. Always between 0 and <see cref="ChildCount"/>.</summary>
-    int DoneChildCount
+    int DoneChildCount,
+
+    /// <summary>When the card was archived. Null on every card that is still on the board.</summary>
+    DateTimeOffset? ArchivedAt = null
 );
 
 public record CreateColumnRequest(string Name, int? WipLimit = null);
