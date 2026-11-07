@@ -238,6 +238,8 @@ public class BroadcastFailureFactory : WorklaneWebApplicationFactory
         public Task TaskMovedAsync(Guid projectId, TaskItemDto task, CancellationToken ct = default) => Task.CompletedTask;
         public Task TaskUpdatedAsync(Guid projectId, TaskItemDto task, CancellationToken ct = default) =>
             throw new NotFoundException("TaskItem", task.Id);
+        public Task TaskArchivedAsync(Guid projectId, TaskArchivedEvent payload, CancellationToken ct = default) =>
+            Task.CompletedTask;
         public Task CommentCreatedAsync(Guid projectId, CommentBroadcastDto comment, CancellationToken ct = default) => Task.CompletedTask;
         public Task CommentUpdatedAsync(Guid projectId, CommentBroadcastDto comment, CancellationToken ct = default) => Task.CompletedTask;
         public Task CommentDeletedAsync(Guid projectId, CommentDeletedEvent payload, CancellationToken ct = default) =>
