@@ -27,9 +27,9 @@ public class TaskCommentTests : IClassFixture<WorklaneWebApplicationFactory>
         var member = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), "comments-member@test.com", "Member");
         var other = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), "comments-other@test.com", "Other");
         var admin = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), "comments-admin@test.com", "Admin");
-        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, member.Tokens.User.Email, "Member");
-        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, other.Tokens.User.Email, "Member");
-        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, admin.Tokens.User.Email, "Admin");
+        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, member, "Member");
+        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, other, "Member");
+        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, admin, "Admin");
 
         var firstResponse = await member.Client.PostAsJsonAsync($"/api/tasks/{task.Id}/comments", new { body = "  First note  " });
         firstResponse.StatusCode.Should().Be(HttpStatusCode.Created);
@@ -97,7 +97,7 @@ public class TaskCommentTests : IClassFixture<WorklaneWebApplicationFactory>
         var board = await BoardTestSetup.CreateAsync(_factory, "comments-viewer-owner@test.com");
         var task = await BoardTestSetup.CreateTaskAsync(board, "Read only");
         var viewer = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), "comments-viewer@test.com");
-        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, viewer.Tokens.User.Email, "Viewer");
+        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, viewer, "Viewer");
 
         (await viewer.Client.GetAsync($"/api/tasks/{task.Id}/comments")).StatusCode.Should().Be(HttpStatusCode.OK);
         (await viewer.Client.PostAsJsonAsync($"/api/tasks/{task.Id}/comments", new { body = "Hi" }))
@@ -114,7 +114,7 @@ public class TaskCommentTests : IClassFixture<WorklaneWebApplicationFactory>
         var board = await BoardTestSetup.CreateAsync(_factory, "comments-demote-owner@test.com", "Owner");
         var task = await BoardTestSetup.CreateTaskAsync(board, "Demote");
         var member = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), "comments-demote-member@test.com", "Author");
-        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, member.Tokens.User.Email, "Member");
+        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, member, "Member");
 
         var comment = await (await member.Client.PostAsJsonAsync($"/api/tasks/{task.Id}/comments", new { body = "Mine" }))
             .Content.ReadFromJsonAsync<CommentDto>(TestAuthHelper.JsonOptions);

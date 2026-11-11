@@ -27,8 +27,8 @@ public class NonMemberNotFoundTests : IClassFixture<WorklaneWebApplicationFactor
         var outsider = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), "hide-out@test.com", "Outsider");
         var viewer = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), "hide-viewer@test.com", "Viewer");
         var member = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), "hide-member@test.com", "Member");
-        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, viewer.Tokens.User.Email, "Viewer");
-        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, member.Tokens.User.Email, "Member");
+        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, viewer, "Viewer");
+        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, member, "Member");
 
         var workspaceId = board.User.Workspace.Id;
         var missingWorkspace = Guid.NewGuid();

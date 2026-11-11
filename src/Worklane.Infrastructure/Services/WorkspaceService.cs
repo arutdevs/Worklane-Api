@@ -136,40 +136,16 @@ public class WorkspaceService : IWorkspaceService
 
     public async Task<InvitationDto> InviteMemberAsync(Guid workspaceId, Guid invitedByUserId, InviteMemberRequest request, CancellationToken cancellationToken)
     {
-        // Identity lookup stays outside the membership lock. Clear() inside the lock detaches
-        // tracked users; the id and email on this instance are still valid afterwards.
-        var existingUser = await _userManager.FindByEmailAsync(request.Email);
-
+        // Every address takes the token path, including one that already has an account.
+        // Adding that account now would give the workspace to whoever registered the address,
+        // with no proof they own the mailbox. Accept checks the caller's email.
+        // The response is the same whether or not an account exists.
         Invitation? invitation = null;
         string? absoluteLink = null;
         await using (var transaction = await BeginLockedMembershipChangeAsync(workspaceId, cancellationToken))
         {
             var actor = await RequireActorAsync(workspaceId, invitedByUserId, cancellationToken);
             WorkspaceMembershipPolicy.EnsureCanInvite(actor.Role, request.Role);
-
-            if (existingUser is not null)
-            {
-                var alreadyMember = await _db.WorkspaceMembers
-                    .AnyAsync(m => m.WorkspaceId == workspaceId && m.UserId == existingUser.Id, cancellationToken);
-
-                if (alreadyMember)
-                    throw UniqueConstraintConflicts.WorkspaceMemberExists();
-
-                _db.WorkspaceMembers.Add(new WorkspaceMember
-                {
-                    Id = Guid.NewGuid(),
-                    WorkspaceId = workspaceId,
-                    UserId = existingUser.Id,
-                    Role = request.Role,
-                    JoinedAt = DateTimeOffset.UtcNow
-                });
-                AddMembershipEvent(workspaceId, invitedByUserId, existingUser.Id, WorkspaceMembershipAction.MemberAdded, oldRole: null, request.Role);
-                await _db.SaveChangesAsync(cancellationToken);
-                await transaction.CommitAsync(cancellationToken);
-                LogMembershipChange(workspaceId, invitedByUserId, existingUser.Id, WorkspaceMembershipAction.MemberAdded, oldRole: null, request.Role);
-
-                return new InvitationDto(Guid.Empty, request.Email, request.Role, DateTimeOffset.UtcNow, null);
-            }
 
             var rawToken = InviteTokens.Generate();
             invitation = new Invitation

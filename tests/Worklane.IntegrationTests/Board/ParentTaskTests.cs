@@ -253,7 +253,7 @@ public class ParentTaskTests : IClassFixture<WorklaneWebApplicationFactory>
         var child = await ReadTask(await PostChild(board, "Child", parent.Id));
         var viewer = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), "parent-auth-viewer@test.com");
         var outsider = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), "parent-auth-out@test.com");
-        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, viewer.Tokens.User.Email, "Viewer");
+        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, viewer, "Viewer");
 
         await AssertProblem(await PostChild(viewer, board.Project.Id, "Nope", parent.Id), HttpStatusCode.Forbidden, "workspace_access_denied");
         await AssertProblem(await PutParent(viewer, child.Id, parent.Id), HttpStatusCode.Forbidden, "workspace_access_denied");
@@ -564,7 +564,7 @@ public class ParentTaskTests : IClassFixture<WorklaneWebApplicationFactory>
 
         var viewer = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), "parent-archive-reject-viewer@test.com");
         var outsider = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), "parent-archive-reject-out@test.com");
-        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, viewer.Tokens.User.Email, "Viewer");
+        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, viewer, "Viewer");
         var outsideTask = await CreateTask(outsider, outsider.Workspace.Id, "Hidden", "ZX");
 
         await using var home = BoardTestSetup.Hub(_factory, board.User.Tokens.AccessToken);

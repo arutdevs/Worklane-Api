@@ -62,8 +62,8 @@ public class WorkspaceEndpointFailureTests : IClassFixture<WorklaneWebApplicatio
         var owner = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
         var viewer = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
         var member = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
-        await InviteAsync(owner, viewer.Tokens.User.Email, WorkspaceRole.Viewer);
-        await InviteAsync(owner, member.Tokens.User.Email, WorkspaceRole.Member);
+        await AddMemberAsync(owner, viewer, WorkspaceRole.Viewer);
+        await AddMemberAsync(owner, member, WorkspaceRole.Member);
 
         foreach (var caller in new[] { viewer, member })
         {
@@ -92,7 +92,7 @@ public class WorkspaceEndpointFailureTests : IClassFixture<WorklaneWebApplicatio
         var guest = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
         var pending = $"pending-{Guid.NewGuid():N}@example.com";
         await InviteAsync(alpha, pending, WorkspaceRole.Member);
-        await InviteAsync(beta, guest.Tokens.User.Email, WorkspaceRole.Member);
+        await AddMemberAsync(beta, guest, WorkspaceRole.Member);
         (await alpha.Client.PostAsJsonAsync(
             $"/api/workspaces/{alpha.Workspace.Id}/projects",
             new { name = "Alpha", key = "AL" })).EnsureSuccessStatusCode();
@@ -125,17 +125,25 @@ public class WorkspaceEndpointFailureTests : IClassFixture<WorklaneWebApplicatio
     }
 
     [Fact]
-    public async Task Invite_DuplicateMember_ExpiredInvalidWrongEmail_AndReuse()
+    public async Task Invite_ExistingAccountStaysOut_ExpiredInvalidWrongEmail_AndReuse()
     {
         var owner = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
         var existing = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
-        await InviteAsync(owner, existing.Tokens.User.Email, WorkspaceRole.Member);
+        var invited = await owner.Client.PostAsJsonAsync(
+            $"/api/workspaces/{owner.Workspace.Id}/invitations",
+            new InviteMemberRequest(existing.Tokens.User.Email, WorkspaceRole.Member));
+        var invitedText = await invited.Content.ReadAsStringAsync();
+        invited.StatusCode.Should().Be(HttpStatusCode.OK, invitedText);
+        JsonDocument.Parse(invitedText).RootElement.GetProperty("inviteLink").GetString().Should().NotBeNullOrWhiteSpace();
+        await AssertRole(owner, existing.Tokens.User.Id, null);
 
         var duplicate = await owner.Client.PostAsJsonAsync(
             $"/api/workspaces/{owner.Workspace.Id}/invitations",
             new InviteMemberRequest(existing.Tokens.User.Email, WorkspaceRole.Member));
-        await AssertProblem(duplicate, HttpStatusCode.Conflict, "workspace_member_exists",
-            "This user is already a member of the workspace.");
+        var duplicateText = await duplicate.Content.ReadAsStringAsync();
+        duplicate.StatusCode.Should().Be(HttpStatusCode.OK, duplicateText);
+        JsonDocument.Parse(duplicateText).RootElement.GetProperty("inviteLink").GetString().Should().NotBeNullOrWhiteSpace();
+        await AssertRole(owner, existing.Tokens.User.Id, null);
 
         var wrongEmail = $"holder-{Guid.NewGuid():N}@example.com";
         var wrongToken = await InvitePendingAsync(owner, wrongEmail, WorkspaceRole.Viewer);
@@ -181,7 +189,7 @@ public class WorkspaceEndpointFailureTests : IClassFixture<WorklaneWebApplicatio
     {
         var owner = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
         var second = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
-        await InviteAsync(owner, second.Tokens.User.Email, WorkspaceRole.Member);
+        await AddMemberAsync(owner, second, WorkspaceRole.Member);
         (await PatchRole(owner, second.Tokens.User.Id, WorkspaceRole.Owner)).EnsureSuccessStatusCode();
 
         var email = $"orphan-{Guid.NewGuid():N}@example.com";
@@ -219,14 +227,14 @@ public class WorkspaceEndpointFailureTests : IClassFixture<WorklaneWebApplicatio
         await AssertProblem(missingDelete, HttpStatusCode.NotFound, "not_found", "WorkspaceMember");
 
         var member = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
-        await InviteAsync(owner, member.Tokens.User.Email, WorkspaceRole.Member);
+        await AddMemberAsync(owner, member, WorkspaceRole.Member);
         (await PatchRole(owner, member.Tokens.User.Id, WorkspaceRole.Admin)).EnsureSuccessStatusCode();
         (await owner.Client.DeleteAsync($"/api/workspaces/{owner.Workspace.Id}/members/{member.Tokens.User.Id}"))
             .StatusCode.Should().Be(HttpStatusCode.NoContent);
         await AssertRole(owner, member.Tokens.User.Id, null);
 
         var second = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
-        await InviteAsync(owner, second.Tokens.User.Email, WorkspaceRole.Member);
+        await AddMemberAsync(owner, second, WorkspaceRole.Member);
         (await PatchRole(owner, second.Tokens.User.Id, WorkspaceRole.Owner)).EnsureSuccessStatusCode();
         (await second.Client.DeleteAsync($"/api/workspaces/{owner.Workspace.Id}/members/{owner.Tokens.User.Id}"))
             .StatusCode.Should().Be(HttpStatusCode.NoContent);
@@ -296,6 +304,13 @@ public class WorkspaceEndpointFailureTests : IClassFixture<WorklaneWebApplicatio
             $"/api/workspaces/{owner.Workspace.Id}/invitations",
             new InviteMemberRequest(email, role));
         response.EnsureSuccessStatusCode();
+    }
+
+    private static async Task AddMemberAsync(RegisteredUser owner, RegisteredUser user, WorkspaceRole role)
+    {
+        var token = await InvitePendingAsync(owner, user.Tokens.User.Email, role);
+        var accept = await user.Client.PostAsJsonAsync("/api/invitations/accept", new AcceptInvitationRequest(token));
+        accept.EnsureSuccessStatusCode();
     }
 
     private static async Task<string> InvitePendingAsync(RegisteredUser owner, string email, WorkspaceRole role)

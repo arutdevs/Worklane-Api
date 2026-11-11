@@ -113,7 +113,7 @@ public class ClearTaskFieldsTests : IClassFixture<WorklaneWebApplicationFactory>
     {
         var board = await BoardTestSetup.CreateAsync(_factory, "set-owner@test.com");
         var member = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), "set-member@test.com", "Member");
-        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, member.Tokens.User.Email, "Member");
+        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, member, "Member");
         var task = await BoardTestSetup.CreateTaskAsync(board, "Fill me in");
         var due = new DateTimeOffset(2026, 12, 1, 15, 0, 0, TimeSpan.Zero);
 

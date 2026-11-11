@@ -55,10 +55,7 @@ public class WorkspaceAuthorizationTests : IClassFixture<WorklaneWebApplicationF
         var owner = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
         var member = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
 
-        var inviteResponse = await owner.Client.PostAsJsonAsync(
-            $"/api/workspaces/{owner.Workspace.Id}/invitations",
-            new InviteMemberRequest(member.Tokens.User.Email, WorkspaceRole.Member));
-        inviteResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+        await InviteAsync(owner, member, WorkspaceRole.Member);
 
         var createProjectResponse = await member.Client.PostAsJsonAsync(
             $"/api/workspaces/{owner.Workspace.Id}/projects",
@@ -535,10 +532,9 @@ public class WorkspaceAuthorizationTests : IClassFixture<WorklaneWebApplicationF
 
     private static async Task InviteAsync(RegisteredUser owner, RegisteredUser user, WorkspaceRole role)
     {
-        var response = await owner.Client.PostAsJsonAsync(
-            $"/api/workspaces/{owner.Workspace.Id}/invitations",
-            new InviteMemberRequest(user.Tokens.User.Email, role));
-        response.EnsureSuccessStatusCode();
+        var token = await InvitePendingAsync(owner, user.Tokens.User.Email, role);
+        var accept = await user.Client.PostAsJsonAsync("/api/invitations/accept", new AcceptInvitationRequest(token));
+        accept.EnsureSuccessStatusCode();
     }
 
     private async Task<RegisteredUser> AddSecondOwnerAsync(RegisteredUser owner)

@@ -116,7 +116,7 @@ public class ParentHasChildrenCountTests : IClassFixture<WorklaneWebApplicationF
         await PostChildAsync(board, "Child", parent.Id);
         var viewer = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), "parent-count-viewer@test.com");
         var outsider = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), "parent-count-out@test.com");
-        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, viewer.Tokens.User.Email, "Viewer");
+        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, viewer, "Viewer");
 
         var forbidden = await viewer.Client.DeleteAsync($"/api/tasks/{parent.Id}");
         forbidden.StatusCode.Should().Be(HttpStatusCode.Forbidden);

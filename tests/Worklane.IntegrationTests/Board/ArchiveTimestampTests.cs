@@ -116,7 +116,7 @@ public class ArchiveTimestampTests : IClassFixture<WorklaneWebApplicationFactory
         var child = await ReadTask(await PostChild(board, "Child", parent.Id));
         var viewer = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), "archive-at-viewer@test.com");
         var outsider = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), "archive-at-out@test.com");
-        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, viewer.Tokens.User.Email, "Viewer");
+        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, viewer, "Viewer");
 
         await AssertProblem(
             await board.Client.DeleteAsync($"/api/tasks/{parent.Id}"),

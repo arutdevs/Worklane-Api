@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using System.Text.Json;
 using Microsoft.AspNetCore.SignalR.Client;
 using Worklane.Application.Board.Dtos;
 using Worklane.Application.Projects.Dtos;
@@ -49,10 +50,23 @@ internal static class BoardTestSetup
         return (await response.Content.ReadFromJsonAsync<TaskItemDto>(TestAuthHelper.JsonOptions))!;
     }
 
-    public static async Task InviteAsync(HttpClient owner, Guid workspaceId, string email, string role)
+    public static async Task InviteAsync(HttpClient owner, Guid workspaceId, RegisteredUser invitee, string role)
     {
-        var response = await owner.PostAsJsonAsync($"/api/workspaces/{workspaceId}/invitations", new { email, role });
+        var response = await owner.PostAsJsonAsync(
+            $"/api/workspaces/{workspaceId}/invitations",
+            new { email = invitee.Tokens.User.Email, role });
+        var body = await response.Content.ReadAsStringAsync();
         response.EnsureSuccessStatusCode();
+        using var json = JsonDocument.Parse(body);
+        var link = json.RootElement.GetProperty("inviteLink").GetString()
+            ?? throw new InvalidOperationException("Invite did not return a link.");
+        const string marker = "token=";
+        var start = link.IndexOf(marker, StringComparison.Ordinal);
+        if (start < 0)
+            throw new InvalidOperationException("Invite link has no token.");
+        var token = Uri.UnescapeDataString(link[(start + marker.Length)..]);
+        var accept = await invitee.Client.PostAsJsonAsync("/api/invitations/accept", new { token });
+        accept.EnsureSuccessStatusCode();
     }
 
     public static HubConnection Hub(WorklaneWebApplicationFactory factory, string accessToken)

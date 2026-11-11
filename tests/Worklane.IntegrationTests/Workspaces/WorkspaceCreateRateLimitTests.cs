@@ -227,7 +227,14 @@ public class WorkspaceOwnershipCapTests : IClassFixture<WorkspaceOwnershipCapFac
             var invite = await owner.Client.PostAsJsonAsync(
                 $"/api/workspaces/{owner.Workspace.Id}/invitations",
                 new InviteMemberRequest(member.Tokens.User.Email, WorkspaceRole.Member));
-            invite.StatusCode.Should().Be(HttpStatusCode.OK, await invite.Content.ReadAsStringAsync());
+            var inviteText = await invite.Content.ReadAsStringAsync();
+            invite.StatusCode.Should().Be(HttpStatusCode.OK, inviteText);
+            using var inviteJson = JsonDocument.Parse(inviteText);
+            var link = inviteJson.RootElement.GetProperty("inviteLink").GetString()!;
+            const string marker = "token=";
+            var token = Uri.UnescapeDataString(link[(link.IndexOf(marker, StringComparison.Ordinal) + marker.Length)..]);
+            var accept = await member.Client.PostAsJsonAsync("/api/invitations/accept", new AcceptInvitationRequest(token));
+            accept.StatusCode.Should().Be(HttpStatusCode.NoContent, await accept.Content.ReadAsStringAsync());
         }
 
         var created = await member.Client.PostAsJsonAsync("/api/workspaces", new { name = "still-allowed-" + Guid.NewGuid().ToString("N") });

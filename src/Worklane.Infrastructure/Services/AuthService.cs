@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Security.Cryptography;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -18,17 +19,27 @@ public class AuthService : IAuthService
 {
     internal const int MaxSlugInsertAttempts = WorkspaceSlug.MaxInsertAttempts;
 
+    private static readonly AppUser DummyHashUser = new();
+
+    // One Identity hash of a random password, computed once per process. Unknown and locked
+    // logins verify against it so those paths do the same PBKDF2 work as a real check.
+    private static readonly string DummyPasswordHash = new PasswordHasher<AppUser>().HashPassword(
+        DummyHashUser,
+        Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)));
+
     private readonly WorklaneDbContext _db;
     private readonly UserManager<AppUser> _userManager;
     private readonly ITokenService _tokenService;
     private readonly JwtSettings _jwtSettings;
+    private readonly IdentityOptions _identityOptions;
 
     public AuthService(
         WorklaneDbContext db,
         UserManager<AppUser> userManager,
         IUserStore<AppUser> userStore,
         ITokenService tokenService,
-        IOptions<JwtSettings> jwtSettings)
+        IOptions<JwtSettings> jwtSettings,
+        IOptions<IdentityOptions> identityOptions)
     {
         // Identity's EF store type grew extra parameters (passkeys). The context property
         // is what CreateAsync saves through, so registration and the store must share it.
@@ -40,6 +51,7 @@ public class AuthService : IAuthService
         _userManager = userManager;
         _tokenService = tokenService;
         _jwtSettings = jwtSettings.Value;
+        _identityOptions = identityOptions.Value;
     }
 
     public Task<AuthTokensResponse> RegisterAsync(
@@ -120,12 +132,82 @@ public class AuthService : IAuthService
     public async Task<AuthTokensResponse> LoginAsync(LoginRequest request, CancellationToken cancellationToken)
     {
         var user = await _userManager.FindByEmailAsync(request.Email);
-        if (user is null || !await _userManager.CheckPasswordAsync(user, request.Password))
+        if (user is null)
         {
+            VerifyDummyPassword(request.Password);
             throw new AuthenticationFailedException();
         }
 
+        if (!_userManager.SupportsUserLockout)
+        {
+            if (!await _userManager.CheckPasswordAsync(user, request.Password))
+                throw new AuthenticationFailedException();
+
+            return await IssueTokensAsync(user, cancellationToken);
+        }
+
+        // Rows created outside UserManager can still have LockoutEnabled false. Identity then
+        // ignores LockoutEnd. Flip it on before the lockout check. One UPDATE, no migration.
+        await _db.Users
+            .Where(account => account.Id == user.Id && !account.LockoutEnabled)
+            .ExecuteUpdateAsync(setters => setters.SetProperty(account => account.LockoutEnabled, true), cancellationToken);
+        await _db.Entry(user).ReloadAsync(cancellationToken);
+
+        if (await _userManager.IsLockedOutAsync(user))
+        {
+            VerifyDummyPassword(request.Password);
+            throw new AuthenticationFailedException();
+        }
+
+        // AccessFailedAsync updates the whole row and drops the write when two requests
+        // race on the concurrency stamp. Claim the attempt in one conditional UPDATE so
+        // parallel guesses cannot pass the configured limit.
+        var maxAttempts = _identityOptions.Lockout.MaxFailedAccessAttempts;
+        var now = DateTimeOffset.UtcNow;
+        var claimed = await _db.Users
+            .Where(account => account.Id == user.Id
+                && (account.LockoutEnd == null || account.LockoutEnd < now)
+                && account.AccessFailedCount < maxAttempts)
+            .ExecuteUpdateAsync(
+                setters => setters.SetProperty(account => account.AccessFailedCount, account => account.AccessFailedCount + 1),
+                cancellationToken);
+
+        if (claimed == 0)
+        {
+            await LockOutIfThresholdReachedAsync(user.Id, maxAttempts, cancellationToken);
+            VerifyDummyPassword(request.Password);
+            throw new AuthenticationFailedException();
+        }
+
+        await _db.Entry(user).ReloadAsync(cancellationToken);
+        if (!await _userManager.CheckPasswordAsync(user, request.Password))
+        {
+            if (user.AccessFailedCount >= maxAttempts)
+                await LockOutIfThresholdReachedAsync(user.Id, maxAttempts, cancellationToken);
+
+            throw new AuthenticationFailedException();
+        }
+
+        await _db.Users
+            .Where(account => account.Id == user.Id)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(account => account.AccessFailedCount, 0)
+                .SetProperty(account => account.LockoutEnd, (DateTimeOffset?)null), cancellationToken);
+
         return await IssueTokensAsync(user, cancellationToken);
+    }
+
+    private void VerifyDummyPassword(string password) =>
+        _userManager.PasswordHasher.VerifyHashedPassword(DummyHashUser, DummyPasswordHash, password);
+
+    private async Task LockOutIfThresholdReachedAsync(Guid userId, int maxAttempts, CancellationToken cancellationToken)
+    {
+        var until = DateTimeOffset.UtcNow.Add(_identityOptions.Lockout.DefaultLockoutTimeSpan);
+        await _db.Users
+            .Where(account => account.Id == userId && account.AccessFailedCount >= maxAttempts)
+            .ExecuteUpdateAsync(setters => setters
+                .SetProperty(account => account.LockoutEnd, until)
+                .SetProperty(account => account.AccessFailedCount, 0), cancellationToken);
     }
 
     public async Task<AuthTokensResponse> RefreshAsync(string refreshToken, CancellationToken cancellationToken)
