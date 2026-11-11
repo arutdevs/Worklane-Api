@@ -37,7 +37,7 @@
 set -euo pipefail
 
 if [ "$(id -u)" -ne 0 ]; then
-  exec sudo -E bash "$0" "$@"
+  exec sudo bash "$0" "$@"
 fi
 
 if ! command -v iptables-legacy >/dev/null 2>&1 || ! command -v ip6tables-legacy >/dev/null 2>&1; then
