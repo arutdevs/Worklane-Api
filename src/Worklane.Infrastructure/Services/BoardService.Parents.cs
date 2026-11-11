@@ -258,7 +258,7 @@ public partial class BoardService
             }
             catch (Exception ex) when (ex is not AppException)
             {
-                if (ParentLinkConflicts.Translate(ex) is { } mapped)
+                if (await ParentLinkConflicts.TranslateAsync(ex, _scopes, _tenant.WorkspaceId, token) is { } mapped)
                 {
                     _logger.LogWarning(ex, "Parent link rejected as {Code}", mapped.Code);
                     throw mapped;
