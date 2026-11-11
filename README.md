@@ -69,6 +69,12 @@ Keep the image as a literal `name:tag@sha256:…`. Do not wrap it in `${IMAGE:-�
 - **Advisories.** No new security advisory covers that version.
 - **Smoke test.** `s3-init` exits 0, an anonymous object GET is 403, the app user is denied `CreateBucket`, and the app user can put, get, and delete an object.
 
+### Cloud agent bridge forwarding
+
+A compose bridge can fail while the published port still works. `s3` is healthy and `http://127.0.0.1:9000/health` returns 200, but another container on that bridge times out connecting to `s3:9000`, and `s3-init` exits 3. `iptables-legacy` still has `FORWARD` policy `DROP` (docker0 rules only) while the `iptables` alternative points at `iptables-nft`, so Docker writes the bridge accept rules into nftables. With `net.bridge.bridge-nf-call-iptables=1`, the bridge SYNs hit the legacy table and are dropped. An IPv6-only listen on `:::9000` is not that failure: the host can open an IPv4 connection to the container address.
+
+Run `scripts/ci-env/fix-docker-bridge-forwarding.sh` before compose on that VM. It selects the legacy iptables backend and restarts `dockerd` so the bridge rules are installed in the table that drops the packets. It leaves `net.bridge.bridge-nf-call-iptables` alone, does not put the stack on the host network, and does not change this compose file.
+
 ## Golden path
 
 1. Open the Angular app (`ng serve` on http://localhost:4200) → redirected to `/login`. This compose file does not start it. Login calls can go through nginx at http://127.0.0.1:8080, which is the trusted proxy below.

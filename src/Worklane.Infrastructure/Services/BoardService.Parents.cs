@@ -20,6 +20,8 @@ public partial class BoardService
 
     private readonly record struct LinkOutcome(TaskItemDto Child, TaskItemDto? Parent, bool Changed);
 
+    private readonly record struct ArchiveBroadcast(IReadOnlyList<TaskArchivedEvent> Archived, Guid? SurvivingParentId);
+
     private sealed class ParentLinkSnapshot
     {
         public static ParentLinkSnapshot Empty { get; } = new(
@@ -146,10 +148,10 @@ public partial class BoardService
             .ToList();
     }
 
-    public async Task ArchiveTaskAsync(Guid taskId, bool includeChildren, CancellationToken ct = default)
+    public async Task ArchiveTaskAsync(Guid taskId, bool includeChildren, Guid userId, CancellationToken ct = default)
     {
-        Guid? parentToNotify = null;
-        await InLinkTransactionAsync(async token =>
+        // Broadcast only after commit. A rejected archive throws inside the transaction.
+        var broadcast = await InLinkTransactionAsync(async token =>
         {
             var workspaceId = RequireWorkspaceId();
             var locked = await LockFamilyAsync(workspaceId, taskId, token);
@@ -170,23 +172,31 @@ public partial class BoardService
             }
 
             var now = DateTimeOffset.UtcNow;
-            task.IsArchived = true;
-            task.UpdatedAt = now;
+            ArchiveCard(task, userId, now);
             foreach (var child in activeChildren)
+                ArchiveCard(child, userId, now);
+
+            // Root first, then each child this call archived, ordered by id. Already-archived children stay out.
+            var archived = new List<TaskArchivedEvent>(1 + activeChildren.Count)
             {
-                child.IsArchived = true;
-                child.UpdatedAt = now;
-            }
+                new(task.ProjectId, task.Id, task.ColumnId, task.ParentTaskId)
+            };
+            foreach (var child in activeChildren.OrderBy(child => child.Id))
+                archived.Add(new(child.ProjectId, child.Id, child.ColumnId, child.ParentTaskId));
 
             // The parent stays on the board only when this card is a child and is archived alone.
-            if (activeChildren.Count == 0 && task.ParentTaskId is Guid parentId)
-                parentToNotify = parentId;
+            Guid? survivingParentId = activeChildren.Count == 0 && task.ParentTaskId is Guid parentId
+                ? parentId
+                : null;
 
             await _db.SaveChangesAsync(token);
-            return 0;
+            return new ArchiveBroadcast(archived, survivingParentId);
         }, ct);
 
-        if (parentToNotify is Guid notifyId)
+        foreach (var archived in broadcast.Archived)
+            await _notifier.TaskArchivedAsync(archived.ProjectId, archived, ct);
+
+        if (broadcast.SurvivingParentId is Guid notifyId)
             await NotifyParentCountsAsync(notifyId, ct);
     }
 
@@ -541,8 +551,29 @@ public partial class BoardService
         CreatedAt = now,
         UpdatedAt = now,
         IsArchived = false,
+        ArchivedAt = null,
         ParentTaskId = parentTaskId
     };
+
+    /// <summary>
+    /// One <see cref="TaskActivityType.Archived"/> row per card this call archives.
+    /// The activity query filter hides it while the card is archived; that filter stays as it is.
+    /// </summary>
+    private void ArchiveCard(TaskItem task, Guid userId, DateTimeOffset now)
+    {
+        task.IsArchived = true;
+        task.ArchivedAt = now;
+        task.UpdatedAt = now;
+        _db.TaskActivities.Add(new TaskActivity
+        {
+            Id = Guid.NewGuid(),
+            TaskId = task.Id,
+            Type = TaskActivityType.Archived,
+            ActorUserId = userId,
+            CreatedAt = now,
+            Details = "{}"
+        });
+    }
 
     private void AddCreatedActivity(TaskItem task, BoardColumn column, Guid userId, DateTimeOffset now)
     {
