@@ -187,13 +187,6 @@ public class S3FileStorageTests
         request.DisablePayloadSigning.Should().BeFalse();
         request.CannedACL.Should().Be(fresh.CannedACL);
         request.ChecksumAlgorithm.Should().Be(fresh.ChecksumAlgorithm);
-
-        var http = S3FileStorage.CreatePutRequest(
-            new S3StorageOptions { ServiceUrl = "http://s3:9000", Bucket = "worklane-dev-files" },
-            "a/b",
-            body,
-            3);
-        http.DisablePayloadSigning.Should().BeTrue();
     }
 
     [Theory]

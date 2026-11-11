@@ -124,8 +124,6 @@ public sealed class S3FileStorage : IFileStorage
 
     internal static PutObjectRequest CreatePutRequest(S3StorageOptions options, string key, Stream body, long length)
     {
-        var serviceUrl = options.ServiceUrl?.Trim() ?? "";
-        var https = serviceUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
         var request = new PutObjectRequest
         {
             BucketName = options.Bucket.Trim(),
@@ -135,7 +133,9 @@ public sealed class S3FileStorage : IFileStorage
             ContentType = StoredContentType,
             UseChunkEncoding = false,
             DisableDefaultChecksumValidation = true,
-            DisablePayloadSigning = !https,
+            // Unsigned payloads are HTTPS-only in this SDK, and RustFS dev is http.
+            // Checksums stay off via the client config and UseChunkEncoding=false.
+            DisablePayloadSigning = false,
             IfNoneMatch = "*",
         };
         request.Headers.ContentDisposition = StoredContentDisposition;
