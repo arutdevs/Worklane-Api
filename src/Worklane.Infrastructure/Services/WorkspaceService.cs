@@ -224,16 +224,14 @@ public class WorkspaceService : IWorkspaceService
         // Accept runs with no tenant pinned. IgnoreQueryFilters keeps the lookup working
         // when the membership filter is fail-closed. The row is found by the hash, so a
         // token from another workspace still resolves only to the workspace that issued it.
+        // A different account is the same not-found result as an unknown token. The account
+        // is loaded either way, so that result does not follow a query the other path skips.
         var invitation = await FindByTokenAsync(token, cancellationToken);
-        if (IsUnusable(invitation))
+        var user = await _userManager.FindByIdAsync(acceptingUserId.ToString());
+        var issuedToCaller = string.Equals(user?.Email, invitation?.Email, StringComparison.OrdinalIgnoreCase);
+        if (IsUnusable(invitation) || user is null || !issuedToCaller)
         {
             throw new NotFoundException("Invitation is invalid or has expired.");
-        }
-
-        var user = await _userManager.FindByIdAsync(acceptingUserId.ToString());
-        if (user is null || !string.Equals(user.Email, invitation.Email, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new ForbiddenAccessException("This invitation was issued to a different email address.");
         }
 
         var workspaceId = invitation.WorkspaceId;
