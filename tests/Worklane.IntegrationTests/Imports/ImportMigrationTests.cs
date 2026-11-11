@@ -72,12 +72,18 @@ public class ImportMigrationTests : IClassFixture<WorklaneWebApplicationFactory>
             count.Should().Be(0);
         }
 
-        await migrator.MigrateAsync("20261104105330_AddTaskImport");
+        await migrator.MigrateAsync("20261111104359_AddTaskImport");
         await using (var command = connection.CreateCommand())
         {
-            command.CommandText = "SELECT COUNT(*) FROM information_schema.columns WHERE table_name = 'TaskItems' AND column_name = 'ExternalId' AND is_nullable = 'YES'";
-            var count = (long)(await command.ExecuteScalarAsync())!;
-            count.Should().Be(1);
+            command.CommandText = """
+                SELECT column_name FROM information_schema.columns
+                WHERE table_name = 'TaskItems' AND column_name IN ('ExternalId', 'ArchivedAt')
+                """;
+            var names = new List<string>();
+            await using var reader = await command.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+                names.Add(reader.GetString(0));
+            names.Should().BeEquivalentTo("ExternalId", "ArchivedAt");
         }
     }
 

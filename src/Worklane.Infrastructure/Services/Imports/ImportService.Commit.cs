@@ -139,6 +139,7 @@ public partial class ImportService
                 CreatedAt = now,
                 UpdatedAt = now,
                 IsArchived = false,
+                ArchivedAt = null,
                 ParentTaskId = null,
                 ImportSource = batch.Source,
                 ExternalId = row.ExternalId,
@@ -513,8 +514,12 @@ public partial class ImportService
         }
         while (changed);
 
+        var archivedAt = DateTimeOffset.UtcNow;
         foreach (var task in tasks.Where(t => archive.Contains(t.Id)))
+        {
             task.IsArchived = true;
+            task.ArchivedAt = archivedAt;
+        }
 
         await ClearSensitiveAsync(batch, cancellationToken);
         batch.Status = ImportBatchStatus.Undone;

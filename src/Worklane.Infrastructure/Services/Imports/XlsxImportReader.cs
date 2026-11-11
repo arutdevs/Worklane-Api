@@ -14,7 +14,8 @@ internal static class XlsxImportReader
     public static (IReadOnlyList<IReadOnlyList<ImportCell>> Rows, int SheetCount) Read(
         byte[] bytes,
         long maxUncompressed,
-        int maxColumns)
+        int maxColumns,
+        int maxRows)
     {
         try
         {
@@ -63,7 +64,7 @@ internal static class XlsxImportReader
             var strings = shared is null ? [] : ReadSharedStrings(shared);
             var dates = styles is null ? [] : ReadDateStyles(styles);
 
-            return (ReadSheet(sheet, strings, dates, maxColumns), sheets.Count);
+            return (ReadSheet(sheet, strings, dates, maxColumns, maxRows), sheets.Count);
         }
         catch (ImportFormatException)
         {
@@ -79,12 +80,16 @@ internal static class XlsxImportReader
         XDocument sheet,
         IReadOnlyList<string> shared,
         HashSet<int> dateStyles,
-        int maxColumns)
+        int maxColumns,
+        int maxRows)
     {
+        var limit = ImportTables.MaxParsedRowNumber(maxRows);
         var byRow = new SortedDictionary<int, SortedDictionary<int, ImportCell>>();
         foreach (var row in sheet.Descendants().Where(element => element.Name.LocalName == "row"))
         {
             var rowNumber = ParseInt(row.Attribute("r")?.Value) ?? (byRow.Count == 0 ? 1 : byRow.Keys.Max() + 1);
+            if (rowNumber < 1 || rowNumber > limit || (!byRow.ContainsKey(rowNumber) && byRow.Count >= limit))
+                throw ImportTables.RowLimit(maxRows);
             if (!byRow.TryGetValue(rowNumber, out var cells))
             {
                 cells = [];
@@ -113,9 +118,12 @@ internal static class XlsxImportReader
         if (byRow.Count == 0)
             return grid;
 
+        var first = byRow.Keys.Min();
         var last = byRow.Keys.Max();
+        if (first < 1 || last > limit)
+            throw ImportTables.RowLimit(maxRows);
         var width = byRow.Values.SelectMany(cells => cells.Keys).DefaultIfEmpty(-1).Max() + 1;
-        for (var rowNumber = byRow.Keys.Min(); rowNumber <= last; rowNumber++)
+        for (var rowNumber = first; rowNumber <= last; rowNumber++)
         {
             if (!byRow.TryGetValue(rowNumber, out var cells) || cells.Count == 0)
             {
@@ -174,6 +182,9 @@ internal static class XlsxImportReader
     {
         if (!double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var serial))
             return text;
+        // FromOADate throws ArgumentException below -657435 or at/above 2958466, which would leave the request as 500.
+        if (!double.IsFinite(serial) || serial < -657435d || serial >= 2958466d)
+            throw Unreadable();
         var date = DateTime.SpecifyKind(DateTime.FromOADate(serial), DateTimeKind.Utc);
         return date.TimeOfDay == TimeSpan.Zero
             ? date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)

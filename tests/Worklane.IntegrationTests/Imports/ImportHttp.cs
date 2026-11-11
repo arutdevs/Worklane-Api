@@ -95,6 +95,37 @@ internal static class ImportHttp
             new XElement(XName.Get("sheetData", Ns),
                 Row(1, headers),
                 rows.Select((cells, index) => Row(index + 2, cells))));
+        return Pack(sheet, styles: null);
+    }
+
+    public static byte[] XlsxWithDataRow(int dataRowNumber)
+    {
+        var sheet = new XElement(XName.Get("worksheet", Ns),
+            new XElement(XName.Get("sheetData", Ns),
+                Row(1, new[] { "Title", "External Id" }),
+                Row(dataRowNumber, new[] { "Card", "X-1" })));
+        return Pack(sheet, styles: null);
+    }
+
+    public static byte[] XlsxWithDateSerial(string serial)
+    {
+        var header = Row(1, new[] { "Title", "External Id" });
+        var data = new XElement(XName.Get("row", Ns), new XAttribute("r", 2),
+            InlineCell("A", 2, "Card"),
+            new XElement(XName.Get("c", Ns),
+                new XAttribute("r", "B2"),
+                new XAttribute("s", "0"),
+                new XElement(XName.Get("v", Ns), serial)));
+        var sheet = new XElement(XName.Get("worksheet", Ns),
+            new XElement(XName.Get("sheetData", Ns), header, data));
+        var styles = new XElement(XName.Get("styleSheet", Ns),
+            new XElement(XName.Get("cellXfs", Ns),
+                new XElement(XName.Get("xf", Ns), new XAttribute("numFmtId", "14"))));
+        return Pack(sheet, styles);
+    }
+
+    private static byte[] Pack(XElement sheet, XElement? styles)
+    {
         var workbook = new XElement(XName.Get("workbook", Ns),
             new XElement(XName.Get("sheets", Ns),
                 new XElement(XName.Get("sheet", Ns),
@@ -118,6 +149,8 @@ internal static class ImportHttp
             Write(archive, "xl/workbook.xml", new XDocument(workbook));
             Write(archive, "xl/_rels/workbook.xml.rels", new XDocument(rels));
             Write(archive, "xl/worksheets/sheet1.xml", new XDocument(sheet));
+            if (styles is not null)
+                Write(archive, "xl/styles.xml", new XDocument(styles));
         }
 
         return buffer.ToArray();
@@ -127,16 +160,16 @@ internal static class ImportHttp
     {
         var row = new XElement(XName.Get("row", Ns), new XAttribute("r", number));
         for (var i = 0; i < cells.Count; i++)
-        {
-            var column = ((char)('A' + i)).ToString();
-            row.Add(new XElement(XName.Get("c", Ns),
-                new XAttribute("r", column + number),
-                new XAttribute("t", "inlineStr"),
-                new XElement(XName.Get("is", Ns), new XElement(XName.Get("t", Ns), cells[i]))));
-        }
+            row.Add(InlineCell(((char)('A' + i)).ToString(), number, cells[i]));
 
         return row;
     }
+
+    private static XElement InlineCell(string column, int number, string text) =>
+        new(XName.Get("c", Ns),
+            new XAttribute("r", column + number),
+            new XAttribute("t", "inlineStr"),
+            new XElement(XName.Get("is", Ns), new XElement(XName.Get("t", Ns), text)));
 
     private static void Write(ZipArchive archive, string name, XDocument document)
     {

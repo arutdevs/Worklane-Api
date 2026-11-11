@@ -36,6 +36,14 @@ internal sealed class ImportFormatException : Exception
 
 internal static class ImportTables
 {
+    /// <summary>
+    /// Preamble rows the Asana header scan may skip, plus the header, before data rows start.
+    /// Readers refuse anything past this window so a sparse sheet cannot pad up to <see cref="int.MaxValue"/>.
+    /// </summary>
+    internal const int RowScanSlack = 11;
+
+    internal static long MaxParsedRowNumber(int maxRows) => (long)maxRows + RowScanSlack;
+
     public static ParsedTable FromGrid(
         IReadOnlyList<IReadOnlyList<ImportCell>> grid,
         string preset,
@@ -147,7 +155,7 @@ internal static class ImportTables
     private static ImportFormatException NoRows() =>
         new(ImportErrors.NoRows, ImportErrors.NoRowsDetail);
 
-    private static ImportFormatException RowLimit(int maxRows) =>
+    internal static ImportFormatException RowLimit(int maxRows) =>
         new(ImportErrors.RowLimit, ImportErrors.RowLimitDetail(maxRows), ErrorParams.Of(("maxRows", maxRows)));
 
     private static ImportFormatException ColumnLimit(int maxColumns) =>

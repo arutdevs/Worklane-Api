@@ -6,7 +6,7 @@ namespace Worklane.Infrastructure.Services.Imports;
 
 internal static class CsvImportReader
 {
-    public static IReadOnlyList<IReadOnlyList<ImportCell>> Read(string text, int maxColumns)
+    public static IReadOnlyList<IReadOnlyList<ImportCell>> Read(string text, int maxColumns, int maxRows)
     {
         if (string.IsNullOrEmpty(text))
             throw new ImportFormatException(ImportErrors.NoRows, ImportErrors.NoRowsDetail);
@@ -62,7 +62,7 @@ internal static class CsvImportReader
                 if (ch == '\r' && i + 1 < text.Length && text[i + 1] == '\n')
                     i++;
                 AddField(cells, field, maxColumns);
-                rows.Add(cells);
+                AddRow(rows, cells, maxRows);
                 cells = [];
                 continue;
             }
@@ -76,13 +76,20 @@ internal static class CsvImportReader
         if (field.Length > 0 || cells.Count > 0)
         {
             AddField(cells, field, maxColumns);
-            rows.Add(cells);
+            AddRow(rows, cells, maxRows);
         }
 
         if (rows.Count > 0 && rows[^1].All(cell => cell.Text is null))
             rows.RemoveAt(rows.Count - 1);
 
         return rows;
+    }
+
+    private static void AddRow(List<IReadOnlyList<ImportCell>> rows, List<ImportCell> cells, int maxRows)
+    {
+        rows.Add(cells);
+        if (rows.Count > ImportTables.MaxParsedRowNumber(maxRows))
+            throw ImportTables.RowLimit(maxRows);
     }
 
     private static void AddField(List<ImportCell> cells, StringBuilder field, int maxColumns)

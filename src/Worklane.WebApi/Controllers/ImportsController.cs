@@ -45,7 +45,7 @@ public class ImportsController : ControllerBase
     [Consumes("multipart/form-data")]
     [EnableRateLimiting(ImportUploadRateLimitSettings.PolicyName)]
     [ImportUploadLimit]
-    [RequireWorkspaceRole(WorkspaceRole.Member, WorkspaceResourceType.Project, "projectId")]
+    [AuthorizeImportUpload]
     public async Task<ActionResult<ImportBatchDto>> Upload(Guid projectId, CancellationToken cancellationToken)
     {
         var form = await Request.ReadFormAsync(cancellationToken);
@@ -89,7 +89,7 @@ public class ImportsController : ControllerBase
 
     [HttpPost("projects/{projectId:guid}/imports/{importId:guid}/commit")]
     [EnableRateLimiting(ImportCommitRateLimitSettings.PolicyName)]
-    [RequireWorkspaceRole(WorkspaceRole.Member, WorkspaceResourceType.Project, "projectId")]
+    [AuthorizeImportCommit]
     public async Task<ActionResult<ImportCommitDto>> Commit(
         Guid projectId,
         Guid importId,
@@ -119,7 +119,7 @@ public class ImportsController : ControllerBase
 
     [HttpPost("projects/{projectId:guid}/imports/{importId:guid}/undo")]
     [EnableRateLimiting(ImportCommitRateLimitSettings.PolicyName)]
-    [RequireWorkspaceRole(WorkspaceRole.Admin, WorkspaceResourceType.Project, "projectId")]
+    [AuthorizeImportUndo]
     public async Task<ActionResult<ImportUndoDto>> Undo(Guid projectId, Guid importId, CancellationToken cancellationToken)
     {
         var result = await _imports.UndoAsync(projectId, importId, cancellationToken);
@@ -128,7 +128,7 @@ public class ImportsController : ControllerBase
 
     [HttpGet("projects/{projectId:guid}/tasks/export")]
     [EnableRateLimiting(ExportRateLimitSettings.PolicyName)]
-    [RequireWorkspaceRole(WorkspaceRole.Viewer, WorkspaceResourceType.Project, "projectId")]
+    [AuthorizeImportExport]
     public async Task<IActionResult> Export(Guid projectId, [FromQuery] ExportTasksRequest request, CancellationToken cancellationToken)
     {
         await _exportValidator.ValidateAndThrowAsync(request, cancellationToken);

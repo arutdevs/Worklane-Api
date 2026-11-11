@@ -12,7 +12,7 @@ using Worklane.Infrastructure.Persistence;
 namespace Worklane.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(WorklaneDbContext))]
-    [Migration("20261104105330_AddTaskImport")]
+    [Migration("20261111104359_AddTaskImport")]
     partial class AddTaskImport
     {
         /// <inheritdoc />
@@ -634,6 +634,9 @@ namespace Worklane.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
+
+                    b.Property<DateTimeOffset?>("ArchivedAt")
+                        .HasColumnType("timestamp with time zone");
 
                     b.Property<Guid?>("AssigneeId")
                         .HasColumnType("uuid");

@@ -392,6 +392,19 @@ public class ImportExportTests : IClassFixture<WorklaneWebApplicationFactory>
         (await FindTaskAsync(board, "Child")).GetProperty("title").GetString().Should().Be("Child");
         (await FindTaskAsync(board, "Parent")).GetProperty("title").GetString().Should().Be("Parent");
 
+        await using (var scope = _factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<WorklaneDbContext>();
+            var lone = await db.TaskItems.IgnoreQueryFilters()
+                .SingleAsync(task => task.ProjectId == board.Project.Id && task.Title == "Lone");
+            lone.IsArchived.Should().BeTrue();
+            lone.ArchivedAt.Should().NotBeNull();
+            var keptCard = await db.TaskItems.IgnoreQueryFilters()
+                .SingleAsync(task => task.ProjectId == board.Project.Id && task.Title == "Parent");
+            keptCard.IsArchived.Should().BeFalse();
+            keptCard.ArchivedAt.Should().BeNull();
+        }
+
         var second = await board.Client.PostAsync($"/api/projects/{board.Project.Id}/imports/{batchId}/undo", null);
         second.StatusCode.Should().Be(HttpStatusCode.Conflict);
         (await ProblemCodeAsync(second)).Should().Be("import_already_undone");

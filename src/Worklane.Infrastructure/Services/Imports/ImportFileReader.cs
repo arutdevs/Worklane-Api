@@ -13,11 +13,12 @@ internal static class ImportFileReader
             {
                 if (!FileSignature.TryDecodeText(bytes, out var text))
                     throw new ImportFormatException(ImportErrors.Unreadable, ImportErrors.UnreadableDetail);
-                var grid = CsvImportReader.Read(text, settings.MaxColumns);
+                var grid = CsvImportReader.Read(text, settings.MaxColumns, settings.MaxRows);
                 return ImportTables.FromGrid(grid, preset, settings.MaxRows, settings.MaxColumns, 1);
             }
 
-            var (rows, sheetCount) = XlsxImportReader.Read(bytes.ToArray(), settings.MaxUncompressedBytes, settings.MaxColumns);
+            var (rows, sheetCount) = XlsxImportReader.Read(
+                bytes.ToArray(), settings.MaxUncompressedBytes, settings.MaxColumns, settings.MaxRows);
             return ImportTables.FromGrid(rows, preset, settings.MaxRows, settings.MaxColumns, sheetCount);
         }
         catch (ImportFormatException)
