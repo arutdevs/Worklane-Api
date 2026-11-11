@@ -139,7 +139,7 @@ public class TasksController : ControllerBase
     [RequireWorkspaceRole(WorkspaceRole.Member, WorkspaceResourceType.Task, "taskId")]
     public async Task<IActionResult> ArchiveTask(Guid taskId, [FromQuery] bool includeChildren, CancellationToken ct)
     {
-        await _board.ArchiveTaskAsync(taskId, includeChildren, ct);
+        await _board.ArchiveTaskAsync(taskId, includeChildren, _currentUser.UserId, ct);
         return NoContent();
     }
 }

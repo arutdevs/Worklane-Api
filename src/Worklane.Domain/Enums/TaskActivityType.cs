@@ -18,5 +18,6 @@ public enum TaskActivityType
     ChildAdded,
     ChildRemoved,
     ParentSet,
-    ParentCleared
+    ParentCleared,
+    Archived
 }

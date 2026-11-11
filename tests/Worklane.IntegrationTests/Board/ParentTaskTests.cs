@@ -422,6 +422,178 @@ public class ParentTaskTests : IClassFixture<WorklaneWebApplicationFactory>
     }
 
     [Fact]
+    public async Task SignalR_ArchivingAChildRemovesThatCardAndRefreshesParentCounts()
+    {
+        var board = await BoardTestSetup.CreateAsync(_factory, "parent-archive-child-hub@test.com");
+        var otherProject = await CreateProject(board, "Sibling", "AC");
+        var parent = await BoardTestSetup.CreateTaskAsync(board, "Parent");
+        var doneChild = await ReadTask(await PostChild(board, "Done child", parent.Id));
+        var staying = await ReadTask(await PostChild(board, "Staying", parent.Id));
+        (await board.Client.PostAsJsonAsync($"/api/tasks/{doneChild.Id}/move", new { toColumnId = board.Done.Id, toIndex = 0 }))
+            .EnsureSuccessStatusCode();
+
+        await using var home = BoardTestSetup.Hub(_factory, board.User.Tokens.AccessToken);
+        await using var away = BoardTestSetup.Hub(_factory, board.User.Tokens.AccessToken);
+        var archived = new List<JsonElement>();
+        var updates = new List<JsonElement>();
+        var archivedReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var updateReady = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stray = 0;
+        home.On<JsonElement>("TaskArchived", payload =>
+        {
+            lock (archived)
+            {
+                archived.Add(payload.Clone());
+                if (archived.Count >= 1)
+                    archivedReady.TrySetResult();
+            }
+        });
+        home.On<JsonElement>("TaskUpdated", payload =>
+        {
+            lock (updates)
+            {
+                updates.Add(payload.Clone());
+                if (updates.Count >= 1)
+                    updateReady.TrySetResult();
+            }
+        });
+        home.On<JsonElement>("TaskCreated", _ => Interlocked.Increment(ref stray));
+        home.On<JsonElement>("TaskMoved", _ => Interlocked.Increment(ref stray));
+        away.On<JsonElement>("TaskArchived", _ => Interlocked.Increment(ref stray));
+        away.On<JsonElement>("TaskUpdated", _ => Interlocked.Increment(ref stray));
+        away.On<JsonElement>("TaskCreated", _ => Interlocked.Increment(ref stray));
+        away.On<JsonElement>("TaskMoved", _ => Interlocked.Increment(ref stray));
+        await home.StartAsync();
+        await away.StartAsync();
+        await home.InvokeAsync("JoinProject", board.Project.Id);
+        await away.InvokeAsync("JoinProject", otherProject);
+
+        var response = await board.Client.DeleteAsync($"/api/tasks/{doneChild.Id}");
+        response.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        await archivedReady.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await updateReady.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await Task.Delay(TimeSpan.FromMilliseconds(500));
+
+        archived.Should().ContainSingle();
+        var archivedChild = archived[0];
+        archivedChild.GetProperty("projectId").GetGuid().Should().Be(board.Project.Id);
+        archivedChild.GetProperty("taskId").GetGuid().Should().Be(doneChild.Id);
+        archivedChild.GetProperty("columnId").GetGuid().Should().Be(board.Done.Id);
+        archivedChild.GetProperty("parentTaskId").GetGuid().Should().Be(parent.Id);
+
+        updates.Should().ContainSingle();
+        var parentUpdate = updates[0];
+        parentUpdate.GetProperty("id").GetGuid().Should().Be(parent.Id);
+        parentUpdate.GetProperty("projectId").GetGuid().Should().Be(board.Project.Id);
+        parentUpdate.GetProperty("childCount").GetInt32().Should().Be(1);
+        parentUpdate.GetProperty("doneChildCount").GetInt32().Should().Be(0);
+        stray.Should().Be(0);
+
+        var stored = await GetTask(board, parent.Id);
+        stored.ChildCount.Should().Be(1);
+        stored.DoneChildCount.Should().Be(0);
+        (await GetChildren(board, parent.Id)).Select(task => task.Id).Should().Equal(staying.Id);
+        (await board.Client.GetAsync($"/api/tasks/{doneChild.Id}")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task SignalR_ArchivingAParentEmitsOneEventPerNewlyArchivedCard()
+    {
+        var board = await BoardTestSetup.CreateAsync(_factory, "parent-archive-cascade-hub@test.com");
+        var otherProject = await CreateProject(board, "Sibling", "AP");
+        var parent = await BoardTestSetup.CreateTaskAsync(board, "Parent");
+        var first = await ReadTask(await PostChild(board, "One", parent.Id));
+        var second = await ReadTask(await PostChild(board, "Two", parent.Id));
+        var already = await ReadTask(await PostChild(board, "Already", parent.Id));
+        (await board.Client.DeleteAsync($"/api/tasks/{already.Id}")).EnsureSuccessStatusCode();
+
+        await using var home = BoardTestSetup.Hub(_factory, board.User.Tokens.AccessToken);
+        await using var away = BoardTestSetup.Hub(_factory, board.User.Tokens.AccessToken);
+        var archived = new List<JsonElement>();
+        var updates = 0;
+        var ready = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stray = 0;
+        home.On<JsonElement>("TaskArchived", payload =>
+        {
+            lock (archived)
+            {
+                archived.Add(payload.Clone());
+                if (archived.Count >= 3)
+                    ready.TrySetResult();
+            }
+        });
+        home.On<JsonElement>("TaskUpdated", _ => Interlocked.Increment(ref updates));
+        away.On<JsonElement>("TaskArchived", _ => Interlocked.Increment(ref stray));
+        away.On<JsonElement>("TaskUpdated", _ => Interlocked.Increment(ref stray));
+        await home.StartAsync();
+        await away.StartAsync();
+        await home.InvokeAsync("JoinProject", board.Project.Id);
+        await away.InvokeAsync("JoinProject", otherProject);
+
+        var response = await board.Client.DeleteAsync($"/api/tasks/{parent.Id}?includeChildren=true");
+        response.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        await ready.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await Task.Delay(TimeSpan.FromMilliseconds(500));
+
+        var childIds = new[] { first.Id, second.Id }.OrderBy(id => id).ToArray();
+        archived.Select(payload => payload.GetProperty("taskId").GetGuid()).Should().Equal(parent.Id, childIds[0], childIds[1]);
+        archived.Should().OnlyContain(payload => payload.GetProperty("projectId").GetGuid() == board.Project.Id);
+        archived[0].GetProperty("columnId").GetGuid().Should().Be(parent.ColumnId);
+        archived[0].GetProperty("parentTaskId").ValueKind.Should().Be(JsonValueKind.Null);
+        var childColumns = new Dictionary<Guid, Guid> { [first.Id] = first.ColumnId, [second.Id] = second.ColumnId };
+        archived.Skip(1).Should().OnlyContain(payload =>
+            payload.GetProperty("parentTaskId").GetGuid() == parent.Id &&
+            payload.GetProperty("columnId").GetGuid() == childColumns[payload.GetProperty("taskId").GetGuid()]);
+        archived.Select(payload => payload.GetProperty("taskId").GetGuid()).Should().NotContain(already.Id);
+        updates.Should().Be(0);
+        stray.Should().Be(0);
+
+        foreach (var id in new[] { parent.Id, first.Id, second.Id, already.Id })
+            (await board.Client.GetAsync($"/api/tasks/{id}")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+    }
+
+    [Fact]
+    public async Task SignalR_RejectedArchiveEmitsNothingAcrossProjectsAndTenants()
+    {
+        var board = await BoardTestSetup.CreateAsync(_factory, "parent-archive-reject-hub@test.com");
+        var otherProject = await CreateProject(board, "Sibling", "AR");
+        var parent = await BoardTestSetup.CreateTaskAsync(board, "Parent");
+        var child = await ReadTask(await PostChild(board, "Child", parent.Id));
+        var loose = await BoardTestSetup.CreateTaskAsync(board, "Loose");
+        (await board.Client.DeleteAsync($"/api/tasks/{loose.Id}")).EnsureSuccessStatusCode();
+
+        var viewer = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), "parent-archive-reject-viewer@test.com");
+        var outsider = await TestAuthHelper.RegisterAsync(_factory.CreateClient(), "parent-archive-reject-out@test.com");
+        await BoardTestSetup.InviteAsync(board.Client, board.User.Workspace.Id, viewer.Tokens.User.Email, "Viewer");
+        var outsideTask = await CreateTask(outsider, outsider.Workspace.Id, "Hidden", "ZX");
+
+        await using var home = BoardTestSetup.Hub(_factory, board.User.Tokens.AccessToken);
+        await using var away = BoardTestSetup.Hub(_factory, board.User.Tokens.AccessToken);
+        var stray = 0;
+        home.On<JsonElement>("TaskArchived", _ => Interlocked.Increment(ref stray));
+        home.On<JsonElement>("TaskUpdated", _ => Interlocked.Increment(ref stray));
+        away.On<JsonElement>("TaskArchived", _ => Interlocked.Increment(ref stray));
+        away.On<JsonElement>("TaskUpdated", _ => Interlocked.Increment(ref stray));
+        await home.StartAsync();
+        await away.StartAsync();
+        await home.InvokeAsync("JoinProject", board.Project.Id);
+        await away.InvokeAsync("JoinProject", otherProject);
+
+        var blocked = await board.Client.DeleteAsync($"/api/tasks/{parent.Id}");
+        await AssertProblem(blocked, HttpStatusCode.Conflict, ParentTaskErrors.ParentHasActiveChildren);
+        (await board.Client.DeleteAsync($"/api/tasks/{loose.Id}")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await board.Client.DeleteAsync($"/api/tasks/{Guid.NewGuid()}?includeChildren=true")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await board.Client.DeleteAsync($"/api/tasks/{outsideTask.Id}?includeChildren=true")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        (await viewer.Client.DeleteAsync($"/api/tasks/{parent.Id}?includeChildren=true")).StatusCode.Should().Be(HttpStatusCode.Forbidden);
+        (await outsider.Client.DeleteAsync($"/api/tasks/{child.Id}")).StatusCode.Should().Be(HttpStatusCode.NotFound);
+        await Task.Delay(TimeSpan.FromMilliseconds(500));
+
+        stray.Should().Be(0);
+        (await GetTask(board, parent.Id)).IsArchived.Should().BeFalse();
+        (await GetTask(board, child.Id)).ParentTaskId.Should().Be(parent.Id);
+    }
+
+    [Fact]
     public async Task Database_RejectsSelfParentAndCrossProject_AndBlocksParentDelete()
     {
         var board = await BoardTestSetup.CreateAsync(_factory, "parent-db@test.com");

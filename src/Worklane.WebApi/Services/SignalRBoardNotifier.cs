@@ -23,6 +23,9 @@ public class SignalRBoardNotifier : IBoardNotifier
     public Task TaskUpdatedAsync(Guid projectId, TaskItemDto task, CancellationToken ct = default) =>
         Group(projectId).SendAsync("TaskUpdated", task, ct);
 
+    public Task TaskArchivedAsync(Guid projectId, TaskArchivedEvent payload, CancellationToken ct = default) =>
+        Group(projectId).SendAsync("TaskArchived", payload, ct);
+
     public Task CommentCreatedAsync(Guid projectId, CommentBroadcastDto comment, CancellationToken ct = default) =>
         Group(projectId).SendAsync("CommentCreated", comment, ct);
 
