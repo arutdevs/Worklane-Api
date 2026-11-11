@@ -11,6 +11,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Worklane.Application.Board.Dtos;
 using Worklane.Application.Board.Interfaces;
 using Worklane.Application.Common.Exceptions;
@@ -247,5 +248,85 @@ public class BroadcastFailureFactory : WorklaneWebApplicationFactory
         public Task AttachmentAddedAsync(Guid projectId, AttachmentBroadcastDto attachment, CancellationToken ct = default) => Task.CompletedTask;
         public Task AttachmentDeletedAsync(Guid projectId, AttachmentDeletedEvent payload, CancellationToken ct = default) =>
             throw new InvalidOperationException("attachment broadcast failed");
+    }
+}
+
+public class ArchiveBroadcastFailureTests : IClassFixture<ArchiveBroadcastFailureFactory>
+{
+    private readonly ArchiveBroadcastFailureFactory _factory;
+
+    public ArchiveBroadcastFailureTests(ArchiveBroadcastFailureFactory factory)
+    {
+        _factory = factory;
+    }
+
+    [Fact]
+    public async Task Archive_SucceedsAndStaysArchivedWhenTheNotifierThrows()
+    {
+        var board = await BoardTestSetup.CreateAsync(_factory, "archive-notify-fail@test.com");
+        var parent = await BoardTestSetup.CreateTaskAsync(board, "Parent");
+        var child = await BoardTestSetup.CreateTaskAsync(board, "Child");
+
+        await using (var scope = _factory.Services.CreateAsyncScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<WorklaneDbContext>();
+            var row = await db.TaskItems.IgnoreQueryFilters().SingleAsync(task => task.Id == child.Id);
+            row.ParentTaskId = parent.Id;
+            await db.SaveChangesAsync();
+        }
+
+        var archived = await board.Client.DeleteAsync($"/api/tasks/{child.Id}");
+        archived.StatusCode.Should().Be(HttpStatusCode.NoContent);
+
+        await using var check = _factory.Services.CreateAsyncScope();
+        var stored = await check.ServiceProvider.GetRequiredService<WorklaneDbContext>()
+            .TaskItems.IgnoreQueryFilters()
+            .SingleAsync(task => task.Id == child.Id);
+        stored.IsArchived.Should().BeTrue();
+        stored.ArchivedAt.Should().NotBeNull();
+
+        _factory.Logs.Messages.Should().Contain(message =>
+            message.StartsWith("Warning ", StringComparison.Ordinal) &&
+            message.Contains("archive broadcast failed", StringComparison.Ordinal));
+        _factory.Logs.Messages.Should().Contain(message =>
+            message.StartsWith("Warning ", StringComparison.Ordinal) &&
+            message.Contains("parent count broadcast failed", StringComparison.Ordinal));
+    }
+}
+
+public class ArchiveBroadcastFailureFactory : WorklaneWebApplicationFactory
+{
+    public CapturingLoggerProvider Logs { get; } = new();
+
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
+        base.ConfigureWebHost(builder);
+        builder.ConfigureTestServices(services =>
+        {
+            services.AddSingleton<ILoggerProvider>(Logs);
+            services.AddSingleton<ILoggerFactory>(_ =>
+                LoggerFactory.Create(logging =>
+                {
+                    logging.ClearProviders();
+                    logging.AddProvider(Logs);
+                    logging.SetMinimumLevel(LogLevel.Warning);
+                }));
+            services.AddScoped<IBoardNotifier, ArchiveBroadcastFails>();
+        });
+    }
+
+    private sealed class ArchiveBroadcastFails : IBoardNotifier
+    {
+        public Task TaskCreatedAsync(Guid projectId, TaskItemDto task, CancellationToken ct = default) => Task.CompletedTask;
+        public Task TaskMovedAsync(Guid projectId, TaskItemDto task, CancellationToken ct = default) => Task.CompletedTask;
+        public Task TaskUpdatedAsync(Guid projectId, TaskItemDto task, CancellationToken ct = default) =>
+            throw new InvalidOperationException("parent count broadcast failed");
+        public Task TaskArchivedAsync(Guid projectId, TaskArchivedEvent payload, CancellationToken ct = default) =>
+            throw new InvalidOperationException("archive broadcast failed");
+        public Task CommentCreatedAsync(Guid projectId, CommentBroadcastDto comment, CancellationToken ct = default) => Task.CompletedTask;
+        public Task CommentUpdatedAsync(Guid projectId, CommentBroadcastDto comment, CancellationToken ct = default) => Task.CompletedTask;
+        public Task CommentDeletedAsync(Guid projectId, CommentDeletedEvent payload, CancellationToken ct = default) => Task.CompletedTask;
+        public Task AttachmentAddedAsync(Guid projectId, AttachmentBroadcastDto attachment, CancellationToken ct = default) => Task.CompletedTask;
+        public Task AttachmentDeletedAsync(Guid projectId, AttachmentDeletedEvent payload, CancellationToken ct = default) => Task.CompletedTask;
     }
 }
