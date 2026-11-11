@@ -29,7 +29,7 @@ docker compose up
 
 `JWT_SIGNING_KEY` in `.env.example` is an empty placeholder. The `printf` line writes a generated key after it. Compose uses the shell environment before the env file, so export the same value if you prefer not to append: `export JWT_SIGNING_KEY="$(openssl rand -base64 48 | tr -d '\n')"`.
 
-Fill `S3_ROOT_USER`, `S3_ROOT_PASSWORD`, `WL_S3_ACCESS_KEY`, and `WL_S3_SECRET_KEY` before the dev overlay (`openssl rand -hex 24` is enough for those). Then `docker compose -f docker-compose.yml -f compose.dev.yml up`.
+Fill `S3_ROOT_USER`, `S3_ROOT_PASSWORD`, `WL_S3_ACCESS_KEY`, and `WL_S3_SECRET_KEY` before the dev overlay (`openssl rand -hex 24` is enough for those). Then `docker compose -f docker-compose.yml -f compose.dev.yml up -d`.
 
 `docker compose up` without `compose.dev.yml` starts the API edge nginx, the Web nginx, the API, and Postgres. It does not start the Angular app: this repository has no `./web` tree to build. The edge listens on **127.0.0.1:8080** and proxies to the API. The Web nginx is `web:8080` on the proxy network and forwards to that edge. `ng serve` stays on http://localhost:4200. The API allows both origins. That compose file is the one a staging or prod deploy should use. RustFS is not in it, and it does not start.
 

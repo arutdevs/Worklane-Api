@@ -1,5 +1,5 @@
 # Local object storage only. Do not include this file in a staging or prod deploy.
-#   docker compose -f docker-compose.yml -f compose.dev.yml up
+#   docker compose -f docker-compose.yml -f compose.dev.yml up -d
 
 services:
   s3:
