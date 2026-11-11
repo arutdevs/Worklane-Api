@@ -76,7 +76,10 @@ public record TaskItemDto(
     int ChildCount,
 
     /// <summary>Active children whose column is done. Always between 0 and <see cref="ChildCount"/>.</summary>
-    int DoneChildCount
+    int DoneChildCount,
+
+    /// <summary>When the card was archived. Null on every card that is still on the board.</summary>
+    DateTimeOffset? ArchivedAt = null
 );
 
 public record CreateColumnRequest(string Name, int? WipLimit = null);
@@ -113,6 +116,12 @@ public record UpdateTaskRequest(
 );
 
 public record MoveTaskRequest(Guid ToColumnId, int ToIndex);
+
+/// <summary>
+/// SignalR <c>TaskArchived</c> payload. One event per card archived by that call.
+/// <c>parentTaskId</c> is null when the card is not a subtask.
+/// </summary>
+public record TaskArchivedEvent(Guid ProjectId, Guid TaskId, Guid ColumnId, Guid? ParentTaskId);
 
 /// <summary>A task assigned to the current user, with just enough of its project/column
 /// context to render and link to it from a cross-project "My tasks" list.</summary>

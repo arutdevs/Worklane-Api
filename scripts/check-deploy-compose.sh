@@ -26,7 +26,7 @@ if [ -z "${FRONTEND_BASE_URL:-}" ]; then
   export FRONTEND_BASE_URL='https://render-only.invalid'
 fi
 
-forbidden_re='rustfs|seaweedfs|9ca95595|ab024bfe|4e61d15f|http://s3:9000|RequireHttps.*false'
+forbidden_re='rustfs|seaweedfs|9ca95595|ed9210d6|ab024bfe|4e61d15f|http://s3:9000|RequireHttps.*false'
 fail=0
 
 check_variable_images() {
