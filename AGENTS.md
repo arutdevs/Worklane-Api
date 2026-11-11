@@ -99,4 +99,6 @@ On Windows, a running `dotnet run` locks `Worklane.Infrastructure.dll` and `dotn
 
 Work that should show up on the Worklane board becomes a card. `.claude/skills/worklane-board/SKILL.md` says how. Keep `PROGRESS.md` current with the cards.
 
+Before handing off a pull request, run `.claude/skills/worklane-pattern-review/SKILL.md` on that pull request's diff. Leave the pull request unmerged.
+
 Write reports to the product owner in Thai. Keep code, comments, and commit messages in English.
