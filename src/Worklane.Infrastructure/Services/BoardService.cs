@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Npgsql;
@@ -21,6 +22,7 @@ public partial class BoardService : IBoardService
     private readonly IBoardNotifier _notifier;
     private readonly ICurrentTenantService _tenant;
     private readonly ILogger<BoardService> _logger;
+    private readonly IServiceScopeFactory _scopes;
     private readonly int _maxChildren;
 
     public BoardService(
@@ -28,12 +30,14 @@ public partial class BoardService : IBoardService
         IBoardNotifier notifier,
         ICurrentTenantService tenant,
         IOptions<TaskSettings> tasks,
-        ILogger<BoardService> logger)
+        ILogger<BoardService> logger,
+        IServiceScopeFactory scopes)
     {
         _db = db;
         _notifier = notifier;
         _tenant = tenant;
         _logger = logger;
+        _scopes = scopes;
         _maxChildren = tasks.Value.MaxChildrenPerParent;
     }
 
