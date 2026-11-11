@@ -27,6 +27,7 @@ public class TaskItemConfiguration : IEntityTypeConfiguration<TaskItem>
         builder.Property(t => t.StartedAt);
         builder.Property(t => t.CompletedAt);
         builder.Property(t => t.IsArchived).IsRequired().HasDefaultValue(false);
+        builder.Property(t => t.ArchivedAt);
         builder.Property(t => t.CreatedAt).IsRequired();
         builder.Property(t => t.UpdatedAt).IsRequired();
         builder.Property(t => t.ImportSource)

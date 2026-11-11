@@ -19,7 +19,7 @@ public interface IBoardService
     Task<TaskItemDto> SetParentAsync(Guid taskId, Guid parentTaskId, Guid userId, CancellationToken ct = default);
     Task<TaskItemDto> ClearParentAsync(Guid taskId, Guid userId, CancellationToken ct = default);
     Task<IReadOnlyList<TaskItemDto>> GetChildrenAsync(Guid taskId, CancellationToken ct = default);
-    Task ArchiveTaskAsync(Guid taskId, bool includeChildren, CancellationToken ct = default);
+    Task ArchiveTaskAsync(Guid taskId, bool includeChildren, Guid userId, CancellationToken ct = default);
     Task<IReadOnlyList<TaskItemDto>> GetTasksAsync(Guid projectId, Guid? assigneeId, TaskPriority? priority, string? search, CancellationToken ct = default);
     Task<IReadOnlyList<MyTaskDto>> GetMyTasksAsync(Guid workspaceId, Guid userId, CancellationToken ct = default);
 

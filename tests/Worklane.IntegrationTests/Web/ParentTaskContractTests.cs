@@ -58,6 +58,8 @@ public class ParentTaskContractTests
         raw.Should().NotContain(sqlState);
         if (constraint is not null)
             raw.Should().NotContain(constraint);
+        if (code == ParentTaskErrors.ParentHasChildren)
+            body.Json.TryGetProperty(ParentTaskErrors.ChildCount, out _).Should().BeFalse();
     }
 
     [Fact]
@@ -93,7 +95,7 @@ public class ParentTaskContractTests
         doc.Should().Contain("| `already_has_parent` | 409 | `parentDisplayKey` | This card is already a subtask of {parentDisplayKey}. Unlink it first. | emitted |");
         doc.Should().Contain("| `card_archived` | 409 | | Archived cards can't be linked. | emitted |");
         doc.Should().Contain("| `parent_has_active_children` | 409 | `childCount` | This card has {childCount} active subtasks. | emitted |");
-        doc.Should().Contain("| `parent_has_children` | 409 | | Delete or unlink the subtasks before deleting this card permanently. | emitted |");
+        doc.Should().Contain("| `parent_has_children` | 409 | `childCount` | Delete or unlink the subtasks before deleting this card permanently. | emitted |");
         doc.Should().Contain("| `parent_archived` | 409 | | Restore the parent card first. | planned (WL-PARENT) |");
         doc.Should().Contain("| `parent_link_conflict` | 409 | | Someone changed this card at the same time. Reload and try again. | emitted |");
     }

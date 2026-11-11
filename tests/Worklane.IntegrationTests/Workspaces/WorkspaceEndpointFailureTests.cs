@@ -141,12 +141,15 @@ public class WorkspaceEndpointFailureTests : IClassFixture<WorklaneWebApplicatio
         var wrongToken = await InvitePendingAsync(owner, wrongEmail, WorkspaceRole.Viewer);
         var stranger = await TestAuthHelper.RegisterAsync(_factory.CreateClient());
         var wrong = await stranger.Client.PostAsJsonAsync("/api/invitations/accept", new AcceptInvitationRequest(wrongToken));
-        await AssertProblem(wrong, HttpStatusCode.Forbidden, "forbidden",
-            "This invitation was issued to a different email address.");
-        await AssertRole(owner, stranger.Tokens.User.Id, null);
-
         var invalid = await stranger.Client.PostAsJsonAsync("/api/invitations/accept", new AcceptInvitationRequest("not-a-token"));
-        await AssertProblem(invalid, HttpStatusCode.NotFound, "not_found", "Invitation is invalid or has expired.");
+        var wrongBody = await wrong.Content.ReadAsStringAsync();
+        var invalidBody = await invalid.Content.ReadAsStringAsync();
+        wrong.StatusCode.Should().Be(HttpStatusCode.NotFound, wrongBody);
+        invalid.StatusCode.Should().Be(HttpStatusCode.NotFound, invalidBody);
+        wrongBody.Should().Be(invalidBody);
+        JsonDocument.Parse(invalidBody).RootElement.GetProperty("code").GetString().Should().Be("not_found");
+        JsonDocument.Parse(invalidBody).RootElement.GetProperty("detail").GetString().Should().Be("Invitation is invalid or has expired.");
+        await AssertRole(owner, stranger.Tokens.User.Id, null);
 
         var expiredEmail = $"expired-{Guid.NewGuid():N}@example.com";
         var expiredToken = await InvitePendingAsync(owner, expiredEmail, WorkspaceRole.Member);

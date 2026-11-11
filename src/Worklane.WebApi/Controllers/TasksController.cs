@@ -15,11 +15,25 @@ public class TasksController : ControllerBase
 {
     private readonly IBoardService _board;
     private readonly ICurrentUserService _currentUser;
+    private readonly IValidator<CreateTaskRequest> _createValidator;
+    private readonly IValidator<UpdateTaskRequest> _updateValidator;
+    private readonly IValidator<MoveTaskRequest> _moveValidator;
+    private readonly IValidator<SetParentRequest> _setParentValidator;
 
-    public TasksController(IBoardService board, ICurrentUserService currentUser)
+    public TasksController(
+        IBoardService board,
+        ICurrentUserService currentUser,
+        IValidator<CreateTaskRequest> createValidator,
+        IValidator<UpdateTaskRequest> updateValidator,
+        IValidator<MoveTaskRequest> moveValidator,
+        IValidator<SetParentRequest> setParentValidator)
     {
         _board = board;
         _currentUser = currentUser;
+        _createValidator = createValidator;
+        _updateValidator = updateValidator;
+        _moveValidator = moveValidator;
+        _setParentValidator = setParentValidator;
     }
 
     /// <summary>Returns filtered tasks for a project (flat list, not grouped by column).</summary>
@@ -42,10 +56,9 @@ public class TasksController : ControllerBase
     public async Task<ActionResult<TaskItemDto>> CreateTask(
         Guid projectId,
         [FromBody] CreateTaskRequest request,
-        [FromServices] IValidator<CreateTaskRequest> validator,
         CancellationToken ct)
     {
-        await validator.ValidateAndThrowAsync(request, ct);
+        await _createValidator.ValidateAndThrowAsync(request, ct);
         var result = await _board.CreateTaskAsync(projectId, request, _currentUser.UserId, ct);
         return CreatedAtAction(nameof(GetTask), new { taskId = result.Id }, result);
     }
@@ -65,10 +78,9 @@ public class TasksController : ControllerBase
     public async Task<ActionResult<TaskItemDto>> UpdateTask(
         Guid taskId,
         [FromBody] UpdateTaskRequest request,
-        [FromServices] IValidator<UpdateTaskRequest> validator,
         CancellationToken ct)
     {
-        await validator.ValidateAndThrowAsync(request, ct);
+        await _updateValidator.ValidateAndThrowAsync(request, ct);
         var result = await _board.UpdateTaskAsync(taskId, request, _currentUser.UserId, ct);
         return Ok(result);
     }
@@ -82,10 +94,9 @@ public class TasksController : ControllerBase
     public async Task<ActionResult<TaskItemDto>> MoveTask(
         Guid taskId,
         [FromBody] MoveTaskRequest request,
-        [FromServices] IValidator<MoveTaskRequest> validator,
         CancellationToken ct)
     {
-        await validator.ValidateAndThrowAsync(request, ct);
+        await _moveValidator.ValidateAndThrowAsync(request, ct);
         var result = await _board.MoveTaskAsync(taskId, request, _currentUser.UserId, ct);
         return Ok(result);
     }
@@ -105,10 +116,9 @@ public class TasksController : ControllerBase
     public async Task<ActionResult<TaskItemDto>> SetParent(
         Guid taskId,
         [FromBody] SetParentRequest request,
-        [FromServices] IValidator<SetParentRequest> validator,
         CancellationToken ct)
     {
-        await validator.ValidateAndThrowAsync(request, ct);
+        await _setParentValidator.ValidateAndThrowAsync(request, ct);
         var result = await _board.SetParentAsync(taskId, request.ParentTaskId, _currentUser.UserId, ct);
         return Ok(result);
     }
@@ -139,7 +149,7 @@ public class TasksController : ControllerBase
     [RequireWorkspaceRole(WorkspaceRole.Member, WorkspaceResourceType.Task, "taskId")]
     public async Task<IActionResult> ArchiveTask(Guid taskId, [FromQuery] bool includeChildren, CancellationToken ct)
     {
-        await _board.ArchiveTaskAsync(taskId, includeChildren, ct);
+        await _board.ArchiveTaskAsync(taskId, includeChildren, _currentUser.UserId, ct);
         return NoContent();
     }
 }

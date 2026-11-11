@@ -48,7 +48,7 @@ public class ExceptionHandlingMiddleware
                 conflict.Code);
             exception = conflict;
         }
-        else if (ParentLinkConflicts.Translate(exception) is { } parentConflict)
+        else if (await ParentLinkConflicts.TranslateAsync(exception, RequestServicesOrNull(context), context.RequestAborted) is { } parentConflict)
         {
             _logger.LogWarning(
                 exception,
@@ -117,6 +117,22 @@ public class ExceptionHandlingMiddleware
             (JsonSerializerOptions?)null,
             "application/problem+json",
             context.RequestAborted);
+    }
+
+    /// <summary>
+    /// A host request always has services. A context built in a test does not, and the
+    /// getter throws rather than returning null.
+    /// </summary>
+    private static IServiceProvider? RequestServicesOrNull(HttpContext context)
+    {
+        try
+        {
+            return context.RequestServices;
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
     }
 
     /// <summary>

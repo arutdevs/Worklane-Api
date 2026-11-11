@@ -632,6 +632,9 @@ namespace Worklane.Infrastructure.Persistence.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid");
 
+                    b.Property<DateTimeOffset?>("ArchivedAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<Guid?>("AssigneeId")
                         .HasColumnType("uuid");
 
