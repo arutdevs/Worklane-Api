@@ -7,6 +7,8 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.Http.Metadata;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.Abstractions;
 using Microsoft.AspNetCore.Mvc.ModelBinding;
@@ -17,6 +19,7 @@ using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Worklane.Application.Board.Dtos;
@@ -723,7 +726,19 @@ public class KestrelUploadFactory : WorklaneWebApplicationFactory
 {
     public KestrelUploadFactory()
     {
-        UseKestrel();
+        UseKestrel(0);
+    }
+
+    protected override IHost CreateHost(IHostBuilder builder)
+    {
+        var host = base.CreateHost(builder);
+        var addresses = host.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>();
+        var bound = addresses?.Addresses.LastOrDefault();
+        if (string.IsNullOrEmpty(bound))
+            throw new InvalidOperationException("Kestrel did not report a bound address.");
+
+        ClientOptions.BaseAddress = new Uri(bound);
+        return host;
     }
 
     protected override void ConfigureWebHost(IWebHostBuilder builder)
