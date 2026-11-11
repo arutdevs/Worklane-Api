@@ -120,10 +120,32 @@ public class AuthService : IAuthService
     public async Task<AuthTokensResponse> LoginAsync(LoginRequest request, CancellationToken cancellationToken)
     {
         var user = await _userManager.FindByEmailAsync(request.Email);
-        if (user is null || !await _userManager.CheckPasswordAsync(user, request.Password))
+        if (user is null)
+            throw new AuthenticationFailedException();
+
+        // Identity only sets LockoutEnabled when the user is created through UserManager
+        // with AllowedForNewUsers. Older rows, and any insert that left the column at its
+        // false default, would ignore LockoutEnd. Enable it on the next login so those
+        // accounts lock without a migration. SupportsUserLockout is true for the EF store.
+        if (_userManager.SupportsUserLockout)
         {
+            if (!await _userManager.GetLockoutEnabledAsync(user))
+                await _userManager.SetLockoutEnabledAsync(user, true);
+
+            if (await _userManager.IsLockedOutAsync(user))
+                throw new AuthenticationFailedException();
+        }
+
+        if (!await _userManager.CheckPasswordAsync(user, request.Password))
+        {
+            if (_userManager.SupportsUserLockout)
+                await _userManager.AccessFailedAsync(user);
+
             throw new AuthenticationFailedException();
         }
+
+        if (_userManager.SupportsUserLockout)
+            await _userManager.ResetAccessFailedCountAsync(user);
 
         return await IssueTokensAsync(user, cancellationToken);
     }

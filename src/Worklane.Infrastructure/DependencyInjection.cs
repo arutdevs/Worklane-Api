@@ -39,6 +39,12 @@ public static class DependencyInjection
                 options.AddInterceptors(interceptors);
         });
 
+        services.AddOptions<LockoutSettings>()
+            .Bind(configuration.GetSection(LockoutSettings.SectionName))
+            .Validate(static settings => settings.MaxFailedAccessAttempts > 0, "Lockout:MaxFailedAccessAttempts must be greater than 0.")
+            .Validate(static settings => settings.DefaultLockoutTimeSpan > TimeSpan.Zero, "Lockout:DefaultLockoutTimeSpan must be greater than zero.")
+            .ValidateOnStart();
+
         services
             .AddIdentityCore<AppUser>(options =>
             {
@@ -48,6 +54,15 @@ public static class DependencyInjection
             .AddRoles<IdentityRole<Guid>>()
             .AddEntityFrameworkStores<WorklaneDbContext>()
             .AddDefaultTokenProviders();
+
+        services.AddOptions<IdentityOptions>()
+            .Configure<IOptions<LockoutSettings>>((identity, lockoutOptions) =>
+            {
+                var lockout = lockoutOptions.Value;
+                identity.Lockout.AllowedForNewUsers = lockout.AllowedForNewUsers;
+                identity.Lockout.MaxFailedAccessAttempts = lockout.MaxFailedAccessAttempts;
+                identity.Lockout.DefaultLockoutTimeSpan = lockout.DefaultLockoutTimeSpan;
+            });
 
         services.AddOptions<JwtSettings>()
             .Bind(configuration.GetSection(JwtSettings.SectionName))

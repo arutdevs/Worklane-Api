@@ -104,7 +104,15 @@ public class E2E1RegressionTests : IClassFixture<WorklaneWebApplicationFactory>
         var addMember = await owner.Client.PostAsJsonAsync(
             $"/api/workspaces/{owner.Workspace.Id}/invitations",
             new InviteMemberRequest(memberOnly.Tokens.User.Email, WorkspaceRole.Member));
-        addMember.StatusCode.Should().Be(HttpStatusCode.OK);
+        var addText = await addMember.Content.ReadAsStringAsync();
+        addMember.StatusCode.Should().Be(HttpStatusCode.OK, addText);
+        using var addJson = JsonDocument.Parse(addText);
+        var memberLink = new Uri(addJson.RootElement.GetProperty("inviteLink").GetString()!, UriKind.Absolute);
+        var memberToken = QueryHelpers.ParseQuery(memberLink.Query)["token"].ToString();
+        var memberAccept = await memberOnly.Client.PostAsJsonAsync(
+            "/api/invitations/accept",
+            new AcceptInvitationRequest(memberToken));
+        memberAccept.StatusCode.Should().Be(HttpStatusCode.NoContent);
 
         var memberInvite = await memberOnly.Client.PostAsJsonAsync(
             $"/api/workspaces/{owner.Workspace.Id}/invitations",

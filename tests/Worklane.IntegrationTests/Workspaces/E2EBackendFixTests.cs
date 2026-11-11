@@ -24,7 +24,7 @@ public class E2EBackendFixTests : IClassFixture<WorklaneWebApplicationFactory>
     }
 
     [Fact]
-    public async Task Invite_ReturnsConfiguredLink_AndDuplicateMemberIs409()
+    public async Task Invite_ReturnsConfiguredLink_ForExistingAccountsAndNewEmails()
     {
         var owner = await RegisterAsync($"owner-invite-{Guid.NewGuid():N}@example.com", "Owner");
         var member = await RegisterAsync($"member-invite-{Guid.NewGuid():N}@example.com", "Member");
@@ -32,14 +32,16 @@ public class E2EBackendFixTests : IClassFixture<WorklaneWebApplicationFactory>
         var added = await owner.Client.PostAsJsonAsync(
             $"/api/workspaces/{owner.Workspace.Id}/invitations",
             new InviteMemberRequest(member.Tokens.User.Email, WorkspaceRole.Member));
-        added.StatusCode.Should().Be(HttpStatusCode.OK);
-        var addedBody = await added.Content.ReadFromJsonAsync<InvitationDto>(TestAuthHelper.JsonOptions);
-        addedBody!.InviteLink.Should().BeNull();
+        var addedText = await added.Content.ReadAsStringAsync();
+        added.StatusCode.Should().Be(HttpStatusCode.OK, addedText);
+        var addedBody = JsonSerializer.Deserialize<InvitationDto>(addedText, TestAuthHelper.JsonOptions);
+        addedBody!.Id.Should().NotBe(Guid.Empty);
+        addedBody.InviteLink.Should().StartWith("http://web.test/invitations/accept?token=");
 
-        var again = await owner.Client.PostAsJsonAsync(
-            $"/api/workspaces/{owner.Workspace.Id}/invitations",
-            new InviteMemberRequest(member.Tokens.User.Email, WorkspaceRole.Member));
-        await AssertConflict(again, "workspace_member_exists", "This user is already a member of the workspace.");
+        var members = await owner.Client.GetFromJsonAsync<List<WorkspaceMemberDto>>(
+            $"/api/workspaces/{owner.Workspace.Id}/members",
+            TestAuthHelper.JsonOptions);
+        members!.Should().NotContain(item => item.UserId == member.Tokens.User.Id);
 
         var pendingEmail = $"pending-{Guid.NewGuid():N}@example.com";
         var pending = await owner.Client.PostAsJsonAsync(
@@ -157,18 +159,6 @@ public class E2EBackendFixTests : IClassFixture<WorklaneWebApplicationFactory>
             ?? throw new InvalidOperationException("Could not read workspaces.");
         var workspace = workspaces.Single(item => item.Name == WorkspaceLocale.WorkspaceName(displayName, tokens.User.PreferredLanguage));
         return new RegisteredUser(client, tokens, workspace);
-    }
-
-    private static async Task AssertConflict(HttpResponseMessage response, string code, string detail)
-    {
-        var text = await response.Content.ReadAsStringAsync();
-        response.StatusCode.Should().Be(HttpStatusCode.Conflict, text);
-        using var doc = JsonDocument.Parse(text);
-        doc.RootElement.GetProperty("code").GetString().Should().Be(code);
-        doc.RootElement.GetProperty("detail").GetString().Should().Be(detail);
-        doc.RootElement.GetProperty("title").GetString().Should().Be("Conflict");
-        text.Should().NotContain("23505");
-        text.Should().NotContain("IX_");
     }
 
     private static async Task AssertValidation(HttpResponseMessage response, string field, string fieldCode)
