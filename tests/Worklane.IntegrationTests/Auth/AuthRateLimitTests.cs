@@ -506,6 +506,25 @@ public class EdgeProxyContractTests
     }
 
     [Fact]
+    public void Nginx_LogsThePathWithoutTheQueryString()
+    {
+        foreach (var name in new[] { "deploy/nginx/default.conf", "deploy/nginx/web.conf" })
+        {
+            var conf = File.ReadAllText(Path.Combine(RepoRoot(), name));
+            var directives = conf.Split('\n')
+                .Select(line => line.Trim())
+                .Where(line => line.Length > 0 && !line.StartsWith('#'))
+                .ToArray();
+
+            directives.Should().Contain("access_log /dev/stdout scrubbed;");
+            directives.Should().Contain(line => line.StartsWith("log_format scrubbed ", StringComparison.Ordinal) && line.Contains("$uri", StringComparison.Ordinal));
+            directives.Should().NotContain(line =>
+                line.Contains("$request_uri", StringComparison.Ordinal)
+                || line.Contains("\"$request\"", StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
     public void WebNginx_ForwardsThePeerToTheEdge_AndDropsClientCfConnectingIp()
     {
         var conf = File.ReadAllText(Path.Combine(RepoRoot(), "deploy/nginx/web.conf"));
