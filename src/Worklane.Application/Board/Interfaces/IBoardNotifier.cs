@@ -12,6 +12,7 @@ public interface IBoardNotifier
     Task TaskCreatedAsync(Guid projectId, TaskItemDto task, CancellationToken ct = default);
     Task TaskMovedAsync(Guid projectId, TaskItemDto task, CancellationToken ct = default);
     Task TaskUpdatedAsync(Guid projectId, TaskItemDto task, CancellationToken ct = default);
+    Task TaskArchivedAsync(Guid projectId, TaskArchivedEvent payload, CancellationToken ct = default);
 
     Task CommentCreatedAsync(Guid projectId, CommentBroadcastDto comment, CancellationToken ct = default);
     Task CommentUpdatedAsync(Guid projectId, CommentBroadcastDto comment, CancellationToken ct = default);
