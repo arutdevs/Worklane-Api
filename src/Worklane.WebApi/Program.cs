@@ -85,6 +85,8 @@ builder.Services.Configure<AuthRateLimitSettings>(
     builder.Configuration.GetSection(AuthRateLimitSettings.SectionName));
 builder.Services.Configure<WorkspaceCreationSettings>(
     builder.Configuration.GetSection(WorkspaceCreationSettings.SectionName));
+builder.Services.Configure<InviteCreationSettings>(
+    builder.Configuration.GetSection(InviteCreationSettings.SectionName));
 builder.Services.AddWorklaneForwardedHeaders(builder.Configuration);
 builder.Services.AddRateLimiter(options =>
 {
@@ -105,7 +107,7 @@ builder.Services.AddRateLimiter(options =>
             Detail = "Too many requests.",
             Instance = context.HttpContext.Request.Path
         };
-        problem.Extensions["code"] = "rate_limited";
+        problem.Extensions["code"] = RateLimitCode(context.HttpContext);
         problem.Extensions["scope"] = RateLimitScope(context.HttpContext);
         await context.HttpContext.Response.WriteAsJsonAsync(
             problem,
@@ -153,6 +155,21 @@ builder.Services.AddRateLimiter(options =>
                 AutoReplenishment = true
             });
     });
+    options.AddPolicy(InviteCreationSettings.PolicyName, httpContext =>
+    {
+        var settings = httpContext.RequestServices.GetRequiredService<IOptions<InviteCreationSettings>>().Value;
+        var permit = settings.PermitLimit < 1 ? 1 : settings.PermitLimit;
+        var window = settings.WindowSeconds < 1 ? 1 : settings.WindowSeconds;
+        return RateLimitPartition.GetFixedWindowLimiter(
+            InviteCreateRateLimitPartition.Key(httpContext),
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = permit,
+                Window = TimeSpan.FromSeconds(window),
+                QueueLimit = 0,
+                AutoReplenishment = true
+            });
+    });
 
     static RateLimitPartition<string> FixedWindow(HttpContext httpContext, int permitLimit, int windowSeconds)
     {
@@ -169,11 +186,16 @@ builder.Services.AddRateLimiter(options =>
             });
     }
 
-    static string RateLimitScope(HttpContext httpContext)
-    {
-        var policy = httpContext.GetEndpoint()?.Metadata.GetMetadata<EnableRateLimitingAttribute>()?.PolicyName;
-        return string.Equals(policy, AuthRateLimitSettings.PolicyName, StringComparison.Ordinal) ? "ip" : "user";
-    }
+    static string RateLimitCode(HttpContext httpContext) =>
+        string.Equals(PolicyName(httpContext), InviteCreationSettings.PolicyName, StringComparison.Ordinal)
+            ? "invite_rate_limited"
+            : "rate_limited";
+
+    static string RateLimitScope(HttpContext httpContext) =>
+        string.Equals(PolicyName(httpContext), AuthRateLimitSettings.PolicyName, StringComparison.Ordinal) ? "ip" : "user";
+
+    static string? PolicyName(HttpContext httpContext) =>
+        httpContext.GetEndpoint()?.Metadata.GetMetadata<EnableRateLimitingAttribute>()?.PolicyName;
 });
 
 builder.Services.AddSignalR()

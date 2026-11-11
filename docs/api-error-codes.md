@@ -42,6 +42,7 @@ Reserved names are not overwritten by exception parameters, compared without reg
 | `conflict` | 409 | | The request conflicts with the current state. | emitted |
 | `workspace_slug_unavailable` | 409 | | A unique workspace address could not be reserved. Try again. | emitted |
 | `workspace_limit_reached` | 409 | `limit` | You can own at most {limit} workspaces. | emitted |
+| `invite_pending_limit` | 409 | `limit` | This workspace already has the maximum of {limit} pending invitations. | emitted |
 | `email_already_registered` | 409 | | An account with this email already exists. | emitted |
 | `project_key_taken` | 409 | | A project with this key already exists in this workspace. | emitted |
 | `workspace_member_exists` | 409 | | This user is already a member of the workspace. | emitted |
@@ -72,12 +73,17 @@ Reserved names are not overwritten by exception parameters, compared without reg
 | `request_too_large` | 413 | | The request body exceeds the size limit. | emitted |
 | `file_too_large` | 413 | `maxBytes` | File exceeds the maximum size of {maxBytes} bytes. | emitted |
 | `unsupported_file_type` | 415 | `extension` | The file type is not allowed. | emitted |
+| `invite_rate_limited` | 429 | `scope` (`user`) | Too many requests. | emitted |
 | `rate_limited` | 429 | `scope` (`user` on `POST /api/workspaces`) | Too many requests. | emitted |
 | `internal_error` | 500 | `traceId` | An unexpected error occurred. | emitted |
 
 `workspace_slug_unavailable` is emitted when signup or `POST /api/workspaces` hits a unique violation on `IX_Workspaces_Slug` and the bounded suffix retries are exhausted. Signup rolls the user, membership, and workspace back together. Any other failure during that transaction rolls back the same way and does not emit this code. The same code is the backstop when an `IX_Workspaces_Slug` violation is not caught by that retry.
 
 `workspace_limit_reached` is emitted by `POST /api/workspaces` when the caller already owns `WorkspaceCreation:MaxOwnedWorkspaces` workspaces (default 20). `limit` is that number. The count is membership rows with role Owner, so a Member or Viewer seat in another workspace does not count. Signup does not use this check: registration still creates the personal workspace, and that workspace counts toward the cap afterwards.
+
+`invite_pending_limit` is emitted by `POST /api/workspaces/{id}/invitations` when that workspace already has `InviteCreation:MaxPendingInvites` invitations that are not accepted and not expired (default 50). `limit` is that number. A row counts only when `AcceptedAt` is null and `ExpiresAt` is still in the future (or exactly now). Accepted rows and expired rows do not count. The count is limited to that workspace by the tenant query filter and by `WorkspaceId`, so invitations in another workspace do not count.
+
+`invite_rate_limited` is emitted by the same endpoint when the caller exceeds `InviteCreation:PermitLimit` requests in `InviteCreation:WindowSeconds` (default 20 per 3600 seconds). The bucket is the JWT `sub` of the authenticated user. It does not read the client IP or `X-Forwarded-For`, and one user's window does not block another user. The same user shares one window across workspaces. `scope` is `user`. The body has no limit numbers and no `retryAfterSeconds`. The wait is only the `Retry-After` header. On that endpoint the order is 401, then 429, then the role filter (404 or 403), then 400, then 409.
 
 `email_already_registered` is a duplicate email on register, whether the row was already there or two requests raced. Signup keeps one transaction. The loser rolls back, so there is no second user and no workspace without that user. `EmailIndex` and `UserNameIndex` both map here because the account name is the email.
 

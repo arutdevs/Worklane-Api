@@ -27,6 +27,7 @@ public class WorkspaceService : IWorkspaceService
     private readonly IRealtimeGroupMembership _realtime;
     private readonly FrontendSettings _frontendSettings;
     private readonly WorkspaceCreationSettings _workspaceCreation;
+    private readonly InviteCreationSettings _inviteCreation;
 
     public WorkspaceService(
         WorklaneDbContext db,
@@ -35,7 +36,8 @@ public class WorkspaceService : IWorkspaceService
         IEmailService emailService,
         IRealtimeGroupMembership realtime,
         IOptions<FrontendSettings> frontendSettings,
-        IOptions<WorkspaceCreationSettings> workspaceCreation)
+        IOptions<WorkspaceCreationSettings> workspaceCreation,
+        IOptions<InviteCreationSettings> inviteCreation)
     {
         _db = db;
         _userManager = userManager;
@@ -44,6 +46,7 @@ public class WorkspaceService : IWorkspaceService
         _realtime = realtime;
         _frontendSettings = frontendSettings.Value;
         _workspaceCreation = workspaceCreation.Value;
+        _inviteCreation = inviteCreation.Value;
     }
 
     public async Task<List<WorkspaceDto>> GetMyWorkspacesAsync(Guid userId, CancellationToken cancellationToken)
@@ -169,6 +172,21 @@ public class WorkspaceService : IWorkspaceService
                 LogMembershipChange(workspaceId, invitedByUserId, existingUser.Id, WorkspaceMembershipAction.MemberAdded, oldRole: null, request.Role);
 
                 return new InvitationDto(Guid.Empty, request.Email, request.Role, DateTimeOffset.UtcNow, null);
+            }
+
+            // Pending rows only. Accepted and expired invitations do not count.
+            // The tenant filter and the workspace id both keep the count in this workspace.
+            var now = DateTimeOffset.UtcNow;
+            var pendingLimit = _inviteCreation.MaxPendingInvites;
+            var pending = await _db.Invitations.CountAsync(
+                i => i.WorkspaceId == workspaceId && i.AcceptedAt == null && i.ExpiresAt >= now,
+                cancellationToken);
+            if (pending >= pendingLimit)
+            {
+                throw new ConflictException(
+                    "invite_pending_limit",
+                    $"This workspace already has the maximum of {pendingLimit} pending invitations.",
+                    ErrorParams.Of(("limit", pendingLimit)));
             }
 
             var rawToken = InviteTokens.Generate();

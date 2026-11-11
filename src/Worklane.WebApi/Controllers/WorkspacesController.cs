@@ -62,6 +62,7 @@ public class WorkspacesController : ControllerBase
 
     [HttpPost("{id:guid}/invitations")]
     [RequireWorkspaceRole(WorkspaceRole.Admin)]
+    [EnableRateLimiting(InviteCreationSettings.PolicyName)]
     public async Task<ActionResult<InvitationDto>> Invite(Guid id, InviteMemberRequest request, CancellationToken cancellationToken)
     {
         await _inviteValidator.ValidateAndThrowAsync(request, cancellationToken);
