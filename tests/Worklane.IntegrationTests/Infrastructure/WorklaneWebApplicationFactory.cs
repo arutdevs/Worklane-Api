@@ -100,7 +100,15 @@ public class WorklaneWebApplicationFactory : WebApplicationFactory<Program>, IAs
                 ["WorkspaceCreation:PermitLimit"] = "10000",
                 ["WorkspaceCreation:WindowSeconds"] = "60",
                 ["WorkspaceCreation:MaxOwnedWorkspaces"] = "10000",
-                ["Frontend:BaseUrl"] = "http://web.test"
+                ["Frontend:BaseUrl"] = "http://web.test",
+                ["RateLimit:ImportUpload:PermitLimit"] = "10000",
+                ["RateLimit:ImportUpload:WindowSeconds"] = "3600",
+                ["RateLimit:ImportPreview:PermitLimit"] = "10000",
+                ["RateLimit:ImportPreview:WindowSeconds"] = "3600",
+                ["RateLimit:ImportCommit:PermitLimit"] = "10000",
+                ["RateLimit:ImportCommit:WindowSeconds"] = "3600",
+                ["RateLimit:Export:PermitLimit"] = "10000",
+                ["RateLimit:Export:WindowSeconds"] = "3600"
             });
         });
 

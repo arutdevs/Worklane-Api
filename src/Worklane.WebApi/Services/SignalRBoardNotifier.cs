@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.SignalR;
 using Worklane.Application.Board.Dtos;
 using Worklane.Application.Board.Interfaces;
+using Worklane.Application.Imports.Dtos;
 using Worklane.WebApi.Hubs;
 
 namespace Worklane.WebApi.Services;
@@ -40,6 +41,12 @@ public class SignalRBoardNotifier : IBoardNotifier
 
     public Task AttachmentDeletedAsync(Guid projectId, AttachmentDeletedEvent payload, CancellationToken ct = default) =>
         Group(projectId).SendAsync("AttachmentDeleted", payload, ct);
+
+    public Task ImportCompletedAsync(Guid projectId, ImportCompletedDto payload, CancellationToken ct = default) =>
+        Group(projectId).SendAsync("ImportCompleted", payload, ct);
+
+    public Task ImportUndoneAsync(Guid projectId, ImportUndoneDto payload, CancellationToken ct = default) =>
+        Group(projectId).SendAsync("ImportUndone", payload, ct);
 
     private IClientProxy Group(Guid projectId) => _hub.Clients.Group(NotificationsHub.GroupName(projectId));
 }

@@ -20,6 +20,11 @@ Reserved names are not overwritten by exception parameters, compared without reg
 | --- | --- | --- | --- | --- |
 | `bad_request` | 400 | | The request is invalid. | emitted |
 | `file_empty` | 400 | | A non-empty file is required. | emitted |
+| `import_no_rows` | 400 | | The file has no data rows. | emitted |
+| `import_delimiter_unsupported` | 400 | | Save the file as comma-separated CSV. | emitted |
+| `import_unreadable` | 400 | | The file could not be read. | emitted |
+| `import_row_limit` | 400 | `maxRows` | The file has more than {maxRows} rows. | emitted |
+| `import_column_limit` | 400 | `maxColumns` | The file has more than {maxColumns} columns. | emitted |
 | `invalid_request_body` | 400 | | The request is invalid. | emitted |
 | `invalid_route_id` | 400 | | Route parameter "{name}" is missing or not a valid id. | emitted |
 | `assignee_not_member` | 400 | | Assignee must be a member of this workspace. | emitted |
@@ -40,6 +45,16 @@ Reserved names are not overwritten by exception parameters, compared without reg
 | `not_found` | 404 | | Resource was not found. | emitted |
 | `target_column_not_found` | 404 | | Target column was not found in this project. | emitted |
 | `conflict` | 409 | | The request conflicts with the current state. | emitted |
+| `import_batch_limit` | 409 | `limit` | This project already has {limit} imports in progress. | emitted |
+| `import_mapping_required` | 409 | | Map the columns before continuing. | emitted |
+| `import_has_errors` | 409 | `invalidCount` | The import has {invalidCount} row(s) to fix or skip. | emitted |
+| `import_column_missing` | 409 | | The fallback column is no longer in this project. | emitted |
+| `import_already_committed` | 409 | | This import was already committed. | emitted |
+| `import_already_undone` | 409 | | This import was already undone. | emitted |
+| `import_not_committed` | 409 | | Commit the import before undoing it. | emitted |
+| `import_expired` | 409 | | This import has expired. | emitted |
+| `import_timeout` | 409 | | The import took too long. Try again. | emitted |
+| `import_external_id_taken` | 409 | | A card with this external id already exists for this project and source. | emitted |
 | `workspace_slug_unavailable` | 409 | | A unique workspace address could not be reserved. Try again. | emitted |
 | `workspace_limit_reached` | 409 | `limit` | You can own at most {limit} workspaces. | emitted |
 | `invite_pending_limit` | 409 | `limit` | This workspace already has the maximum of {limit} pending invitations. | emitted |
@@ -77,6 +92,27 @@ Reserved names are not overwritten by exception parameters, compared without reg
 | `rate_limited` | 429 | `scope` (`user` on `POST /api/workspaces`) | Too many requests. | emitted |
 | `internal_error` | 500 | `traceId` | An unexpected error occurred. | emitted |
 
+Import row codes are not HTTP `code` values. They travel on a preview or commit row (`error.code` or `warning.code`) or on the batch `warnings` array. The Web app localizes them the same way. HTTP for these rows is `—` so they are not mistaken for response codes.
+
+| code | HTTP | extensions | detail | Status |
+| --- | --- | --- | --- | --- |
+| `import_external_id_missing` | — | | Blank external id. | planned (WL-IMPORT) |
+| `import_external_id_duplicate` | — | | Repeated external id in the file (not the first). | planned (WL-IMPORT) |
+| `import_title_missing` | — | | Blank title. | planned (WL-IMPORT) |
+| `import_title_too_long` | — | `maxLength` | Title over 500. | planned (WL-IMPORT) |
+| `import_description_too_long` | — | `maxLength` | Description over 10_000. | planned (WL-IMPORT) |
+| `import_date_invalid` | — | | Due date is not in an accepted format. | planned (WL-IMPORT) |
+| `import_estimate_invalid` | — | | Estimate is not a number in (0, 260]. | planned (WL-IMPORT) |
+| `import_formula_uncached` | — | | Formula cell with no cached value. | planned (WL-IMPORT) |
+| `import_parent_ambiguous` | — | | Asana parent name matches more than one top-level row. | planned (WL-IMPORT) |
+| `import_parent_unresolved` | — | | Parent key, name, or issue id was not found. The card is created unlinked. | planned (WL-IMPORT) |
+| `import_assignee_skipped` | — | | Email is not a member of this workspace, or there is no such account. Same code either way. | planned (WL-IMPORT) |
+| `import_column_fallback` | — | | Status or list text matched no column. | planned (WL-IMPORT) |
+| `import_priority_defaulted` | — | | Unknown priority word; stored Medium. | planned (WL-IMPORT) |
+| `import_field_ignored` | — | `headers` | Unmapped non-fields (labels, tags, vendor timestamps, story points). | planned (WL-IMPORT) |
+| `import_extra_sheets` | — | `sheetCount` | Workbook has more than one sheet. | planned (WL-IMPORT) |
+| `import_parent_column_assumed` | — | `mode` | Jira `Parent` column was read as `key`, `issueId`, or `unresolved`. | planned (WL-IMPORT) |
+
 `workspace_slug_unavailable` is emitted when signup or `POST /api/workspaces` hits a unique violation on `IX_Workspaces_Slug` and the bounded suffix retries are exhausted. Signup rolls the user, membership, and workspace back together. Any other failure during that transaction rolls back the same way and does not emit this code. The same code is the backstop when an `IX_Workspaces_Slug` violation is not caught by that retry.
 
 `workspace_limit_reached` is emitted by `POST /api/workspaces` when the caller already owns `WorkspaceCreation:MaxOwnedWorkspaces` workspaces (default 20). `limit` is that number. The count is membership rows with role Owner, so a Member or Viewer seat in another workspace does not count. Signup does not use this check: registration still creates the personal workspace, and that workspace counts toward the cap afterwards.
@@ -87,7 +123,7 @@ Reserved names are not overwritten by exception parameters, compared without reg
 
 `email_already_registered` is a duplicate email on register, whether the row was already there or two requests raced. Signup keeps one transaction. The loser rolls back, so there is no second user and no workspace without that user. `EmailIndex` and `UserNameIndex` both map here because the account name is the email.
 
-A Postgres unique violation that is not caught in a handler becomes **409** from one map, not 500. `IX_Projects_WorkspaceId_Key` is `project_key_taken`. `IX_WorkspaceMembers_WorkspaceId_UserId` is `workspace_member_exists`. `IX_Invitations_TokenHash` is `invitation_token_taken`. `IX_ProjectMembers_ProjectId_UserId` is `project_member_exists`. `IX_RefreshTokens_TokenHash` is `refresh_token_conflict`. `IX_TaskAttachments_StorageKey` is `attachment_storage_key_taken`. `IX_TaskItems_ProjectId_Number` is `task_number_taken`. `RoleNameIndex` is `role_name_taken`. `AK_TaskItems_ProjectId_Id` is `unique_conflict` (it exists so a parent link can target `(ProjectId, Id)`). Any other unique violation, including a primary key, is `unique_conflict`. The body does not include the constraint name.
+A Postgres unique violation that is not caught in a handler becomes **409** from one map, not 500. `IX_Projects_WorkspaceId_Key` is `project_key_taken`. `IX_WorkspaceMembers_WorkspaceId_UserId` is `workspace_member_exists`. `IX_Invitations_TokenHash` is `invitation_token_taken`. `IX_ProjectMembers_ProjectId_UserId` is `project_member_exists`. `IX_RefreshTokens_TokenHash` is `refresh_token_conflict`. `IX_TaskAttachments_StorageKey` is `attachment_storage_key_taken`. `IX_TaskItems_ProjectId_Number` is `task_number_taken`. `IX_TaskItems_ProjectId_ImportSource_ExternalId` is `import_external_id_taken`. `RoleNameIndex` is `role_name_taken`. `AK_TaskItems_ProjectId_Id` is `unique_conflict` (it exists so a parent link can target `(ProjectId, Id)`). `IX_ImportBatchRows_ImportBatchId_RowNumber` is `unique_conflict`. Any other unique violation, including a primary key, is `unique_conflict`. The body does not include the constraint name.
 
 These indexes were audited and are not unique, so they have no 409 code: `IX_BoardColumns_ProjectId_Order`, `IX_TaskItems_ColumnId_Order`, `IX_TaskItems_ProjectId_ParentTaskId` (partial, parent links only), `IX_TaskComments_TaskId_CreatedAt`, `IX_TaskActivities_TaskId_CreatedAt`, `IX_TaskAttachments_TaskId_CreatedAt`, `IX_WorkspaceMembershipEvents_WorkspaceId_OccurredAt`, `IX_Invitations_WorkspaceId`, and `IX_RefreshTokens_UserId`. Duplicate column names or orders are not a unique violation.
 

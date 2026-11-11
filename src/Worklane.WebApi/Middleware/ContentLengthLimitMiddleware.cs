@@ -18,11 +18,16 @@ public class ContentLengthLimitMiddleware
 {
     private readonly RequestDelegate _next;
     private readonly FileStorageSettings _storage;
+    private readonly ImportSettings _imports;
 
-    public ContentLengthLimitMiddleware(RequestDelegate next, IOptions<FileStorageSettings> storage)
+    public ContentLengthLimitMiddleware(
+        RequestDelegate next,
+        IOptions<FileStorageSettings> storage,
+        IOptions<ImportSettings> imports)
     {
         _next = next;
         _storage = storage.Value;
+        _imports = imports.Value;
     }
 
     public async Task InvokeAsync(HttpContext context)
@@ -50,6 +55,8 @@ public class ContentLengthLimitMiddleware
         // rejection path makes Kestrel read the body while this 413 is written.
         if (IsAttachmentUpload(context))
             RaiseRequestCeiling(context, _storage.AttachmentRequestLimit);
+        else if (IsImportUpload(context))
+            RaiseRequestCeiling(context, _imports.RequestLimit);
 
         await _next(context);
     }
@@ -68,6 +75,9 @@ public class ContentLengthLimitMiddleware
 
     private static bool IsAttachmentUpload(HttpContext context)
         => context.GetEndpoint()?.Metadata.GetMetadata<AttachmentUploadLimitAttribute>() is not null;
+
+    private static bool IsImportUpload(HttpContext context)
+        => context.GetEndpoint()?.Metadata.GetMetadata<ImportUploadLimitAttribute>() is not null;
 
     private static void RaiseRequestCeiling(HttpContext context, long limit)
     {

@@ -248,6 +248,10 @@ public class BroadcastFailureFactory : WorklaneWebApplicationFactory
         public Task AttachmentAddedAsync(Guid projectId, AttachmentBroadcastDto attachment, CancellationToken ct = default) => Task.CompletedTask;
         public Task AttachmentDeletedAsync(Guid projectId, AttachmentDeletedEvent payload, CancellationToken ct = default) =>
             throw new InvalidOperationException("attachment broadcast failed");
+        public Task ImportCompletedAsync(Guid projectId, Worklane.Application.Imports.Dtos.ImportCompletedDto payload, CancellationToken ct = default) =>
+            Task.CompletedTask;
+        public Task ImportUndoneAsync(Guid projectId, Worklane.Application.Imports.Dtos.ImportUndoneDto payload, CancellationToken ct = default) =>
+            Task.CompletedTask;
     }
 }
 
@@ -328,5 +332,9 @@ public class ArchiveBroadcastFailureFactory : WorklaneWebApplicationFactory
         public Task CommentDeletedAsync(Guid projectId, CommentDeletedEvent payload, CancellationToken ct = default) => Task.CompletedTask;
         public Task AttachmentAddedAsync(Guid projectId, AttachmentBroadcastDto attachment, CancellationToken ct = default) => Task.CompletedTask;
         public Task AttachmentDeletedAsync(Guid projectId, AttachmentDeletedEvent payload, CancellationToken ct = default) => Task.CompletedTask;
+        public Task ImportCompletedAsync(Guid projectId, Worklane.Application.Imports.Dtos.ImportCompletedDto payload, CancellationToken ct = default) =>
+            Task.CompletedTask;
+        public Task ImportUndoneAsync(Guid projectId, Worklane.Application.Imports.Dtos.ImportUndoneDto payload, CancellationToken ct = default) =>
+            Task.CompletedTask;
     }
 }
