@@ -193,11 +193,30 @@ public partial class BoardService
             return new ArchiveBroadcast(archived, survivingParentId);
         }, ct);
 
+        // The archive is already committed. A notifier failure must not become a 500.
         foreach (var archived in broadcast.Archived)
-            await _notifier.TaskArchivedAsync(archived.ProjectId, archived, ct);
+        {
+            try
+            {
+                await _notifier.TaskArchivedAsync(archived.ProjectId, archived, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Committed archive notification failed for task {TaskId}.", archived.TaskId);
+            }
+        }
 
         if (broadcast.SurvivingParentId is Guid notifyId)
-            await NotifyParentCountsAsync(notifyId, ct);
+        {
+            try
+            {
+                await NotifyParentCountsAsync(notifyId, CancellationToken.None);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Committed archive notification failed for parent {TaskId}.", notifyId);
+            }
+        }
     }
 
     private async Task<TaskItemDto> CreateLinkedTaskAsync(
