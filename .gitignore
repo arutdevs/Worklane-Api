@@ -13,10 +13,12 @@ obj/
 # Local attachment storage (see FileStorage:LocalPath)
 data/
 
-# Local secrets. .env.example is the only env file that belongs in git.
+# Local secrets. .env.example is the local-dev template.
+# deploy/prod/.env.prod.example is placeholders only and is the prod template.
 .env
 .env.*
 !.env.example
+!.env.prod.example
 
 # OS
 .DS_Store

@@ -1,0 +1,26 @@
+# Template only. docker-compose.prod.yml does not mount this file.
+# Token mode (CLOUDFLARE_TUNNEL_TOKEN) stores ingress in the Cloudflare
+# dashboard. Copy the hostnames below into that tunnel, or mount this file
+# plus a credentials JSON that stays on the VM (mode 600, never in git).
+#
+# Replace example.com and <TUNNEL_ID> before use. The API hostname must match
+# server_name in deploy/prod/nginx/edge.conf.
+
+tunnel: "<TUNNEL_ID>"
+credentials-file: /etc/cloudflared/<TUNNEL_ID>.json
+metrics: 127.0.0.1:20241
+no-autoupdate: true
+
+ingress:
+  - hostname: app.example.com
+    service: http://web:8080
+    originRequest:
+      connectTimeout: 10s
+      keepAliveTimeout: 90s
+  - hostname: api.example.com
+    service: http://edge:8080
+    originRequest:
+      connectTimeout: 10s
+      keepAliveTimeout: 90s
+      httpHostHeader: api.example.com
+  - service: http_status:404

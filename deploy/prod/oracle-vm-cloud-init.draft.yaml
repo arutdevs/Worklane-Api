@@ -1,0 +1,28 @@
+#cloud-config
+# DRAFT. Not Terraform and not applied by this repository.
+# Paste only after อรุษ approves the Oracle VM in Phase 0.
+# First boot installs packages and denies inbound except SSH.
+# Docker's published-port bypass is handled by
+# oracle-vm-bootstrap.draft.sh, which you run after the repo is on the VM.
+# This file creates no accounts, buckets, tunnels, or secrets.
+
+package_update: true
+package_upgrade: true
+
+packages:
+  - docker.io
+  - docker-compose-v2
+  - unattended-upgrades
+  - ufw
+  - age
+  - rclone
+  - ca-certificates
+  - iptables
+
+runcmd:
+  - systemctl enable --now docker
+  - systemctl enable --now unattended-upgrades
+  - ufw default deny incoming
+  - ufw default allow outgoing
+  - ufw allow OpenSSH
+  - ufw --force enable

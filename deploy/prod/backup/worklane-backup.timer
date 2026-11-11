@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily Worklane Postgres dump (18:15 UTC, 01:15 Asia/Bangkok)
+
+[Timer]
+OnCalendar=*-*-* 18:15:00 UTC
+Persistent=true
+Unit=worklane-backup.service
+
+[Install]
+WantedBy=timers.target
