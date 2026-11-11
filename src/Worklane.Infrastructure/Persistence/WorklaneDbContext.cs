@@ -30,6 +30,9 @@ public class WorklaneDbContext : IdentityDbContext<AppUser, IdentityRole<Guid>, 
     public DbSet<TaskComment> TaskComments => Set<TaskComment>();
     public DbSet<TaskAttachment> TaskAttachments => Set<TaskAttachment>();
     public DbSet<WorkspaceMembershipEvent> WorkspaceMembershipEvents => Set<WorkspaceMembershipEvent>();
+    public DbSet<ImportBatch> ImportBatches => Set<ImportBatch>();
+    public DbSet<ImportBatchRow> ImportBatchRows => Set<ImportBatchRow>();
+    public DbSet<ProjectExportLog> ProjectExportLogs => Set<ProjectExportLog>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -91,5 +94,19 @@ public class WorklaneDbContext : IdentityDbContext<AppUser, IdentityRole<Guid>, 
         builder.Entity<WorkspaceMembershipEvent>().HasQueryFilter(e =>
             _currentTenantService.WorkspaceId.HasValue &&
             e.WorkspaceId == _currentTenantService.WorkspaceId);
+
+        // Workspace match only. Archived projects stay visible to these rows, the same way
+        // a column does: the project filter would hide an import after the project is archived.
+        builder.Entity<ImportBatch>().HasQueryFilter(b =>
+            _currentTenantService.WorkspaceId.HasValue &&
+            b.Project.WorkspaceId == _currentTenantService.WorkspaceId);
+
+        builder.Entity<ImportBatchRow>().HasQueryFilter(r =>
+            _currentTenantService.WorkspaceId.HasValue &&
+            r.ImportBatch.Project.WorkspaceId == _currentTenantService.WorkspaceId);
+
+        builder.Entity<ProjectExportLog>().HasQueryFilter(l =>
+            _currentTenantService.WorkspaceId.HasValue &&
+            l.Project.WorkspaceId == _currentTenantService.WorkspaceId);
     }
 }

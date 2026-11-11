@@ -1,7 +1,7 @@
 # Worklane — Development Log
 
 > บันทึกสถานะโปรเจค ว่าตอนนี้ไปถึงไหน ทำอะไรไปแล้วบ้าง และอะไรยังขาด
-> อัปเดตล่าสุด: **2026-10-17**
+> อัปเดตล่าสุด: **2026-11-04**
 
 ---
 
@@ -25,6 +25,7 @@ Worklane = ระบบจัดการงานแบบ multi-tenant (Jira �
 
 | วันที่ | เหตุการณ์ |
 |---|---|
+| 2026-11-04 | **WL-IMPORT-BE** — นำเข้า CSV/XLSX (พรีเซ็ต Jira, Asana, Trello) แบบสองรอบ แล้วเลิกทำได้ และส่งออก CSV/JSON ต่อโปรเจกต์ ฝั่ง API ยังไม่ merge |
 | 2026-07-14 | **Phase 1** — วาง Clean Architecture, Auth (JWT + refresh token), Workspace, Member/Invitation, Project, multi-tenancy filter |
 | 2026-07-15 | **Phase 2 (Backend)** — BoardColumn / TaskItem / ProjectTaskCounter, BoardService, ColumnsController, TasksController, migration `AddBoardEntities` → commit `eff24c7` |
 | 2026-07-15 | **Phase 2 (Frontend)** — เขียนหน้า Board + drag-drop + redesign ธีมทั้งแอป → **ยังไม่ได้ commit** |

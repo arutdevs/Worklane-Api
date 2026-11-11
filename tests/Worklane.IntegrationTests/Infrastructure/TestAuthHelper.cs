@@ -14,7 +14,7 @@ public static class TestAuthHelper
     /// <summary>Matches the server's JSON config (camelCase + string enums) so client-side deserialization agrees.</summary>
     public static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
-        Converters = { new JsonStringEnumConverter() }
+        Converters = { new JsonStringEnumConverter(), new Worklane.Application.Imports.ImportEnumConverter() }
     };
 
     public static async Task<RegisteredUser> RegisterAsync(HttpClient client, string? email = null, string? displayName = null)
