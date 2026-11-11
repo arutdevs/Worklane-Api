@@ -58,7 +58,29 @@ Dev compose runs RustFS as `s3` (S3 API published on `127.0.0.1:9000` only; the 
 
 `WL_S3_VERSIONING` defaults to `off`, matching Cloudflare R2 (the beta store). Set it to `on` in `.env` before the first `s3-init` run to exercise the DigitalOcean Spaces path: bucket versioning and a 20-day noncurrent-version expiry. Application code must not rely on versioning or bucket policy, because R2 provides neither. If versioning was enabled on the `s3data` volume, switching the flag to `off` leaves it in place; reset with `docker compose -f docker-compose.yml -f compose.dev.yml down -v`.
 
-The API still stores attachments on the `attachments` volume. With the dev overlay, `FileStorage__S3__ServiceUrl` is `http://s3:9000` (and the other `FileStorage__S3__*` keys from the storage spec are set), but `FileStorageSettings` does not bind those keys yet, so `FileStorage__Provider` is left unset and the process keeps the local-disk provider. Images are pinned by digest in `compose.dev.yml`. Dependabot may open a pull request for a digest bump. Those pulls are not automerged. CI scans the pinned images with Trivy and fails on a CRITICAL finding that has a fix. It does not run RustFS as the test storage.
+The API stores attachments through `IFileStorage`. `FileStorage:Provider` selects the implementation. Unset or `Local` keeps files on the `attachments` volume. `S3` uses `S3FileStorage` and the `FileStorage:S3` settings. The dev overlay sets `FileStorage__S3__ServiceUrl` to `http://s3:9000` and the other `FileStorage__S3__*` keys, and leaves `FileStorage__Provider` unset, so a dev stack still uses the local disk until that key is `S3`. Outside Development and Testing, an `S3` provider refuses to start when the endpoint is not public https, the bucket is `worklane-dev-files`, `RequireHttps` is false, or `PublicServiceUrl` is set. Images are pinned by digest in `compose.dev.yml`. Dependabot may open a pull request for a digest bump. Those pulls are not automerged. CI scans the pinned images with Trivy and fails on a CRITICAL finding that has a fix. The storage integration test starts that same RustFS image with Testcontainers when Docker is available, and skips when it is not.
+
+`FileStorage:Provider=S3` reads:
+
+```json
+{
+  "FileStorage": {
+    "Provider": "S3",
+    "S3": {
+      "ServiceUrl": "https://<ACCOUNT_ID>.r2.cloudflarestorage.com",
+      "Region": "auto",
+      "Bucket": "worklane-prod-files",
+      "AccessKey": "<access-key>",
+      "SecretKey": "<secret-key>",
+      "ForcePathStyle": true,
+      "RequireHttps": true,
+      "PresignExpirySeconds": 60
+    }
+  }
+}
+```
+
+Dev compose uses `http://s3:9000`, region `us-east-1`, bucket `worklane-dev-files`, `ForcePathStyle` true, `RequireHttps` false, and `PublicServiceUrl` `http://localhost:9000`. Access and secret come from `.env` (`WL_S3_ACCESS_KEY`, `WL_S3_SECRET_KEY`). Do not commit those values.
 
 ### Digest bump checklist
 

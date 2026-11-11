@@ -87,7 +87,7 @@ public static class DependencyInjection
         services.AddScoped<ITaskActivityService, TaskActivityService>();
         services.AddScoped<ITaskCommentService, TaskCommentService>();
         services.AddScoped<ITaskAttachmentService, TaskAttachmentService>();
-        services.AddScoped<IFileStorage, LocalFileStorage>();
+        services.AddWorklaneFileStorage(configuration);
         services.AddScoped<IReportService, ReportService>();
 
         return services;
