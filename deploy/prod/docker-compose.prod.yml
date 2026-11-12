@@ -1,0 +1,327 @@
+# Production draft for one Oracle Cloud Always Free Ampere A1 VM
+# (linux/arm64, 2 OCPU, 12 GB) in Singapore. Not a running stack.
+#
+# HARD GATE: do not pull, do not up, do not point DNS here until WL-63
+# (JWT rotation) is merged. See docs/deploy/PROD-DEPLOY-PLAN.md.
+# Every image digest below is a repeated nibble. `docker compose pull`
+# cannot resolve it. scripts/preflight.sh exits 1 while those digests
+# and CHANGE_ME values remain. That script is not the WL-63 control.
+#
+# No host ports. cloudflared dials out. Postgres is only on the internal
+# db network. One copy of this file per Docker host: the proxy subnet
+# 172.30.20.0/24 matches the addresses the API and nginx configs trust.
+#
+# Do not set ASPNETCORE_ENVIRONMENT to Development. It is the literal
+# Production below, so an env file cannot flip it. Do not add a build
+# key, a published port, an object-storage service, or a socket mount.
+
+name: ${COMPOSE_PROJECT_NAME:-worklane-prod}
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+networks:
+  proxy:
+    name: ${COMPOSE_PROJECT_NAME:-worklane-prod}-proxy
+    ipam:
+      config:
+        - subnet: 172.30.20.0/24
+  app:
+    name: ${COMPOSE_PROJECT_NAME:-worklane-prod}-app
+    internal: true
+  db:
+    name: ${COMPOSE_PROJECT_NAME:-worklane-prod}-db
+    internal: true
+  egress:
+    name: ${COMPOSE_PROJECT_NAME:-worklane-prod}-egress
+
+volumes:
+  pgdata:
+    name: ${COMPOSE_PROJECT_NAME:-worklane-prod}-pgdata
+  attachments:
+    name: ${COMPOSE_PROJECT_NAME:-worklane-prod}-attachments
+  dpkeys:
+    name: ${COMPOSE_PROJECT_NAME:-worklane-prod}-dpkeys
+
+services:
+  # Chowns the named volumes before the API, which runs as uid 1654 and
+  # will not create DataProtection:KeysPath on a read-only root.
+  volume-init:
+    image: postgres:16-alpine@sha256:1111111111111111111111111111111111111111111111111111111111111111
+    platform: linux/arm64
+    user: "0:0"
+    entrypoint: ["chown", "-R", "1654:1654", "/var/lib/worklane/dataprotection-keys", "/var/worklane/attachments"]
+    restart: "no"
+    network_mode: none
+    read_only: true
+    volumes:
+      - dpkeys:/var/lib/worklane/dataprotection-keys
+      - attachments:/var/worklane/attachments
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER, DAC_OVERRIDE]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 32
+    mem_limit: 64m
+    cpus: "0.05"
+    logging: *default-logging
+
+  postgres:
+    image: postgres:16-alpine@sha256:1111111111111111111111111111111111111111111111111111111111111111
+    platform: linux/arm64
+    restart: unless-stopped
+    networks: [db]
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-worklane}
+      POSTGRES_USER: ${POSTGRES_USER:-worklane}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-CHANGE_ME}
+    command:
+      - postgres
+      - -c
+      - shared_buffers=512MB
+      - -c
+      - max_connections=40
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    shm_size: 256mb
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=64m
+      - /var/run/postgresql:rw,noexec,nosuid,nodev,size=16m
+    cap_drop: [ALL]
+    cap_add: [CHOWN, SETUID, SETGID, FOWNER, DAC_OVERRIDE]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
+    mem_limit: 2g
+    cpus: "0.50"
+    logging: *default-logging
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  migrator:
+    image: ghcr.io/arutdevs/worklane-api:prod@sha256:2222222222222222222222222222222222222222222222222222222222222222
+    platform: linux/arm64
+    user: "1654:1654"
+    command: ["--migrate-only"]
+    restart: "no"
+    networks: [db]
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:8080
+      DOTNET_EnableDiagnostics: "0"
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      HOME: /tmp
+      TMPDIR: /tmp
+      ConnectionStrings__Default: "Host=postgres;Port=5432;Database=${POSTGRES_DB:-worklane};Username=${POSTGRES_USER:-worklane};Password='${POSTGRES_PASSWORD:-CHANGE_ME}';GSS Encryption Mode=Disable"  # yamllint disable-line rule:line-length
+      Jwt__Secret: ${JWT_SECRET:-CHANGE_ME}
+      Jwt__Issuer: ${JWT_ISSUER:-Worklane}
+      Jwt__Audience: ${JWT_AUDIENCE:-WorklaneClient}
+      Frontend__BaseUrl: ${PUBLIC_APP_ORIGIN:-https://app.example.com}
+      DataProtection__KeysPath: /var/lib/worklane/dataprotection-keys
+    volumes:
+      - dpkeys:/var/lib/worklane/dataprotection-keys
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,uid=1654,gid=1654,mode=1700,size=64m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    mem_limit: 1536m
+    cpus: "0.60"
+    logging: *default-logging
+    depends_on:
+      postgres:
+        condition: service_healthy
+      volume-init:
+        condition: service_completed_successfully
+
+  api:
+    image: ghcr.io/arutdevs/worklane-api:prod@sha256:2222222222222222222222222222222222222222222222222222222222222222
+    platform: linux/arm64
+    user: "1654:1654"
+    restart: unless-stopped
+    networks: [app, db, egress]
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_URLS: http://+:8080
+      DOTNET_EnableDiagnostics: "0"
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      HOME: /tmp
+      TMPDIR: /tmp
+      AllowedHosts: ${API_HOSTNAME:-api.example.com}
+      ConnectionStrings__Default: "Host=postgres;Port=5432;Database=${POSTGRES_DB:-worklane};Username=${POSTGRES_USER:-worklane};Password='${POSTGRES_PASSWORD:-CHANGE_ME}';Maximum Pool Size=20;GSS Encryption Mode=Disable"  # yamllint disable-line rule:line-length
+      Jwt__Secret: ${JWT_SECRET:-CHANGE_ME}
+      Jwt__Issuer: ${JWT_ISSUER:-Worklane}
+      Jwt__Audience: ${JWT_AUDIENCE:-WorklaneClient}
+      Cors__AllowedOrigins__0: ${PUBLIC_APP_ORIGIN:-https://app.example.com}
+      Frontend__BaseUrl: ${PUBLIC_APP_ORIGIN:-https://app.example.com}
+      ForwardedHeaders__KnownProxies__0: "172.30.20.10"
+      DataProtection__KeysPath: /var/lib/worklane/dataprotection-keys
+      FileStorage__LocalPath: /var/worklane/attachments
+      FileStorage__MaxBytes: ${FILE_MAX_BYTES:-10485760}
+      Email__SmtpHost: ${SMTP_HOST:-smtp.resend.com}
+      Email__SmtpPort: ${SMTP_PORT:-587}
+      Email__SmtpUsername: ${SMTP_USERNAME:-resend}
+      Email__SmtpPassword: ${SMTP_PASSWORD:-CHANGE_ME}
+      Email__FromName: ${SMTP_FROM_NAME:-Worklane}
+    volumes:
+      - attachments:/var/worklane/attachments
+      - dpkeys:/var/lib/worklane/dataprotection-keys
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,uid=1654,gid=1654,mode=1700,size=64m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    mem_limit: 1536m
+    cpus: "0.60"
+    logging: *default-logging
+    stop_grace_period: 20s
+    depends_on:
+      migrator:
+        condition: service_completed_successfully
+      volume-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/127.0.0.1/8080 && printf \"GET / HTTP/1.0\\r\\n\\r\\n\" >&3 && grep -q HTTP <&3'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+  edge:
+    image: nginxinc/nginx-unprivileged:1.28-alpine@sha256:4444444444444444444444444444444444444444444444444444444444444444
+    platform: linux/arm64
+    restart: unless-stopped
+    networks:
+      proxy:
+        ipv4_address: 172.30.20.10
+      app: {}
+    volumes:
+      - ./nginx/edge.conf:/etc/nginx/conf.d/default.conf:ro
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,uid=101,gid=101,mode=1700,size=16m
+      - /var/cache/nginx:rw,noexec,nosuid,nodev,uid=101,gid=101,mode=755,size=32m
+      - /var/run:rw,noexec,nosuid,nodev,uid=101,gid=101,mode=755,size=1m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 64
+    mem_limit: 128m
+    cpus: "0.10"
+    logging: *default-logging
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/nginx-health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  web:
+    # Placeholder name. Pin the Worklane-Web image, which must implement
+    # deploy/prod/nginx/web.conf itself. Do not bind-mount that file here.
+    image: ghcr.io/arutdevs/worklane-web:prod@sha256:3333333333333333333333333333333333333333333333333333333333333333
+    platform: linux/arm64
+    restart: unless-stopped
+    networks:
+      proxy:
+        ipv4_address: 172.30.20.3
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,uid=101,gid=101,mode=1700,size=16m
+      - /var/cache/nginx:rw,noexec,nosuid,nodev,uid=101,gid=101,mode=755,size=32m
+      - /var/run:rw,noexec,nosuid,nodev,uid=101,gid=101,mode=755,size=1m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 64
+    mem_limit: 128m
+    cpus: "0.10"
+    logging: *default-logging
+    depends_on:
+      edge:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/nginx-health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  cloudflared:
+    image: cloudflare/cloudflared:2026.10.1@sha256:5555555555555555555555555555555555555555555555555555555555555555
+    platform: linux/arm64
+    restart: unless-stopped
+    networks:
+      proxy:
+        ipv4_address: 172.30.20.4
+    command: ["tunnel", "run"]
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-CHANGE_ME}
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=16m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 64
+    mem_limit: 128m
+    cpus: "0.10"
+    logging: *default-logging
+    depends_on:
+      web:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "cloudflared", "--version"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  # Not started by `up`. systemd runs backup/backup.sh on the host.
+  # `docker compose --profile backup run --rm backup` is the in-cluster
+  # alternative once Dockerfile.draft has been built and this digest replaced.
+  backup:
+    profiles: ["backup"]
+    image: ghcr.io/arutdevs/worklane-backup:prod@sha256:6666666666666666666666666666666666666666666666666666666666666666
+    platform: linux/arm64
+    user: "1654:1654"
+    entrypoint: ["/usr/local/bin/backup.sh"]
+    restart: "no"
+    networks: [db, egress]
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: ${POSTGRES_USER:-worklane}
+      PGDATABASE: ${POSTGRES_DB:-worklane}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-CHANGE_ME}
+      BACKUP_PROJECT: ${COMPOSE_PROJECT_NAME:-worklane-prod}
+      R2_ENDPOINT: ${R2_ENDPOINT:-https://example.r2.cloudflarestorage.com}
+      R2_BUCKET: ${R2_BUCKET:-worklane-backup}
+      R2_REGION: ${R2_REGION:-auto}
+      R2_PROVIDER: ${R2_PROVIDER:-Cloudflare}
+      R2_BACKUP_ACCESS_KEY_ID: ${R2_BACKUP_ACCESS_KEY_ID:-CHANGE_ME}
+      R2_BACKUP_SECRET_ACCESS_KEY: ${R2_BACKUP_SECRET_ACCESS_KEY:-CHANGE_ME}
+      BACKUP_AGE_RECIPIENT: ${BACKUP_AGE_RECIPIENT:-CHANGE_ME}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-30}
+      BETTERSTACK_HEARTBEAT_URL: ${BETTERSTACK_HEARTBEAT_URL:-}
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,uid=1654,gid=1654,mode=1700,size=512m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 64
+    mem_limit: 512m
+    cpus: "0.25"
+    logging: *default-logging
+    depends_on:
+      postgres:
+        condition: service_healthy

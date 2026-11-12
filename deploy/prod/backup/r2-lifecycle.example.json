@@ -1,0 +1,21 @@
+{
+  "Rules": [
+    {
+      "ID": "expire-daily",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "daily/" },
+      "Expiration": { "Days": 30 }
+    },
+    {
+      "ID": "expire-pre-migration",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "pre-migration/" },
+      "Expiration": { "Days": 30 }
+    },
+    {
+      "ID": "abort-incomplete-multipart",
+      "Status": "Enabled",
+      "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 7 }
+    }
+  ]
+}

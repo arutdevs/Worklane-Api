@@ -1,0 +1,15 @@
+[Unit]
+Description=Worklane Postgres dump to R2
+Documentation=file:/opt/worklane/docs/deploy/PROD-DEPLOY-PLAN.md
+Wants=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/worklane/prod.env
+Environment=WORKLANE_COMPOSE_FILE=/opt/worklane/deploy/prod/docker-compose.prod.yml
+Environment=WORKLANE_COMPOSE_ENV=/etc/worklane/prod.env
+ExecStart=/opt/worklane/deploy/prod/backup/backup.sh
+User=root
+NoNewPrivileges=true
+Nice=10
